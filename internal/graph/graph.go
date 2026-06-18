@@ -77,6 +77,13 @@ type Edge struct {
 // Graph
 // ---------------------------------------------------------------------------
 
+// subscriber is an entry in the Graph's subscriber list.
+// Unsubscribing sets fn to nil so the slot is skipped on next notify.
+type subscriber struct {
+	id uint64
+	fn func(nodeID string, state NodeState)
+}
+
 // Graph is the live relational model of the entire application system.
 // Every decision the Acthur kernel makes is derived from this structure.
 type Graph struct {
@@ -85,8 +92,10 @@ type Graph struct {
 	adjOut   map[string][]*Edge // from → edges
 	adjIn    map[string][]*Edge // to   → edges
 
-	// State subscription — plugins and monitor subscribe to state changes
-	subscribers []func(nodeID string, state NodeState)
+	// State subscription — plugins and monitor subscribe to state changes.
+	// subMu protects subscribers and nextSubID for concurrent sub/unsub vs notify.
+	subscribers []*subscriber
+	nextSubID   uint64
 	subMu       sync.RWMutex
 }
 
@@ -364,19 +373,44 @@ func (g *Graph) AllHealthy() bool {
 	return true
 }
 
-// Subscribe registers a callback for node state changes.
+// Subscribe registers a callback for node state changes and returns an
+// unsubscribe function. Calling the returned function stops all future
+// deliveries to this subscriber. Delivery is synchronous and in
+// registration order; Node.mu is NOT held when the callback runs.
 // Used by the monitor and plugin system.
-func (g *Graph) Subscribe(fn func(nodeID string, state NodeState)) {
+func (g *Graph) Subscribe(fn func(nodeID string, state NodeState)) func() {
 	g.subMu.Lock()
-	defer g.subMu.Unlock()
-	g.subscribers = append(g.subscribers, fn)
+	g.nextSubID++
+	id := g.nextSubID
+	s := &subscriber{id: id, fn: fn}
+	g.subscribers = append(g.subscribers, s)
+	g.subMu.Unlock()
+
+	return func() {
+		g.subMu.Lock()
+		defer g.subMu.Unlock()
+		for _, sub := range g.subscribers {
+			if sub.id == id {
+				sub.fn = nil // mark as inactive; slot is skipped during notify
+				return
+			}
+		}
+	}
 }
 
+// notifySubscribers delivers a state change to all active subscribers
+// synchronously, in registration order. subMu is held as an RLock so
+// concurrent subscriptions during notification are safe.
 func (g *Graph) notifySubscribers(nodeID string, state NodeState) {
 	g.subMu.RLock()
-	defer g.subMu.RUnlock()
-	for _, fn := range g.subscribers {
-		go fn(nodeID, state)
+	subs := g.subscribers
+	g.subMu.RUnlock()
+	for _, s := range subs {
+		// Re-read fn under no lock — nil check is safe because fn is only
+		// ever written to nil under a write lock and we just took a snapshot.
+		if s.fn != nil {
+			s.fn(nodeID, state)
+		}
 	}
 }
 

@@ -275,15 +275,124 @@ func TestState_AllHealthy_True(t *testing.T) {
 
 func TestState_Subscribe(t *testing.T) {
 	g := buildTestGraph(t)
-	received := make(chan string, 1)
-	g.Subscribe(func(id string, state graph.NodeState) {
-		received <- id
+	var got string
+	_ = g.Subscribe(func(id string, state graph.NodeState) {
+		got = id
 	})
 	g.SetState("api", graph.StateHealthy)
-	got := <-received
+	// Synchronous delivery: by the time SetState returns, callback has run.
 	if got != "api" {
 		t.Errorf("expected notification for api, got %q", got)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1G — subscription tests
+// ---------------------------------------------------------------------------
+
+// Behavior 1: subscriber is called synchronously (no goroutine delay).
+func TestSubscribe_SynchronousDelivery(t *testing.T) {
+	g := buildMinGraph(t)
+	called := false
+	_ = g.Subscribe(func(id string, state graph.NodeState) {
+		called = true
+	})
+	g.SetState("a", graph.StateHealthy)
+	// If delivery were async we could not guarantee called==true here.
+	if !called {
+		t.Error("expected subscriber to be called synchronously before SetState returned")
+	}
+}
+
+// Behavior 2: multiple subscribers are called in registration order.
+func TestSubscribe_RegistrationOrder(t *testing.T) {
+	g := buildMinGraph(t)
+	var order []int
+	_ = g.Subscribe(func(id string, state graph.NodeState) { order = append(order, 1) })
+	_ = g.Subscribe(func(id string, state graph.NodeState) { order = append(order, 2) })
+	_ = g.Subscribe(func(id string, state graph.NodeState) { order = append(order, 3) })
+	g.SetState("a", graph.StateHealthy)
+	if len(order) != 3 || order[0] != 1 || order[1] != 2 || order[2] != 3 {
+		t.Errorf("expected [1 2 3], got %v", order)
+	}
+}
+
+// Behavior 3: a node's own transitions are delivered in order.
+func TestSubscribe_PerNodeTransitionOrder(t *testing.T) {
+	g := buildMinGraph(t)
+	var states []graph.NodeState
+	_ = g.Subscribe(func(id string, state graph.NodeState) {
+		if id == "a" {
+			states = append(states, state)
+		}
+	})
+	g.SetState("a", graph.StatePending)
+	g.SetState("a", graph.StateStarting)
+	g.SetState("a", graph.StateHealthy)
+	want := []graph.NodeState{graph.StatePending, graph.StateStarting, graph.StateHealthy}
+	if len(states) != len(want) {
+		t.Fatalf("expected %d transitions, got %d: %v", len(want), len(states), states)
+	}
+	for i, s := range states {
+		if s != want[i] {
+			t.Errorf("transition %d: expected %q, got %q", i, want[i], s)
+		}
+	}
+}
+
+// Behavior 4: Subscribe returns an unsubscribe func; after calling it no
+// further callbacks fire.
+func TestSubscribe_UnsubscribeStopsCallbacks(t *testing.T) {
+	g := buildMinGraph(t)
+	count := 0
+	unsub := g.Subscribe(func(id string, state graph.NodeState) {
+		count++
+	})
+	g.SetState("a", graph.StateStarting)
+	unsub()
+	g.SetState("a", graph.StateHealthy)
+	if count != 1 {
+		t.Errorf("expected exactly 1 callback (before unsub), got %d", count)
+	}
+}
+
+// Behavior 5: Node.mu is NOT held during callback execution.
+// The callback reads g.GetState which acquires Node.mu internally.
+// If the node's mutex were still held, this would deadlock.
+func TestSubscribe_NodeMuNotHeldDuringCallback(t *testing.T) {
+	g := buildMinGraph(t)
+	var stateSeenInCallback graph.NodeState
+	_ = g.Subscribe(func(id string, state graph.NodeState) {
+		// GetState acquires Node.mu — would deadlock if SetState held it.
+		stateSeenInCallback = g.GetState(id)
+	})
+	g.SetState("a", graph.StateHealthy)
+	if stateSeenInCallback != graph.StateHealthy {
+		t.Errorf("expected healthy state inside callback, got %q", stateSeenInCallback)
+	}
+}
+
+// buildMinGraph builds a minimal single-node graph for subscription tests.
+func buildMinGraph(t *testing.T) *graph.Graph {
+	t.Helper()
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Domain: "test.test", Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"a": {Type: "service", Adapter: "go:fiber"},
+				"b": {Type: "infra", Adapter: "db:postgres"},
+			},
+			Edges: []config.EdgeConfig{
+				{From: "a", To: "b", Type: config.EdgeDependsOn},
+			},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("failed to build min graph: %v", err)
+	}
+	return g
 }
 
 // ---------------------------------------------------------------------------
