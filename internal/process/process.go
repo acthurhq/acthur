@@ -48,6 +48,11 @@ type Process struct {
 	restarts int
 	lastExit time.Time
 
+	// exited is closed by the background waiter goroutine started in startLocked
+	// when cmd.Wait() returns. Stop() and Supervisor.loop() both read from this
+	// channel rather than calling cmd.Wait() directly, avoiding a data race.
+	exited chan struct{}
+
 	// Callbacks
 	onStateChange func(nodeID string, state State)
 	onLine        func(nodeID, line string)
@@ -114,6 +119,15 @@ func (p *Process) startLocked(ctx context.Context) error {
 		return fmt.Errorf("process %q: failed to start %q: %w", p.NodeID, p.Bin, err)
 	}
 
+	// exited is closed by a single background goroutine that is the sole caller
+	// of cmd.Wait(). Stop() and Supervisor.loop() both block on this channel
+	// rather than calling cmd.Wait() themselves, eliminating the data race.
+	p.exited = make(chan struct{})
+	go func() {
+		p.cmd.Wait() //nolint:errcheck // exit status is not used here
+		close(p.exited)
+	}()
+
 	p.setState(StateRunning)
 
 	// Pipe output to log router
@@ -139,17 +153,13 @@ func (p *Process) Stop(timeout time.Duration) error {
 		p.cancel()
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		if p.cmd != nil && p.cmd.Process != nil {
-			done <- p.cmd.Wait()
-		} else {
-			done <- nil
-		}
-	}()
+	// Wait for the single background waiter goroutine (started in startLocked)
+	// to signal exit via p.exited. This avoids a data race from multiple callers
+	// calling cmd.Wait() on the same exec.Cmd.
+	exited := p.exited
 
 	select {
-	case <-done:
+	case <-exited:
 		p.setState(StateStopped)
 		return nil
 	case <-time.After(timeout):
@@ -179,6 +189,14 @@ func (p *Process) State() State {
 	return p.state
 }
 
+// waitExited returns the channel that is closed when the process exits.
+// Safe to call concurrently; uses the read lock.
+func (p *Process) waitExited() <-chan struct{} {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.exited
+}
+
 // Restarts returns the number of times this process has been restarted.
 func (p *Process) Restarts() int {
 	p.mu.RLock()
@@ -189,7 +207,7 @@ func (p *Process) Restarts() int {
 func (p *Process) setState(s State) {
 	p.state = s
 	if p.onStateChange != nil {
-		go p.onStateChange(p.NodeID, s)
+		p.onStateChange(p.NodeID, s)
 	}
 }
 
@@ -256,9 +274,10 @@ func (s *Supervisor) loop(ctx context.Context) {
 		default:
 		}
 
-		// Wait for the process to finish
-		if s.process.cmd != nil {
-			s.process.cmd.Wait()
+		// Wait for the process to finish via the single background waiter goroutine.
+		// This avoids the data race of calling cmd.Wait() from multiple goroutines.
+		if ch := s.process.waitExited(); ch != nil {
+			<-ch
 		}
 
 		if s.process.State() == StateStopping || s.process.State() == StateStopped {

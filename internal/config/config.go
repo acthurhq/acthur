@@ -398,8 +398,11 @@ func (c *Config) Validate() []string {
 		errs = append(errs, "version is required (currently only \"1\" is supported)")
 	}
 
-	// Validate edges reference existing nodes
+	// Validate edges reference existing nodes.
+	// "proxy" is a built-in implicit kernel node (type: infra, adapter: kernel:proxy)
+	// that is always present at runtime, so it is pre-seeded here.
 	nodeIDs := make(map[string]bool)
+	nodeIDs["proxy"] = true
 	for id := range c.Graph.Nodes {
 		nodeIDs[id] = true
 	}

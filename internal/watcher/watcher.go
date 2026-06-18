@@ -148,7 +148,8 @@ func (w *Watcher) check() {
 	for path, snap := range current {
 		oldSnap, exists := old[path]
 		if !exists {
-			w.fire(path, "__unknown__", ChangeCreated)
+			nodeID := w.nodeForPath(path)
+			w.fire(path, nodeID, ChangeCreated)
 			continue
 		}
 		if snap.ModTime != oldSnap.ModTime || snap.Size != oldSnap.Size {
@@ -270,13 +271,19 @@ func CascadeHandler(g *graph.Graph, onCascade func(nodeID string)) Handler {
 func (w *Watcher) shouldIgnore(path string) bool {
 	base := filepath.Base(path)
 
-	// Ignore dot files and common non-source artifacts
+	// Ignore dot files and common non-source artifacts.
+	// Apply patterns only against the path relative to rootDir so that
+	// ancestor directories (e.g. the OS /tmp prefix) are not matched.
 	ignorePatterns := []string{
 		".git", ".acthur", "node_modules", "vendor", ".venv",
 		"__pycache__", "target", "tmp", "bin", "dist", ".next",
 		".astro", "build", ".DS_Store",
 	}
-	for _, part := range strings.Split(path, string(filepath.Separator)) {
+	rel, err := filepath.Rel(w.rootDir, path)
+	if err != nil {
+		rel = path // fallback to absolute path if Rel fails
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
 		for _, pattern := range ignorePatterns {
 			if part == pattern {
 				return true

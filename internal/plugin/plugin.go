@@ -296,6 +296,14 @@ func Resolve(name string) (Plugin, error) {
 	return p, nil
 }
 
+// Unregister removes a plugin from the global registry.
+// Intended for use in tests only — do not call in production code.
+func Unregister(name string) {
+	regMu.Lock()
+	defer regMu.Unlock()
+	delete(registry, name)
+}
+
 // All returns all registered plugins.
 func All() []Plugin {
 	regMu.RLock()
@@ -385,7 +393,7 @@ func resolveOrder(names []string) ([]string, error) {
 		if _, ok := inDegree[name]; !ok {
 			inDegree[name] = 0
 		}
-		for _, dep := range deps[name] {
+		for range deps[name] {
 			inDegree[name]++ // name depends on dep, so name's in-degree increases
 		}
 	}

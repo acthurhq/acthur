@@ -236,15 +236,15 @@ func TestRegistry_ResolveUnknown(t *testing.T) {
 func registerFakePlugins(t *testing.T, plugins ...*fakePlugin) func() {
 	t.Helper()
 	for _, p := range plugins {
-		// Use recover to handle "already registered" panics in parallel tests
-		func() {
-			defer func() { recover() }()
-			plugin.Register(p)
-		}()
+		// Unregister any pre-existing plugin with this name (from a previous test)
+		// before re-registering with the new instance.
+		plugin.Unregister(p.Name())
+		plugin.Register(p)
 	}
 	return func() {
-		// Cleanup is handled by test isolation — in production the registry
-		// is populated once at startup. Tests should be run with -count=1.
+		for _, p := range plugins {
+			plugin.Unregister(p.Name())
+		}
 	}
 }
 

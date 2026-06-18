@@ -452,20 +452,29 @@ func (e ValidationError) Error() string { return e.Message }
 // ---------------------------------------------------------------------------
 
 // topoSort performs a topological sort of nodes based on a specific edge type.
-// Nodes with no incoming edges of that type come first (they have no dependencies).
+// An edge "from: A, to: B, type: depends_on" means A depends on B, so B must
+// start first. Nodes with no dependencies (no outgoing edges of that type)
+// have in-degree 0 in this scheme and are processed first.
 func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
-	// Build in-degree map for the given edge type
+	// Build in-degree map: inDegree[node] = number of nodes node depends on.
+	// Each "from→to depends_on" edge increments inDegree[from] because
+	// "from" cannot start until "to" is ready.
 	inDegree := make(map[string]int)
 	for id := range g.nodes {
 		inDegree[id] = 0
 	}
 	for _, e := range g.edges {
 		if e.Type == edgeType {
-			inDegree[e.To]++
+			// Only count edges where both endpoints are real nodes
+			if _, ok := g.nodes[e.From]; ok {
+				if _, ok2 := g.nodes[e.To]; ok2 {
+					inDegree[e.From]++
+				}
+			}
 		}
 	}
 
-	// Start with all nodes that have in-degree 0
+	// Start with all nodes that have in-degree 0 (no dependencies)
 	var queue []string
 	for id := range g.nodes {
 		if inDegree[id] == 0 {
@@ -481,13 +490,17 @@ func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
 		if n := g.nodes[id]; n != nil {
 			result = append(result, n)
 		}
-		// Reduce in-degree for all neighbors
+		// After starting id, unblock all nodes that depended on id.
+		// Those are nodes with an outgoing edge of edgeType pointing to id,
+		// i.e. the "from" side of edges in adjIn[id].
 		neighbors := make([]string, 0)
-		for _, e := range g.adjOut[id] {
+		for _, e := range g.adjIn[id] {
 			if e.Type == edgeType {
-				inDegree[e.To]--
-				if inDegree[e.To] == 0 {
-					neighbors = append(neighbors, e.To)
+				if _, ok := g.nodes[e.From]; ok {
+					inDegree[e.From]--
+					if inDegree[e.From] == 0 {
+						neighbors = append(neighbors, e.From)
+					}
 				}
 			}
 		}

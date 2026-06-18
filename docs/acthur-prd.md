@@ -313,7 +313,7 @@ Ask of anything being designed:
 ### 5.1 Repository Structure
 
 ```
-github.com/acthur/
+github.com/samueloshio/
 ├── kernel/               # The Go binary — all core internals
 │   ├── cmd/acthur/       # CLI entrypoint (cobra)
 │   ├── internal/
@@ -3244,7 +3244,7 @@ Steps:
 
 Acthur kernel, official plugins, and official adapters are released under the **MIT License**. Fully open source. No open-core model. No paid tiers.
 
-### 22.2 Repository Strategy
+### 22.2 Future Repository Strategy
 
 ```
 github.com/acthur/acthur          → kernel (monorepo for kernel)
