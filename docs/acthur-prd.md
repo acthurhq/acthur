@@ -3262,7 +3262,7 @@ Community plugins and adapters live in independent repositories and are discover
 brew install acthur             # Homebrew (macOS)
 scoop install acthur            # Scoop (Windows)
 curl | sh                       # Universal installer
-github.com/acthur/acthur/releases  # Direct binary download
+github.com/samueloshio/acthur/releases  # Direct binary download
 ```
 
 Built with **GoReleaser** + GitHub Actions. New release on every tagged commit to main. Binaries published for all supported platforms.
