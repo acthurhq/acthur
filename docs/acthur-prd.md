@@ -601,7 +601,7 @@ brew install acthur
 scoop install acthur
 
 # Direct binary download
-# Available at: github.com/acthur/acthur/releases
+# Available at: github.com/samueloshio/acthur/releases
 ```
 
 The installer:
@@ -3244,14 +3244,14 @@ Steps:
 
 Acthur kernel, official plugins, and official adapters are released under the **MIT License**. Fully open source. No open-core model. No paid tiers.
 
-### 22.2 Future Repository Strategy
+### 22.2 Repository Strategy
 
 ```
-github.com/acthur/acthur          → kernel (monorepo for kernel)
-github.com/acthur/plugins         → official plugins
-github.com/acthur/adapters        → official adapters
-github.com/acthur/examples        → example projects
-github.com/acthur/docs            → documentation site (built with Acthur + Astro)
+github.com/samueloshio/acthur          → kernel (monorepo for kernel)
+github.com/samueloshio/acthur-plugins         → official plugins
+github.com/samueloshio/acthur-adapters        → official adapters
+github.com/samueloshio/acthur-examples        → example projects
+github.com/samueloshio/acthur-docs            → documentation site (built with Acthur + Astro)
 ```
 
 Community plugins and adapters live in independent repositories and are discoverable via the plugin registry (a simple JSON manifest hosted at `registry.acthur.dev`).
@@ -4995,7 +4995,7 @@ Acthur uses a distinctive FIGlet-style ASCII banner rendered via `go-figure` on 
                   ╚═════╝  ╚══════╝ ╚═════╝   ╚═════╝   ╚═════╝
 
                   Runtime Graph Operating System  ·  v0.1.0
-                  github.com/acthur/acthur
+                  github.com/samueloshio/acthur
 ```
 
 Colorized version:
@@ -5067,7 +5067,7 @@ func Banner(version string) {
         styleDim.Render("Runtime Graph Operating System"),
         styleVersion.Render("v"+version),
     )
-    fmt.Println("  " + styleURL.Render("github.com/acthur/acthur"))
+    fmt.Println("  " + styleURL.Render("github.com/samueloshio/acthur"))
     fmt.Println()
 }
 
@@ -5098,7 +5098,7 @@ The full startup sequence output with consistent formatting:
   ██████╗  ██╗      ██████╗  ██╗   ██╗  ██████╗
   ...   (ASCII art in cyan)
   Runtime Graph Operating System  ·  v0.1.0
-  github.com/acthur/acthur
+  github.com/samueloshio/acthur
 
   [acthur] ✓  graph loaded — 8 nodes · 14 edges
   [acthur] →  startup order: db → cache → queue → api → worker → web → backoffice
@@ -7010,4 +7010,4 @@ ADRs document *why* key architectural decisions were made, not just *what* was d
 ---
 
 *Acthur — Runtime Graph Operating System with Pluggable Infrastructure Nodes*
-*PRD Version 3.0 — Open Source (MIT License) — github.com/acthur/acthur*
+*PRD Version 3.0 — Open Source (MIT License) — github.com/samueloshio/acthur*

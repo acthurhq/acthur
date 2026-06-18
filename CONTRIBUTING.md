@@ -25,7 +25,7 @@ docker (for integration tests)
 make
 
 # Clone and build
-git clone https://github.com/acthur/acthur
+git clone https://github.com/samueloshio/acthur
 cd acthur
 go mod download
 make build
@@ -57,7 +57,7 @@ internal/adapter/backend/<runtime>-<framework>/
 ```go
 package myadapter
 
-import "github.com/acthur/acthur/internal/adapter"
+import "github.com/samueloshio/acthur/internal/adapter"
 
 type Adapter struct{}
 
@@ -112,7 +112,7 @@ internal/plugin/<name>/
 ```go
 package myplugin
 
-import "github.com/acthur/acthur/internal/plugin"
+import "github.com/samueloshio/acthur/internal/plugin"
 
 type Plugin struct{}
 
@@ -153,7 +153,7 @@ Tests must verify:
 
 **Rules for plugins:**
 - NEVER import from `internal/adapter/backend/*/` — plugins do not call adapters
-- Generated code must be pure framework code — no `github.com/acthur` imports
+- Generated code must be pure framework code — no `github.com/samueloshio/` imports
 - All plugin capabilities go through `KernelAPI` — nothing else
 
 ---

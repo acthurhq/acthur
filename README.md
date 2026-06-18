@@ -289,7 +289,7 @@ Acthur is MIT-licensed and actively developed.
 **Adding a plugin:** Implement the `Plugin` interface (3 methods) + `Register(KernelAPI)`. See the plugin system documentation.
 
 ```bash
-git clone https://github.com/acthur/acthur
+git clone https://github.com/samueloshio/acthur
 cd acthur
 make build
 make test
@@ -305,4 +305,4 @@ MIT — see [LICENSE](./LICENSE)
 ---
 
 *Acthur — Runtime Graph Operating System*  
-*https://acthur.dev · https://github.com/acthur/acthur*
+*https://acthur.dev · https://github.com/samueloshio/acthur*
