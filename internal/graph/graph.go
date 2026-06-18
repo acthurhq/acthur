@@ -6,6 +6,7 @@ package graph
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/acthur/acthur/internal/config"
@@ -103,12 +104,24 @@ func Build(cfg *config.Config) (*Graph, error) {
 		adjIn:  make(map[string][]*Edge),
 	}
 
+	// Materialize the kernel proxy node first — it is always present in the
+	// graph regardless of what the user declares in acthur.yml.
+	g.nodes["proxy"] = &Node{
+		ID:      "proxy",
+		Type:    config.NodeTypeInfra,
+		Adapter: "kernel:proxy",
+		state:   StatePending,
+	}
+
 	// Build nodes
 	for id, nc := range cfg.Graph.Nodes {
 		devURL := nc.DevURL
 		if devURL == "" && nc.Type == config.NodeTypeService {
-			// Auto-generate .test subdomain from node id and project name
-			devURL = id + "." + cfg.Dev.Domain
+			// Auto-generate dev subdomain only for roles that serve HTTP traffic.
+			// queue-worker and cron have no listening port, so they get no dev_url.
+			if nc.Role == config.NodeRoleServer || nc.Role == config.NodeRoleGateway {
+				devURL = id + "." + cfg.Dev.Domain
+			}
 		}
 
 		g.nodes[id] = &Node{
@@ -123,8 +136,23 @@ func Build(cfg *config.Config) (*Graph, error) {
 		}
 	}
 
-	// Build edges
-	for _, ec := range cfg.Graph.Edges {
+	// Build edges — resolve node references at build time.
+	// Any edge whose from/to refers to a non-existent node is a build error.
+	for i, ec := range cfg.Graph.Edges {
+		if _, ok := g.nodes[ec.From]; !ok {
+			return nil, fmt.Errorf(
+				"build error: edge[%d] 'from' node %q does not exist — "+
+					"check acthur.yml graph.edges or graph.nodes",
+				i, ec.From,
+			)
+		}
+		if _, ok := g.nodes[ec.To]; !ok {
+			return nil, fmt.Errorf(
+				"build error: edge[%d] 'to' node %q does not exist — "+
+					"check acthur.yml graph.edges or graph.nodes",
+				i, ec.To,
+			)
+		}
 		edge := &Edge{
 			From:      ec.From,
 			To:        ec.To,
@@ -593,11 +621,9 @@ func sortStrings(ss []string) {
 
 // Summary returns a human-readable summary of the graph for `acthur graph show`.
 func (g *Graph) Summary() string {
-	var sb fmt.Stringer
-	_ = sb
 	out := ""
 	out += fmt.Sprintf("  Nodes (%d)\n", len(g.nodes))
-	out += fmt.Sprintf("  %s\n", repeatStr("─", 40))
+	out += fmt.Sprintf("  %s\n", strings.Repeat("─", 40))
 
 	order := g.StartupOrder()
 	for _, n := range order {
@@ -610,7 +636,7 @@ func (g *Graph) Summary() string {
 	}
 
 	out += fmt.Sprintf("\n  Edges (%d)\n", len(g.edges))
-	out += fmt.Sprintf("  %s\n", repeatStr("─", 40))
+	out += fmt.Sprintf("  %s\n", strings.Repeat("─", 40))
 	for _, e := range g.edges {
 		contracts := ""
 		if len(e.Contracts) > 0 {
@@ -620,12 +646,4 @@ func (g *Graph) Summary() string {
 			e.From, e.To, string(e.Type), contracts)
 	}
 	return out
-}
-
-func repeatStr(s string, n int) string {
-	result := ""
-	for i := 0; i < n; i++ {
-		result += s
-	}
-	return result
 }
