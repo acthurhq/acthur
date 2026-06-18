@@ -1,0 +1,110 @@
+contract: users
+version: "1"
+transport: http
+
+endpoints:
+  - id: create_user
+    method: POST
+    path: /api/v1/users
+    auth: required
+    roles: [admin]
+    rate_limit:
+      max: 50
+      window: 1m
+    input:
+      name:  string(required,max:100)
+      email: email(required)
+      role:  enum(admin,vet,agent,support,user)
+    output:
+      id:         ulid
+      name:       string
+      email:      email
+      role:       string
+      tenant_id:  ulid
+      created_at: timestamp
+    errors:
+      - status: 409
+        code: email_taken
+      - status: 422
+        code: validation_failed
+
+  - id: get_user
+    method: GET
+    path: /api/v1/users/:id
+    auth: required
+    output:
+      id:         ulid
+      name:       string
+      email:      email
+      role:       string
+      tenant_id:  ulid
+      created_at: timestamp
+    errors:
+      - status: 404
+        code: not_found
+
+  - id: list_users
+    method: GET
+    path: /api/v1/users
+    auth: required
+    roles: [admin, support]
+    input:
+      page:  int?
+      limit: int?
+      role:  string?
+    output:
+      data:  array($User)
+      total: int
+      page:  int
+      limit: int
+
+  - id: update_user
+    method: PUT
+    path: /api/v1/users/:id
+    auth: required
+    input:
+      name:  string?
+      email: email?
+      role:  enum(admin,vet,agent,support,user)?
+    output:
+      id:         ulid
+      name:       string
+      email:      email
+      role:       string
+      updated_at: timestamp
+    errors:
+      - status: 404
+        code: not_found
+      - status: 409
+        code: email_taken
+
+  - id: delete_user
+    method: DELETE
+    path: /api/v1/users/:id
+    auth: required
+    roles: [admin]
+    errors:
+      - status: 404
+        code: not_found
+
+events:
+  - id: user.created
+    payload:
+      id:    ulid
+      email: email
+      role:  string
+
+  - id: user.deleted
+    payload:
+      id: ulid
+
+types:
+  User:
+    fields:
+      id:         ulid
+      name:       string
+      email:      email
+      role:       string
+      tenant_id:  ulid
+      created_at: timestamp
+      updated_at: timestamp

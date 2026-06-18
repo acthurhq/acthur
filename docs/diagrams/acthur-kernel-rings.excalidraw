@@ -1,0 +1,139 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "claude-code",
+  "elements": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 100, "y": 50, "width": 620, "height": 36,
+      "angle": 0, "strokeColor": "#1e293b", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100001, "boundElements": null, "updated": 1,
+      "text": "Acthur — Kernel Protection Rings (Four-Layer Model)",
+      "fontSize": 28, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "ring_userland",
+      "type": "rectangle",
+      "x": 100, "y": 120, "width": 940, "height": 660,
+      "angle": 0, "strokeColor": "#475569", "backgroundColor": "#f1f5f9",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 35,
+      "seed": 100002, "boundElements": null, "updated": 1
+    },
+    {
+      "id": "lbl_userland",
+      "type": "text",
+      "x": 122, "y": 132, "width": 520, "height": 24,
+      "angle": 0, "strokeColor": "#334155", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100003, "boundElements": null, "updated": 1,
+      "text": "USERLAND  ·  acthur CLI shell · doctor · output (TTY)",
+      "fontSize": 18, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "ring_plugins",
+      "type": "rectangle",
+      "x": 160, "y": 200, "width": 820, "height": 500,
+      "angle": 0, "strokeColor": "#6b21a8", "backgroundColor": "#f3e8ff",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 35,
+      "seed": 100004, "boundElements": null, "updated": 1
+    },
+    {
+      "id": "lbl_plugins",
+      "type": "text",
+      "x": 182, "y": 212, "width": 600, "height": 24,
+      "angle": 0, "strokeColor": "#334155", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100005, "boundElements": null, "updated": 1,
+      "text": "LAYER 4 · PLUGINS  —  kernel modules (KernelAPI + event bus)",
+      "fontSize": 18, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "ring_contracts",
+      "type": "rectangle",
+      "x": 220, "y": 280, "width": 700, "height": 340,
+      "angle": 0, "strokeColor": "#854d0e", "backgroundColor": "#fef9c3",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 40,
+      "seed": 100006, "boundElements": null, "updated": 1
+    },
+    {
+      "id": "lbl_contracts",
+      "type": "text",
+      "x": 242, "y": 292, "width": 460, "height": 24,
+      "angle": 0, "strokeColor": "#334155", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100007, "boundElements": null, "updated": 1,
+      "text": "LAYER 3 · CONTRACTS  —  syscall ABI on edges",
+      "fontSize": 18, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "ring_adapters",
+      "type": "rectangle",
+      "x": 280, "y": 360, "width": 580, "height": 180,
+      "angle": 0, "strokeColor": "#0369a1", "backgroundColor": "#e0f2fe",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 40,
+      "seed": 100008, "boundElements": null, "updated": 1
+    },
+    {
+      "id": "lbl_adapters",
+      "type": "text",
+      "x": 302, "y": 372, "width": 500, "height": 24,
+      "angle": 0, "strokeColor": "#334155", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100009, "boundElements": null, "updated": 1,
+      "text": "LAYER 2 · ADAPTERS  —  device drivers (runtime:framework)",
+      "fontSize": 18, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "core_graph",
+      "type": "rectangle",
+      "x": 360, "y": 430, "width": 420, "height": 90,
+      "angle": 0, "strokeColor": "#166534", "backgroundColor": "#dcfce7",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100010, "boundElements": [{ "id": "lbl_core", "type": "text" }], "updated": 1
+    },
+    {
+      "id": "lbl_core",
+      "type": "text",
+      "x": 0, "y": 0, "width": 380, "height": 56,
+      "angle": 0, "strokeColor": "#166534", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100011, "boundElements": null, "updated": 1,
+      "text": "RING 0 · GRAPH + CONFIG\nlive DAG · SSOT · scheduler",
+      "fontSize": 18, "fontFamily": 2, "textAlign": "center", "verticalAlign": "middle",
+      "containerId": "core_graph"
+    },
+    {
+      "id": "legend_title",
+      "type": "text",
+      "x": 100, "y": 810, "width": 360, "height": 24,
+      "angle": 0, "strokeColor": "#334155", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100012, "boundElements": null, "updated": 1,
+      "text": "Communication law (one-way only):",
+      "fontSize": 16, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "legend_l1",
+      "type": "text",
+      "x": 100, "y": 840, "width": 880, "height": 20,
+      "angle": 0, "strokeColor": "#64748b", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100013, "boundElements": null, "updated": 1,
+      "text": "Graph →calls→ Adapters      Graph →fires hooks→ Plugins      Plugins →mutate→ Graph      Contracts →enforce→ edges",
+      "fontSize": 14, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    },
+    {
+      "id": "legend_l2",
+      "type": "text",
+      "x": 100, "y": 864, "width": 880, "height": 20,
+      "angle": 0, "strokeColor": "#991b1b", "backgroundColor": "transparent",
+      "fillStyle": "solid", "strokeWidth": 2, "roughness": 0, "opacity": 100,
+      "seed": 100014, "boundElements": null, "updated": 1,
+      "text": "Forbidden: Plugins ✗ Adapters     Adapters ✗ Plugins     Contracts never execute (passive law)",
+      "fontSize": 14, "fontFamily": 2, "textAlign": "left", "verticalAlign": "top"
+    }
+  ],
+  "appState": { "viewBackgroundColor": "#ffffff" }
+}

@@ -1,0 +1,191 @@
+# testdata/vetangle/acthur.yml
+# Complete test fixture used by unit tests and integration tests.
+# Represents a real-world veterinary SaaS project.
+
+project: vetangle
+version: "1"
+
+identifiers:
+  strategy: ulid
+  public_strategy: nanoid
+  nanoid_length: 21
+
+dev:
+  domain: vetangle.test
+  https: false
+  port: 4000
+  dns_strategy: auto
+
+environments:
+  dev:
+    context: local
+  staging:
+    context: docker
+    target: coolify
+    host: staging.vetangle.com
+  production:
+    context: cloud
+    target: coolify
+    host: vetangle.com
+
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      port: 8080
+      hot_reload: true
+      dev_url: api.vetangle.test
+
+    web:
+      type: service
+      adapter: ui:astro
+      port: 3000
+      hot_reload: true
+      dev_url: vetangle.test
+
+    backoffice:
+      type: service
+      adapter: ui:next
+      port: 3001
+      hot_reload: true
+      dev_url: backoffice.vetangle.test
+
+    worker:
+      type: service
+      adapter: go:fiber
+      role: queue-worker
+
+    db:
+      type: infra
+      adapter: db:postgres
+      version: "16"
+      pool:
+        max_conns: auto
+        min_conns: auto
+        max_conn_lifetime: 1h
+        max_conn_lifetime_jitter: 5m
+        max_conn_idle_time: 30m
+        health_check_period: 30s
+        connect_timeout: 5s
+        before_acquire: ping
+        after_release: reset_search_path
+
+    cache:
+      type: infra
+      adapter: cache:redis
+
+    storage:
+      type: infra
+      adapter: storage:minio
+
+    queue:
+      type: infra
+      adapter: queue:nats
+
+  edges:
+    - from: api
+      to: db
+      type: depends_on
+
+    - from: api
+      to: cache
+      type: depends_on
+
+    - from: api
+      to: storage
+      type: depends_on
+
+    - from: worker
+      to: db
+      type: depends_on
+
+    - from: worker
+      to: queue
+      type: depends_on
+
+    - from: web
+      to: api
+      type: data_flow
+      contracts:
+        - contracts/users.contract.yml
+        - contracts/appointments.contract.yml
+
+    - from: backoffice
+      to: api
+      type: data_flow
+      contracts:
+        - contracts/admin.contract.yml
+
+    - from: api
+      to: worker
+      type: emits
+      events:
+        - appointment.booked
+        - payment.received
+
+    - from: worker
+      to: queue
+      type: subscribes_to
+      events:
+        - appointment.booked
+        - payment.received
+
+    - from: web
+      to: proxy
+      type: proxied_through
+
+    - from: api
+      to: proxy
+      type: proxied_through
+
+    - from: backoffice
+      to: proxy
+      type: proxied_through
+
+    - from: api
+      to: db
+      type: migrates
+
+    - from: api
+      to: storage
+      type: migrates
+
+plugins:
+  - name: migrations
+
+  - name: auth
+    config:
+      strategy: jwt
+      algorithm: RS256
+      access_token_ttl: 15m
+      refresh_token_ttl: 7d
+      refresh_rotation: true
+      revocation: redis
+      oauth2:
+        providers:
+          - google
+          - github
+      mfa:
+        factors:
+          - totp
+
+  - name: rbac
+    config:
+      roles:
+        - admin
+        - vet
+        - agent
+        - support
+        - user
+
+  - name: multitenancy
+    config:
+      strategy: schema
+      identification: subdomain
+
+ai:
+  provider: claude
+  model: claude-sonnet-4-20250514
+  api_key: ${ANTHROPIC_API_KEY}
+  context_strategy: graph-first

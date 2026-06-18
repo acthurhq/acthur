@@ -1,0 +1,36 @@
+# .air.toml — hot reload for Acthur kernel development
+# Usage: air (in the acthur repo root)
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin = "./tmp/acthur"
+  cmd = "go build -o ./tmp/acthur ./cmd/acthur"
+  delay = 300
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "dist"]
+  exclude_file = []
+  exclude_regex = ["_test.go"]
+  exclude_unchanged = true
+  follow_symlink = false
+  include_ext = ["go"]
+  kill_delay = "0s"
+  log = "tmp/build-errors.log"
+  send_interrupt = true
+  stop_on_error = true
+
+[color]
+  app = "magenta"
+  build = "yellow"
+  main = "cyan"
+  runner = "green"
+  watcher = "blue"
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = true

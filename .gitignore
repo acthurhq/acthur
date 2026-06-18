@@ -1,0 +1,58 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go
+vendor/
+tmp/
+
+# Environment and secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Acthur runtime state — kernel writes here, never commit
+.acthur/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Rust
+target/
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker/
+
+# GoReleaser
+dist/

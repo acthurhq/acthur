@@ -1,0 +1,105 @@
+contract: appointments
+version: "1"
+transport: http
+
+endpoints:
+  - id: book_appointment
+    method: POST
+    path: /api/v1/appointments
+    auth: required
+    roles: [user, agent]
+    input:
+      vet_id:     ulid(required)
+      pet_id:     ulid(required)
+      start_time: timestamp(required)
+      notes:      string?
+    output:
+      id:         ulid
+      vet_id:     ulid
+      pet_id:     ulid
+      owner_id:   ulid
+      start_time: timestamp
+      end_time:   timestamp
+      status:     string
+      created_at: timestamp
+    errors:
+      - status: 409
+        code: slot_unavailable
+      - status: 422
+        code: validation_failed
+
+  - id: get_appointment
+    method: GET
+    path: /api/v1/appointments/:id
+    auth: required
+    output:
+      id:         ulid
+      vet_id:     ulid
+      pet_id:     ulid
+      owner_id:   ulid
+      start_time: timestamp
+      end_time:   timestamp
+      status:     string
+      notes:      string?
+    errors:
+      - status: 404
+        code: not_found
+
+  - id: list_appointments
+    method: GET
+    path: /api/v1/appointments
+    auth: required
+    input:
+      status:     string?
+      vet_id:     ulid?
+      from_date:  string?
+      to_date:    string?
+      page:       int?
+      limit:      int?
+    output:
+      data:  array($Appointment)
+      total: int
+      page:  int
+      limit: int
+
+  - id: cancel_appointment
+    method: POST
+    path: /api/v1/appointments/:id/cancel
+    auth: required
+    input:
+      reason: string?
+    output:
+      id:     ulid
+      status: string
+    errors:
+      - status: 404
+        code: not_found
+      - status: 422
+        code: cannot_cancel
+
+events:
+  - id: appointment.booked
+    payload:
+      id:         ulid
+      vet_id:     ulid
+      owner_id:   ulid
+      start_time: timestamp
+
+  - id: appointment.cancelled
+    payload:
+      id:     ulid
+      reason: string?
+
+types:
+  Appointment:
+    fields:
+      id:         ulid
+      vet_id:     ulid
+      pet_id:     ulid
+      owner_id:   ulid
+      tenant_id:  ulid
+      start_time: timestamp
+      end_time:   timestamp
+      status:     string
+      notes:      string?
+      created_at: timestamp

@@ -1,0 +1,72 @@
+contract: admin
+version: "1"
+transport: http
+
+endpoints:
+  - id: list_tenants
+    method: GET
+    path: /api/v1/admin/tenants
+    auth: required
+    roles: [admin]
+    input:
+      page:   int?
+      limit:  int?
+      status: string?
+    output:
+      data:  array($Tenant)
+      total: int
+
+  - id: get_tenant
+    method: GET
+    path: /api/v1/admin/tenants/:id
+    auth: required
+    roles: [admin]
+    output:
+      id:         ulid
+      slug:       string
+      name:       string
+      plan:       string
+      status:     string
+      created_at: timestamp
+    errors:
+      - status: 404
+        code: not_found
+
+  - id: update_tenant
+    method: PUT
+    path: /api/v1/admin/tenants/:id
+    auth: required
+    roles: [admin]
+    input:
+      name:   string?
+      plan:   string?
+      status: string?
+    output:
+      id:         ulid
+      slug:       string
+      name:       string
+      plan:       string
+      status:     string
+      updated_at: timestamp
+
+  - id: get_system_stats
+    method: GET
+    path: /api/v1/admin/stats
+    auth: required
+    roles: [admin]
+    output:
+      total_tenants:      int
+      active_tenants:     int
+      total_users:        int
+      total_appointments: int
+      uptime_seconds:     int
+
+types:
+  Tenant:
+    fields:
+      id:         ulid
+      slug:       string
+      name:       string
+      plan:       string
+      status:     string
+      created_at: timestamp
