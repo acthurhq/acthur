@@ -6,6 +6,7 @@ package graph
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -583,7 +584,14 @@ func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
 			queue = append(queue, id)
 		}
 	}
-	sortStrings(queue) // stable ordering
+	sort.Slice(queue, func(i, j int) bool {
+		ni, nj := g.nodes[queue[i]], g.nodes[queue[j]]
+		ti, tj := nodeTypeTier(ni.Type), nodeTypeTier(nj.Type)
+		if ti != tj {
+			return ti < tj
+		}
+		return queue[i] < queue[j]
+	}) // infra before service, then alphabetical
 
 	var result []*Node
 	for len(queue) > 0 {
@@ -606,7 +614,14 @@ func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
 				}
 			}
 		}
-		sortStrings(neighbors)
+		sort.Slice(neighbors, func(i, j int) bool {
+			ni, nj := g.nodes[neighbors[i]], g.nodes[neighbors[j]]
+			ti, tj := nodeTypeTier(ni.Type), nodeTypeTier(nj.Type)
+			if ti != tj {
+				return ti < tj
+			}
+			return neighbors[i] < neighbors[j]
+		})
 		queue = append(queue, neighbors...)
 	}
 
@@ -621,7 +636,14 @@ func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
 			remaining = append(remaining, id)
 		}
 	}
-	sortStrings(remaining)
+	sort.Slice(remaining, func(i, j int) bool {
+		ni, nj := g.nodes[remaining[i]], g.nodes[remaining[j]]
+		ti, tj := nodeTypeTier(ni.Type), nodeTypeTier(nj.Type)
+		if ti != tj {
+			return ti < tj
+		}
+		return remaining[i] < remaining[j]
+	})
 	for _, id := range remaining {
 		result = append(result, g.nodes[id])
 	}
@@ -678,14 +700,16 @@ func (g *Graph) detectCycle() error {
 	return nil
 }
 
-// sortStrings sorts a string slice in-place (bubble sort — small slices only).
-func sortStrings(ss []string) {
-	for i := 0; i < len(ss); i++ {
-		for j := i + 1; j < len(ss); j++ {
-			if ss[j] < ss[i] {
-				ss[i], ss[j] = ss[j], ss[i]
-			}
-		}
+// nodeTypeTier maps node types to sort priority within a topological tier.
+// Lower value = started earlier. infra < service < everything else.
+func nodeTypeTier(t config.NodeType) int {
+	switch t {
+	case config.NodeTypeInfra:
+		return 0
+	case config.NodeTypeService:
+		return 1
+	default:
+		return 2
 	}
 }
 
