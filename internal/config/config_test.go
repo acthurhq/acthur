@@ -158,6 +158,9 @@ graph:
 }
 
 func TestValidate_UnknownNodeRef(t *testing.T) {
+	// Node-existence checks moved to graph.Build (so kernel-materialized nodes
+	// like "proxy" resolve correctly). config.Validate only checks schema-level
+	// constraints. A config with an unknown node ref loads without error.
 	_, err := config.LoadFile(writeTempConfig(t, `
 project: test
 version: "1"
@@ -171,8 +174,8 @@ graph:
       to: nonexistent
       type: depends_on
 `))
-	if err == nil {
-		t.Error("expected error for unknown node reference, got nil")
+	if err != nil {
+		t.Errorf("config.LoadFile should not reject unknown node references (graph.Build does that), got: %v", err)
 	}
 }
 

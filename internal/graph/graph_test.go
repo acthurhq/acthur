@@ -17,8 +17,9 @@ func TestBuild_FromValidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
-	if len(g.Nodes()) != 8 {
-		t.Errorf("expected 8 nodes, got %d", len(g.Nodes()))
+	// 8 authored nodes + 1 materialized proxy kernel node = 9
+	if len(g.Nodes()) != 9 {
+		t.Errorf("expected 9 nodes (8 authored + proxy), got %d", len(g.Nodes()))
 	}
 }
 
@@ -33,6 +34,18 @@ func TestBuild_NodeProperties(t *testing.T) {
 	}
 	if api.Adapter != "go:fiber" {
 		t.Errorf("expected go:fiber adapter, got %q", api.Adapter)
+	}
+}
+
+func TestBuild_ErrorOnNonExistentNodeRef(t *testing.T) {
+	cfg := minConfig()
+	cfg.Graph.Nodes["api"] = config.NodeConfig{Type: "service", Adapter: "go:fiber"}
+	cfg.Graph.Edges = []config.EdgeConfig{
+		{From: "api", To: "ghost", Type: config.EdgeDependsOn},
+	}
+	_, err := graph.Build(cfg)
+	if err == nil {
+		t.Error("expected build error for edge referencing non-existent node, got nil")
 	}
 }
 
@@ -60,6 +73,68 @@ func TestBuild_AutoDevURL(t *testing.T) {
 	// Should be api.vetangle.test
 	if api.DevURL != "api.vetangle.test" {
 		t.Errorf("expected api.vetangle.test, got %q", api.DevURL)
+	}
+}
+
+func TestBuild_AutoDevURL_WorkerAndCronGetNone(t *testing.T) {
+	cfg := minConfig()
+	cfg.Graph.Nodes["api"] = config.NodeConfig{
+		Type:    config.NodeTypeService,
+		Adapter: "go:fiber",
+		Role:    config.NodeRoleServer,
+	}
+	cfg.Graph.Nodes["worker"] = config.NodeConfig{
+		Type:    config.NodeTypeService,
+		Adapter: "go:fiber",
+		Role:    config.NodeRoleQueueWorker,
+	}
+	cfg.Graph.Nodes["cron"] = config.NodeConfig{
+		Type:    config.NodeTypeService,
+		Adapter: "go:fiber",
+		Role:    config.NodeRoleCron,
+	}
+	cfg.Graph.Nodes["gateway"] = config.NodeConfig{
+		Type:    config.NodeTypeService,
+		Adapter: "go:fiber",
+		Role:    config.NodeRoleGateway,
+	}
+	cfg.Graph.Edges = []config.EdgeConfig{
+		{From: "api", To: "worker", Type: config.EdgeDependsOn},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	// server-role and gateway-role services get auto dev_url
+	if g.Node("api").DevURL == "" {
+		t.Error("expected server-role service api to get auto dev_url")
+	}
+	if g.Node("gateway").DevURL == "" {
+		t.Error("expected gateway-role service to get auto dev_url")
+	}
+	// queue-worker and cron must NOT get auto dev_url
+	if g.Node("worker").DevURL != "" {
+		t.Errorf("expected queue-worker to have no dev_url, got %q", g.Node("worker").DevURL)
+	}
+	if g.Node("cron").DevURL != "" {
+		t.Errorf("expected cron to have no dev_url, got %q", g.Node("cron").DevURL)
+	}
+}
+
+func TestBuild_MaterializesProxyNode(t *testing.T) {
+	g := buildTestGraph(t)
+	proxy := g.Node("proxy")
+	if proxy == nil {
+		t.Fatal("expected proxy node to be materialized by Build")
+	}
+	if proxy.Type != config.NodeTypeInfra {
+		t.Errorf("expected proxy type=infra, got %q", proxy.Type)
+	}
+	if proxy.Adapter != "kernel:proxy" {
+		t.Errorf("expected proxy adapter=kernel:proxy, got %q", proxy.Adapter)
+	}
+	if proxy.DevURL != "" {
+		t.Errorf("expected proxy to have no dev_url, got %q", proxy.DevURL)
 	}
 }
 
@@ -338,9 +413,35 @@ func TestNodesByType_Service(t *testing.T) {
 func TestNodesByType_Infra(t *testing.T) {
 	g := buildTestGraph(t)
 	infra := g.NodesByType(config.NodeTypeInfra)
-	// vetangle has: db, cache, storage, queue = 4 infra
-	if len(infra) != 4 {
-		t.Errorf("expected 4 infra nodes, got %d", len(infra))
+	// vetangle authored: db, cache, storage, queue = 4 infra
+	// plus 1 materialized kernel: proxy = 5 total
+	if len(infra) != 5 {
+		t.Errorf("expected 5 infra nodes (4 authored + proxy), got %d", len(infra))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Summary tests
+// ---------------------------------------------------------------------------
+
+func TestSummary_ContainsProxyNode(t *testing.T) {
+	g := buildTestGraph(t)
+	s := g.Summary()
+	if !contains([]string{s}, "proxy") {
+		// Use simple string search
+		if len(s) == 0 {
+			t.Error("expected non-empty summary")
+		}
+		found := false
+		for i := 0; i+5 <= len(s); i++ {
+			if s[i:i+5] == "proxy" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("expected Summary to contain 'proxy' node")
+		}
 	}
 }
 

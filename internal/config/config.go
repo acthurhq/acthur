@@ -398,30 +398,21 @@ func (c *Config) Validate() []string {
 		errs = append(errs, "version is required (currently only \"1\" is supported)")
 	}
 
-	// Validate edges reference existing nodes.
-	// "proxy" is a built-in implicit kernel node (type: infra, adapter: kernel:proxy)
-	// that is always present at runtime, so it is pre-seeded here.
-	nodeIDs := make(map[string]bool)
-	nodeIDs["proxy"] = true
-	for id := range c.Graph.Nodes {
-		nodeIDs[id] = true
-	}
-
+	// Validate edge schema — emptiness, type presence, self-reference, and
+	// semantic constraints on contracts/events. Node-existence checks are
+	// deliberately deferred to graph.Build so that kernel-materialized nodes
+	// (e.g. "proxy") are resolved at build time, not config-load time.
 	for i, edge := range c.Graph.Edges {
 		if edge.From == "" {
 			errs = append(errs, fmt.Sprintf("edge[%d]: 'from' is required", i))
-		} else if !nodeIDs[edge.From] {
-			errs = append(errs, fmt.Sprintf("edge[%d]: 'from' node %q does not exist", i, edge.From))
 		}
 		if edge.To == "" {
 			errs = append(errs, fmt.Sprintf("edge[%d]: 'to' is required", i))
-		} else if !nodeIDs[edge.To] {
-			errs = append(errs, fmt.Sprintf("edge[%d]: 'to' node %q does not exist", i, edge.To))
 		}
 		if edge.Type == "" {
 			errs = append(errs, fmt.Sprintf("edge[%d] (%s→%s): edge type is required", i, edge.From, edge.To))
 		}
-		if edge.From == edge.To {
+		if edge.From != "" && edge.From == edge.To {
 			errs = append(errs, fmt.Sprintf("edge[%d]: self-referencing edge on node %q is not allowed", i, edge.From))
 		}
 		if edge.Type == EdgeDataFlow && len(edge.Contracts) == 0 {
