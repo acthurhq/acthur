@@ -480,13 +480,21 @@ var graphValidateCmd = &cobra.Command{
 		output.Error("graph", "%d validation error(s) found:", len(errs))
 		fmt.Println()
 		for _, e := range errs {
-			fmt.Printf("  %s  %s\n", output.SymbolError, e.Message)
+			severity := string(e.Severity)
+			if severity == "" {
+				severity = string(graph.SeverityError)
+			}
+			fmt.Printf("  %s  [%s] %s\n", output.SymbolError, severity, e.Message)
+			if e.Rule != "" {
+				fmt.Printf("     rule: %s\n", e.Rule)
+			}
 			if e.Fix != "" {
-				fmt.Printf("     %s  fix: %s\n\n", output.SymbolInfo, e.Fix)
+				fmt.Printf("     %s  fix: %s\n", output.SymbolInfo, e.Fix)
 			}
 			if e.DocsURL != "" {
-				fmt.Printf("     %s  docs: %s\n\n", output.SymbolInfo, e.DocsURL)
+				fmt.Printf("     %s  docs: %s\n", output.SymbolInfo, e.DocsURL)
 			}
+			fmt.Println()
 		}
 		os.Exit(int(output.ExitGraphError))
 		return nil

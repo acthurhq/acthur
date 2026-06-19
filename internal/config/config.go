@@ -423,13 +423,10 @@ func (c *Config) Validate() []string {
 		if edge.From != "" && edge.From == edge.To {
 			errs = append(errs, fmt.Sprintf("edge[%d]: self-referencing edge on node %q is not allowed", i, edge.From))
 		}
-		if edge.Type == EdgeDataFlow && len(edge.Contracts) == 0 {
-			errs = append(errs, fmt.Sprintf(
-				"edge[%d] (%s→%s): data_flow edges require at least one contract\n"+
-					"  Add: contracts: [contracts/<name>.contract.yml]",
-				i, edge.From, edge.To,
-			))
-		}
+		// Note: data_flow-requires-contract is a semantic rule enforced by
+		// graph.Validate (Phase 1B three-tier pipeline). config.Validate only
+		// checks schema-level constraints (empty fields, missing type, self-reference,
+		// invalid enum values).
 		if (edge.Type == EdgeEmits || edge.Type == EdgeSubscribesTo) && len(edge.Events) == 0 {
 			errs = append(errs, fmt.Sprintf(
 				"edge[%d] (%s→%s): %s edges require at least one event name",

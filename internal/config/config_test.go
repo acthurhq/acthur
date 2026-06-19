@@ -198,7 +198,10 @@ graph:
 	}
 }
 
-func TestValidate_DataFlowMissingContract(t *testing.T) {
+// TestValidate_DataFlowMissingContract_ConfigAllows confirms that
+// config.Validate no longer rejects a data_flow edge without contracts —
+// that semantic rule lives exclusively in graph.Validate (Phase 1B).
+func TestValidate_DataFlowMissingContract_ConfigAllows(t *testing.T) {
 	_, err := config.LoadFile(writeTempConfig(t, `
 project: test
 version: "1"
@@ -215,8 +218,9 @@ graph:
       to: api
       type: data_flow
 `))
-	if err == nil {
-		t.Error("expected error for data_flow edge without contract, got nil")
+	if err != nil {
+		t.Errorf("config.Validate must not reject data_flow edges without contracts "+
+			"(graph.Validate is the authority for that rule); got: %v", err)
 	}
 }
 
