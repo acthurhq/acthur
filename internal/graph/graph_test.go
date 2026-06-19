@@ -146,21 +146,36 @@ func TestStartupOrder_InfraBeforeServices(t *testing.T) {
 	g := buildTestGraph(t)
 	order := g.StartupOrder()
 
-	// Find positions of api and db
-	apiPos, dbPos := -1, -1
+	// Find positions of key nodes.
+	// vetangle has: infra(db, cache, storage, queue, proxy), service(api, web, backoffice, worker)
+	// web and backoffice have no depends_on to db — they should still come after infra nodes.
+	positions := map[string]int{}
 	for i, n := range order {
-		switch n.ID {
-		case "api":
-			apiPos = i
-		case "db":
-			dbPos = i
-		}
+		positions[n.ID] = i
 	}
-	if dbPos == -1 || apiPos == -1 {
+
+	// api depends_on db (explicit edge) — db must come before api
+	if positions["db"] == 0 && positions["api"] == 0 {
 		t.Fatal("api or db node not found in startup order")
 	}
-	if dbPos >= apiPos {
-		t.Errorf("expected db (pos %d) to come before api (pos %d)", dbPos, apiPos)
+	if positions["db"] >= positions["api"] {
+		t.Errorf("expected db (pos %d) to come before api (pos %d)", positions["db"], positions["api"])
+	}
+
+	// web has no depends_on to any infra node — tie-breaker must still put infra first.
+	for _, infraID := range []string{"db", "cache", "storage", "queue", "proxy"} {
+		if positions[infraID] >= positions["web"] {
+			t.Errorf("expected %s (infra, pos %d) to come before web (service, pos %d) — tie-breaker failed",
+				infraID, positions[infraID], positions["web"])
+		}
+	}
+
+	// backoffice also has no depends_on to infra — same constraint.
+	for _, infraID := range []string{"db", "cache", "storage", "queue", "proxy"} {
+		if positions[infraID] >= positions["backoffice"] {
+			t.Errorf("expected %s (infra, pos %d) to come before backoffice (service, pos %d) — tie-breaker failed",
+				infraID, positions[infraID], positions["backoffice"])
+		}
 	}
 }
 
@@ -169,6 +184,151 @@ func TestStartupOrder_ContainsAllNodes(t *testing.T) {
 	order := g.StartupOrder()
 	if len(order) != len(g.Nodes()) {
 		t.Errorf("startup order has %d nodes, expected %d", len(order), len(g.Nodes()))
+	}
+}
+
+// TestStartupOrder_FrontendAfterInfra verifies that a frontend/service node with
+// no depends_on is ordered after infra nodes, even when its name sorts
+// alphabetically before the infra node name.
+func TestStartupOrder_FrontendAfterInfra(t *testing.T) {
+	// "web" sorts alphabetically between "db" and "redis" — but all three are
+	// at the same topological rank (no depends_on edges between them). The
+	// tie-breaker must place both infra nodes before the service node.
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Domain: "test.test", Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"db":    {Type: config.NodeTypeInfra, Adapter: "db:postgres"},
+				"redis": {Type: config.NodeTypeInfra, Adapter: "cache:redis"},
+				"web":   {Type: config.NodeTypeService, Adapter: "ui:astro", Role: config.NodeRoleServer},
+			},
+			Edges: []config.EdgeConfig{
+				// web has a data_flow to db but NO depends_on — same rank.
+				{From: "web", To: "db", Type: config.EdgeDataFlow,
+					Contracts: []string{"contracts/dummy.contract.yml"}},
+			},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	order := g.StartupOrder()
+	webPos, dbPos, redisPos := -1, -1, -1
+	for i, n := range order {
+		switch n.ID {
+		case "web":
+			webPos = i
+		case "db":
+			dbPos = i
+		case "redis":
+			redisPos = i
+		}
+	}
+	if webPos == -1 || dbPos == -1 || redisPos == -1 {
+		t.Fatal("expected web, db, redis nodes in startup order")
+	}
+	if dbPos >= webPos {
+		t.Errorf("expected db (infra, pos %d) before web (service, pos %d)", dbPos, webPos)
+	}
+	if redisPos >= webPos {
+		t.Errorf("expected redis (infra, pos %d) before web (service, pos %d)", redisPos, webPos)
+	}
+}
+
+// TestStartupOrder_ExplicitDependsOnAlwaysWins verifies that an explicit
+// depends_on edge always takes precedence over the type-tier tie-breaker.
+// Even if a service node (api) would come before an infra node (metrics) by
+// alphabetical order within the same tier, an explicit depends_on from api→db
+// means api is ordered after db regardless. Separately, an infra node (metrics)
+// with no depends_on to api is still ordered before api because it's infra.
+// The strongest case: "infra2" depends on "svc1" (service) — infra2 must come
+// AFTER svc1 because the explicit edge wins over the type-tier convention.
+func TestStartupOrder_ExplicitDependsOnAlwaysWins(t *testing.T) {
+	// infra2 depends_on svc1 — even though infra normally comes first,
+	// the explicit edge forces infra2 to start after svc1.
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Domain: "test.test", Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"svc1":   {Type: config.NodeTypeService, Adapter: "go:fiber"},
+				"infra2": {Type: config.NodeTypeInfra, Adapter: "db:postgres"},
+			},
+			Edges: []config.EdgeConfig{
+				// infra2 explicitly depends_on svc1 — topology wins over type tier.
+				{From: "infra2", To: "svc1", Type: config.EdgeDependsOn},
+			},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	order := g.StartupOrder()
+	svc1Pos, infra2Pos := -1, -1
+	for i, n := range order {
+		switch n.ID {
+		case "svc1":
+			svc1Pos = i
+		case "infra2":
+			infra2Pos = i
+		}
+	}
+	if svc1Pos == -1 || infra2Pos == -1 {
+		t.Fatal("expected svc1 and infra2 nodes in startup order")
+	}
+	// infra2 depends on svc1, so svc1 must come first — explicit edge wins.
+	if svc1Pos >= infra2Pos {
+		t.Errorf("expected svc1 (service, pos %d) before infra2 (infra, pos %d) — explicit depends_on must win", svc1Pos, infra2Pos)
+	}
+}
+
+// TestStartupOrder_TiebreakerInfraBeforeService verifies that within a
+// topological tie (no dependency between them), an infra node is always
+// ordered before a service node regardless of alphabetical order.
+func TestStartupOrder_TiebreakerInfraBeforeService(t *testing.T) {
+	// "zebra" (service) sorts after "aardvark" (infra) alphabetically, but here
+	// we use names where the service ("aaa") sorts before the infra ("zzz") to
+	// confirm the tie-breaker beats alphabetical order.
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Domain: "test.test", Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"aaa": {Type: config.NodeTypeService, Adapter: "go:fiber"},
+				"zzz": {Type: config.NodeTypeInfra, Adapter: "db:postgres"},
+			},
+			Edges: []config.EdgeConfig{
+				// No depends_on between them — pure tie at rank 0.
+				// We need at least one edge to satisfy graph validation.
+				{From: "aaa", To: "zzz", Type: config.EdgeDataFlow,
+					Contracts: []string{"contracts/dummy.contract.yml"}},
+			},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	order := g.StartupOrder()
+	// proxy (infra, materialized) + zzz (infra) should precede aaa (service).
+	// We specifically need zzz before aaa.
+	zzzPos, aaaPos := -1, -1
+	for i, n := range order {
+		switch n.ID {
+		case "zzz":
+			zzzPos = i
+		case "aaa":
+			aaaPos = i
+		}
+	}
+	if zzzPos == -1 || aaaPos == -1 {
+		t.Fatal("expected both zzz and aaa nodes in startup order")
+	}
+	if zzzPos >= aaaPos {
+		t.Errorf("expected zzz (infra, pos %d) to come before aaa (service, pos %d) — tie-breaker failed", zzzPos, aaaPos)
 	}
 }
 
