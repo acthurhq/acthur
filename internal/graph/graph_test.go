@@ -986,3 +986,228 @@ func TestReadTraversals_AfterSeal_Succeed(t *testing.T) {
 		t.Error("expected StartupOrder() to work on sealed graph")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1D — Reject hand-declared contract/plugin nodes (authored vs materialized)
+// ---------------------------------------------------------------------------
+
+// buildReservedTypeGraph constructs a *Graph directly (bypassing config.Validate)
+// so we can insert nodes with reserved types for testing Validate().
+func buildReservedTypeGraph(nodes map[string]*graph.Node) *graph.Graph {
+	g := graph.NewTestGraph(nodes)
+	return g
+}
+
+// Behavior 1: A node declared with type "contract" produces a ValidationError
+// with Rule "reserved-node-type".
+func TestValidate_ContractNode_RejectsWithReservedNodeTypeRule(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"auth": {
+			ID:      "auth",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"user-contract": {
+			ID:      "user-contract",
+			Type:    config.NodeTypeContract,
+			Adapter: "kernel:contract",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "auth", To: "user-contract", Type: config.EdgeSatisfies})
+
+	errs := g.Validate()
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "reserved-node-type" && errs[i].Node == "user-contract" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected ValidationError with Rule=reserved-node-type for contract node, got: %v", errs)
+	}
+	if found.Severity != graph.SeverityError {
+		t.Errorf("expected SeverityError, got %q", found.Severity)
+	}
+}
+
+// Behavior 2: The contract node error message references data_flow contracts: syntax.
+func TestValidate_ContractNode_FixPointsToDataFlowContracts(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"auth": {
+			ID:      "auth",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"user-contract": {
+			ID:      "user-contract",
+			Type:    config.NodeTypeContract,
+			Adapter: "kernel:contract",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "auth", To: "user-contract", Type: config.EdgeSatisfies})
+
+	errs := g.Validate()
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "reserved-node-type" && errs[i].Node == "user-contract" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected reserved-node-type error for contract node")
+	}
+	if found.Fix == "" {
+		t.Error("expected a non-empty Fix hint for contract reserved-node-type error")
+	}
+	if !containsSubstr(found.Fix, "data_flow") && !containsSubstr(found.Fix, "contracts:") {
+		t.Errorf("expected Fix to mention data_flow or contracts: syntax, got %q", found.Fix)
+	}
+	if !containsSubstr(found.Message, "contract") {
+		t.Errorf("expected Message to mention 'contract', got %q", found.Message)
+	}
+}
+
+// Behavior 3: A node declared with type "plugin" produces a ValidationError
+// with Rule "reserved-node-type".
+func TestValidate_PluginNode_RejectsWithReservedNodeTypeRule(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"my-plugin": {
+			ID:      "my-plugin",
+			Type:    config.NodeTypePlugin,
+			Adapter: "kernel:plugin",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "my-plugin", To: "api", Type: config.EdgeAppliesTo})
+
+	errs := g.Validate()
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "reserved-node-type" && errs[i].Node == "my-plugin" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected ValidationError with Rule=reserved-node-type for plugin node, got: %v", errs)
+	}
+	if found.Severity != graph.SeverityError {
+		t.Errorf("expected SeverityError, got %q", found.Severity)
+	}
+}
+
+// Behavior 4: The plugin node error message references the top-level plugins: list.
+func TestValidate_PluginNode_FixPointsToPluginsList(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"my-plugin": {
+			ID:      "my-plugin",
+			Type:    config.NodeTypePlugin,
+			Adapter: "kernel:plugin",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "my-plugin", To: "api", Type: config.EdgeAppliesTo})
+
+	errs := g.Validate()
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "reserved-node-type" && errs[i].Node == "my-plugin" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected reserved-node-type error for plugin node")
+	}
+	if found.Fix == "" {
+		t.Error("expected a non-empty Fix hint for plugin reserved-node-type error")
+	}
+	if !containsSubstr(found.Fix, "plugins:") && !containsSubstr(found.Fix, "plugins") {
+		t.Errorf("expected Fix to mention plugins: list, got %q", found.Fix)
+	}
+	if !containsSubstr(found.Message, "plugin") {
+		t.Errorf("expected Message to mention 'plugin', got %q", found.Message)
+	}
+}
+
+// Behavior 5: A service node is NOT rejected — no reserved-node-type error.
+func TestValidate_ServiceNode_NotRejectedAsReserved(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	errs := g.Validate()
+
+	for _, e := range errs {
+		if e.Rule == "reserved-node-type" {
+			t.Errorf("service/infra node got unexpected reserved-node-type error: %v", e)
+		}
+	}
+}
+
+// Behavior 6: An infra node is NOT rejected — no reserved-node-type error.
+func TestValidate_InfraNode_NotRejectedAsReserved(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"svc": {
+			ID:      "svc",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"cache": {
+			ID:      "cache",
+			Type:    config.NodeTypeInfra,
+			Adapter: "cache:redis",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "svc", To: "cache", Type: config.EdgeDependsOn})
+
+	errs := g.Validate()
+
+	for _, e := range errs {
+		if e.Rule == "reserved-node-type" {
+			t.Errorf("infra node got unexpected reserved-node-type error: %v", e)
+		}
+	}
+}
+
+// containsSubstr is a helper to check substring presence without importing strings.
+func containsSubstr(s, substr string) bool {
+	return len(s) >= len(substr) && func() bool {
+		for i := 0; i+len(substr) <= len(s); i++ {
+			if s[i:i+len(substr)] == substr {
+				return true
+			}
+		}
+		return false
+	}()
+}

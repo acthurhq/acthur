@@ -110,6 +110,21 @@ type Graph struct {
 // Builder
 // ---------------------------------------------------------------------------
 
+// NewTestGraph constructs a bare Graph from a pre-built node map for use in
+// tests that need to bypass config.Validate (e.g. to inject reserved node types).
+// The adjOut and adjIn indexes are initialised but empty — use AddEdge to wire edges.
+func NewTestGraph(nodes map[string]*Node) *Graph {
+	g := &Graph{
+		nodes:  make(map[string]*Node, len(nodes)),
+		adjOut: make(map[string][]*Edge, len(nodes)),
+		adjIn:  make(map[string][]*Edge, len(nodes)),
+	}
+	for id, n := range nodes {
+		g.nodes[id] = n
+	}
+	return g
+}
+
 // Build constructs a Graph from the parsed acthur.yml config.
 // Returns a validated, traversal-ready Graph or an error.
 func Build(cfg *config.Config) (*Graph, error) {
@@ -494,6 +509,29 @@ func (g *Graph) notifySubscribers(nodeID string, state NodeState) {
 func (g *Graph) Validate() []ValidationError {
 	var errs []ValidationError
 
+	// Rule: contract and plugin node types are materialized by the kernel;
+	// users must not declare them under graph.nodes in acthur.yml.
+	for id, n := range g.nodes {
+		if n.Type == config.NodeTypeContract {
+			errs = append(errs, ValidationError{
+				Node:     id,
+				Rule:     "reserved-node-type",
+				Message:  fmt.Sprintf("node %q has type \"contract\" which is reserved for kernel materialization; contracts are not authored as nodes", id),
+				Fix:      "reference contracts as file paths on data_flow edges: `contracts: [contracts/<name>.contract.yml]`",
+				Severity: SeverityError,
+			})
+		}
+		if n.Type == config.NodeTypePlugin {
+			errs = append(errs, ValidationError{
+				Node:     id,
+				Rule:     "reserved-node-type",
+				Message:  fmt.Sprintf("node %q has type \"plugin\" which is reserved for kernel materialization; plugins are authored in the top-level `plugins:` list", id),
+				Fix:      "declare this plugin under the top-level `plugins:` key in acthur.yml, not under `graph.nodes`",
+				Severity: SeverityError,
+			})
+		}
+	}
+
 	// Rule: No cycles in depends_on edges
 	if cycleErr := g.detectCycleAsValidationError(); cycleErr != nil {
 		errs = append(errs, *cycleErr)
@@ -585,7 +623,7 @@ func (g *Graph) detectCycleAsValidationError() *ValidationError {
 	for id := range g.nodes {
 		ids = append(ids, id)
 	}
-	sortStrings(ids)
+	sort.Strings(ids)
 
 	for _, id := range ids {
 		if color[id] == unvisited {
