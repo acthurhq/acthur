@@ -5,8 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"strings"
+
 	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber" // register adapter
+	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"        // register go:fiber
+	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"          // register db:postgres
 )
 
 // ---------------------------------------------------------------------------
@@ -342,6 +345,142 @@ func (m *minimalAdapter) EnvVars() []adapter.EnvVar { return nil }
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// db:postgres adapter tests
+// ---------------------------------------------------------------------------
+
+// Behavior 1: db:postgres is registered and resolves correctly.
+func TestPostgres_Registered(t *testing.T) {
+	a, err := adapter.Resolve("db:postgres")
+	if err != nil {
+		t.Fatalf("expected db:postgres to be registered, got: %v", err)
+	}
+	if a.Name() != "db:postgres" {
+		t.Errorf("expected name db:postgres, got %q", a.Name())
+	}
+}
+
+// Behavior 2: db:postgres has CategoryDatabase.
+func TestPostgres_Category(t *testing.T) {
+	a := mustResolve(t, "db:postgres")
+	if a.Category() != adapter.CategoryDatabase {
+		t.Errorf("expected CategoryDatabase, got %q", a.Category())
+	}
+}
+
+// Behavior 3: CapabilitiesOf(db:postgres) returns exactly {CapabilityContainer}.
+func TestPostgres_CapabilitiesOf_ExactlyContainer(t *testing.T) {
+	a := mustResolve(t, "db:postgres")
+	caps := adapter.CapabilitiesOf(a)
+	if len(caps) != 1 {
+		t.Fatalf("expected exactly 1 capability for db:postgres, got %d: %v", len(caps), caps)
+	}
+	if caps[0] != adapter.CapabilityContainer {
+		t.Errorf("expected CapabilityContainer, got %q", caps[0])
+	}
+}
+
+// Behavior 4: db:postgres satisfies Containerized.
+func TestPostgres_SatisfiesContainerized(t *testing.T) {
+	a := mustResolve(t, "db:postgres")
+	if _, ok := a.(adapter.Containerized); !ok {
+		t.Error("expected db:postgres to satisfy Containerized")
+	}
+}
+
+// Behavior 5: Container returns spec with Image == "postgres".
+func TestPostgres_Container_Image(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{})
+	if spec.Image != "postgres" {
+		t.Errorf("expected Image=postgres, got %q", spec.Image)
+	}
+}
+
+// Behavior 6: Container defaults tag to "16" when Version is empty.
+func TestPostgres_Container_DefaultTag(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{})
+	if spec.Tag != "16" {
+		t.Errorf("expected Tag=16, got %q", spec.Tag)
+	}
+}
+
+// Behavior 7: Container uses node version field as tag.
+func TestPostgres_Container_CustomTag(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{Version: "15"})
+	if spec.Tag != "15" {
+		t.Errorf("expected Tag=15, got %q", spec.Tag)
+	}
+}
+
+// Behavior 8: Container result includes port 5432.
+func TestPostgres_Container_Port5432(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{})
+	for _, p := range spec.Ports {
+		if p == 5432 {
+			return
+		}
+	}
+	t.Errorf("expected port 5432 in Ports, got %v", spec.Ports)
+}
+
+// Behavior 9: Container result has one volume mounted at the Postgres data path.
+func TestPostgres_Container_Volume(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{NodeID: "db"})
+	if len(spec.Volumes) != 1 {
+		t.Fatalf("expected exactly 1 volume, got %d", len(spec.Volumes))
+	}
+	if spec.Volumes[0].MountPath != "/var/lib/postgresql/data" {
+		t.Errorf("expected MountPath=/var/lib/postgresql/data, got %q", spec.Volumes[0].MountPath)
+	}
+}
+
+// Behavior 10: Container result env includes the three POSTGRES_* vars.
+func TestPostgres_Container_EnvVars(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{})
+	for _, key := range []string{"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"} {
+		if _, ok := spec.Env[key]; !ok {
+			t.Errorf("expected env key %q in ContainerSpec.Env", key)
+		}
+	}
+}
+
+// Behavior 11: Container result healthcheck references pg_isready.
+func TestPostgres_Container_Healthcheck(t *testing.T) {
+	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{})
+	for _, s := range spec.Healthcheck.Test {
+		if strings.Contains(s, "pg_isready") {
+			return
+		}
+	}
+	t.Errorf("expected pg_isready in healthcheck Test, got %v", spec.Healthcheck.Test)
+}
+
+// Behavior 12: db:postgres does NOT satisfy Scaffolder.
+func TestPostgres_NotScaffolder(t *testing.T) {
+	a := mustResolve(t, "db:postgres")
+	if _, ok := a.(adapter.Scaffolder); ok {
+		t.Error("db:postgres should NOT satisfy Scaffolder")
+	}
+}
+
+// Behavior 13: db:postgres does NOT satisfy Runnable.
+func TestPostgres_NotRunnable(t *testing.T) {
+	a := mustResolve(t, "db:postgres")
+	if _, ok := a.(adapter.Runnable); ok {
+		t.Error("db:postgres should NOT satisfy Runnable")
+	}
+}
+
+func mustContainerized(t *testing.T, name string) adapter.Containerized {
+	t.Helper()
+	a := mustResolve(t, name)
+	c, ok := a.(adapter.Containerized)
+	if !ok {
+		t.Fatalf("adapter %q does not satisfy Containerized", name)
+	}
+	return c
+}
 
 func mustResolve(t *testing.T, name string) adapter.Adapter {
 	t.Helper()
