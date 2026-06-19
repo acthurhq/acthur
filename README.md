@@ -270,23 +270,45 @@ All deployment manifests are derived from the graph. Docker Compose files, Docke
 
 ## Architecture
 
-For the complete architectural specification, see the [Product Requirements Document](./docs/PRD.md).
+For the complete architectural specification, see the [Product Requirements Document](./docs/acthur-prd.md).
 
 Key architectural documents:
-- [The Four-Layer Model](./docs/layers.md)
-- [Graph Engine Internals](./docs/graph.md)
-- [Contract Specification](./docs/contracts.md)
-- [Plugin System](./docs/plugins.md)
+- [The Four-Layer Model](./docs/acthur-prd.md#4-the-four-layer-model) — Ring 0 → Adapters → Contracts → Plugins and the communication law
+- [Graph Engine Internals](./docs/acthur-os-design.md#4-ring-0--the-kernel-core-graph--config) — scheduler, process table, topo sort, lifecycle
+- [Contract Specification](./docs/acthur-os-design.md#5-the-syscall-abi--contract-engine-contract) — typed edges, diff engine, wire enforcement
+- [Plugin System](./docs/acthur-os-design.md#7-kernel-modules--plugins-plugin) — KernelAPI, event bus, generator hooks
+
+Architecture Decision Records (the "why" behind key choices):
+- [ADR 0001 — Relationships outrank conventions](./docs/adr/0001-relationships-outrank-conventions.md)
+- [ADR 0002 — Three-tier graph validation](./docs/adr/0002-three-tier-graph-validation.md)
+- [ADR 0003 — Two-phase graph lifecycle](./docs/adr/0003-two-phase-graph-lifecycle.md)
+- [ADR 0004 — Authored vs materialized nodes](./docs/adr/0004-authored-vs-materialized-nodes.md)
+
+---
+
+## Roadmap
+
+See [docs/roadmap.md](./docs/roadmap.md) for the full phase breakdown and version milestones.
+
+| Version | Gate | Headline |
+|---------|------|----------|
+| v0.1 | Phase A | `acthur generate` works; first example project |
+| v0.2 | Phase B | `acthur add auth/migrations/rbac` |
+| v0.3 | Phase C | Multi-adapter ecosystem; docs site live |
+| v0.4 | Phase D | Live hot-reload; contract enforcement on wire |
+| v0.5 | Phase E | `acthur deploy` to production in one command |
+| v0.6 | Phase F | MCP server; `acthur agent` |
+| v1.0 | All phases | Stable public API; Homebrew/Scoop |
 
 ---
 
 ## Contributing
 
-Acthur is MIT-licensed and actively developed.
+Acthur is MIT-licensed and actively developed. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide.
 
 **Adding a backend adapter:** Implement the `Adapter` interface (8 methods) + scaffold templates for your framework. See `internal/adapter/backend/gofiber/` as reference.
 
-**Adding a plugin:** Implement the `Plugin` interface (3 methods) + `Register(KernelAPI)`. See the plugin system documentation.
+**Adding a plugin:** Implement the `Plugin` interface (3 methods) + `Register(KernelAPI)`. See [Plugin System](./docs/acthur-os-design.md#7-kernel-modules--plugins-plugin).
 
 ```bash
 git clone https://github.com/samueloshio/acthur
