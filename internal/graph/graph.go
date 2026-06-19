@@ -768,54 +768,6 @@ func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
 	return result
 }
 
-// detectCycle checks for cycles in depends_on edges using DFS.
-func (g *Graph) detectCycle() error {
-	const (
-		unvisited = 0
-		inStack   = 1
-		done      = 2
-	)
-	color := make(map[string]int)
-	var path []string
-
-	var dfs func(id string) bool
-	dfs = func(id string) bool {
-		color[id] = inStack
-		path = append(path, id)
-		for _, e := range g.adjOut[id] {
-			if e.Type != config.EdgeDependsOn {
-				continue
-			}
-			switch color[e.To] {
-			case inStack:
-				// Cycle detected — find the cycle in path
-				return true
-			case unvisited:
-				if dfs(e.To) {
-					return true
-				}
-			}
-		}
-		color[id] = done
-		path = path[:len(path)-1]
-		return false
-	}
-
-	for id := range g.nodes {
-		if color[id] == unvisited {
-			path = nil
-			if dfs(id) {
-				return fmt.Errorf(
-					"cycle detected in depends_on edges: %v\n"+
-						"  Circular dependencies are not allowed — "+
-						"review your graph edges",
-					path,
-				)
-			}
-		}
-	}
-	return nil
-}
 
 // nodeTypeTier maps node types to sort priority within a topological tier.
 // Lower value = started earlier. infra < service < everything else.
