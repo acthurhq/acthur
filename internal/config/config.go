@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -167,6 +168,10 @@ type NodeConfig struct {
 	Role      NodeRole   `yaml:"role"`
 	Version   string     `yaml:"version"`
 	Pool      PoolConfig `yaml:"pool"`
+	// Source is the location of the node's codebase. Defaults to "./" (local).
+	// Accepts local paths (./…, ../…, /abs), https:// URLs, git@ SSH URLs,
+	// or bare host/org/repo references such as github.com/org/repo.
+	Source    string     `yaml:"source"`
 
 	// Raw extra config — adapter-specific keys
 	Extra map[string]any `yaml:",inline"`
@@ -364,6 +369,9 @@ func (c *Config) applyDefaults() {
 		if node.Role == "" {
 			node.Role = NodeRoleServer
 		}
+		if node.Source == "" {
+			node.Source = "./"
+		}
 		c.Graph.Nodes[id] = node
 	}
 
@@ -442,6 +450,13 @@ func (c *Config) Validate() []string {
 		if node.Adapter == "" {
 			errs = append(errs, fmt.Sprintf("node %q: adapter is required", id))
 		}
+		if !isValidSource(node.Source) {
+			errs = append(errs, fmt.Sprintf(
+				"node %q: invalid source %q — must be a local path (./…, ../…, /abs), "+
+					"an https:// URL, a git@ SSH URL, or a bare host/org/repo reference",
+				id, node.Source,
+			))
+		}
 	}
 
 	return errs
@@ -471,4 +486,36 @@ func joinStrings(ss []string, sep string) string {
 		result += s
 	}
 	return result
+}
+
+// isValidSource reports whether s is an acceptable node source value.
+//
+// Valid forms:
+//   - Local path: starts with "./", "../", or "/" — or equals "." or ".."
+//   - HTTPS URL: starts with "https://"
+//   - SSH URL:   starts with "git@" and contains ":"
+//   - Bare host reference: <host>/<org>/<repo> where host contains "."
+//     e.g. github.com/org/repo, gitlab.example.com/org/repo
+func isValidSource(s string) bool {
+	// Local path forms
+	if s == "." || s == ".." {
+		return true
+	}
+	if strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") || strings.HasPrefix(s, "/") {
+		return true
+	}
+	// HTTPS URL
+	if strings.HasPrefix(s, "https://") {
+		return true
+	}
+	// SSH URL: git@host:path
+	if strings.HasPrefix(s, "git@") && strings.Contains(s, ":") {
+		return true
+	}
+	// Bare host/org/repo: host must contain "." and there must be at least two "/" segments
+	parts := strings.SplitN(s, "/", 3)
+	if len(parts) == 3 && strings.Contains(parts[0], ".") {
+		return true
+	}
+	return false
 }

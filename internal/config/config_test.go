@@ -313,6 +313,192 @@ func TestExists_False(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Source field tests (Phase 1E)
+// ---------------------------------------------------------------------------
+
+// Behavior 1: Source field exists on NodeConfig and parses from YAML.
+func TestSource_ExplicitLocalPath(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: ./
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "./" {
+		t.Errorf("expected Source='./', got %q", node.Source)
+	}
+	// Must NOT appear in Extra
+	if _, ok := node.Extra["source"]; ok {
+		t.Error("source must not appear in Extra map")
+	}
+}
+
+// Behavior 2: Source defaults to "./" when omitted.
+func TestSource_DefaultsToLocalDot(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "./" {
+		t.Errorf("expected Source default './', got %q", node.Source)
+	}
+}
+
+// Behavior 3: Bare github.com/org/repo parses into Source (not Extra).
+func TestSource_BareGitHubURL(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: github.com/org/repo
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "github.com/org/repo" {
+		t.Errorf("expected Source='github.com/org/repo', got %q", node.Source)
+	}
+	if _, ok := node.Extra["source"]; ok {
+		t.Error("source must not appear in Extra map")
+	}
+}
+
+// Behavior 4: https:// git URL parses into Source.
+func TestSource_HTTPSGitURL(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: https://github.com/org/repo
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "https://github.com/org/repo" {
+		t.Errorf("expected Source='https://github.com/org/repo', got %q", node.Source)
+	}
+	if _, ok := node.Extra["source"]; ok {
+		t.Error("source must not appear in Extra map")
+	}
+}
+
+// Behavior 5: git@ SSH URL parses into Source.
+func TestSource_SSHGitURL(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: git@github.com:org/repo.git
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "git@github.com:org/repo.git" {
+		t.Errorf("expected Source='git@github.com:org/repo.git', got %q", node.Source)
+	}
+	if _, ok := node.Extra["source"]; ok {
+		t.Error("source must not appear in Extra map")
+	}
+}
+
+// Behavior 6: Malformed source value returns a parse error.
+func TestSource_MalformedReturnsValidationError(t *testing.T) {
+	_, err := config.LoadFile(writeTempConfig(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: "not a path or url"
+  edges: []
+`))
+	if err == nil {
+		t.Error("expected validation error for malformed source, got nil")
+	}
+}
+
+// Extra: absolute path is a valid local source.
+func TestSource_AbsoluteLocalPath(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: /abs/path/to/service
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "/abs/path/to/service" {
+		t.Errorf("expected Source='/abs/path/to/service', got %q", node.Source)
+	}
+}
+
+// Extra: relative path ../services/api is a valid local source.
+func TestSource_RelativeParentPath(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: ../services/api
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "../services/api" {
+		t.Errorf("expected Source='../services/api', got %q", node.Source)
+	}
+}
+
+// Extra: generic host git SSH URL (git@host:org/repo).
+func TestSource_SSHGitURLGenericHost(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      source: git@bitbucket.org:team/repo
+  edges: []
+`)
+	node := cfg.Graph.Nodes["api"]
+	if node.Source != "git@bitbucket.org:team/repo" {
+		t.Errorf("expected Source='git@bitbucket.org:team/repo', got %q", node.Source)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Node helpers
 // ---------------------------------------------------------------------------
 
