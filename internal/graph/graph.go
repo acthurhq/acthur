@@ -497,6 +497,31 @@ func (g *Graph) notifySubscribers(nodeID string, state NodeState) {
 // Validation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Resolver — adapter knowledge abstraction (graph never imports adapter)
+// ---------------------------------------------------------------------------
+
+// ResolvedAdapter is the minimal view of an adapter the graph engine needs.
+type ResolvedAdapter struct {
+	Name     string
+	Category string
+}
+
+// Resolver is the abstraction the graph engine uses to ask whether an
+// adapter key is known. The engine never imports the adapter package.
+type Resolver interface {
+	Resolve(key string) (ResolvedAdapter, bool)
+	Names() []string // used to list available adapters in error messages
+}
+
+// EmptyResolver is an explicit "no adapter knowledge" resolver.
+// Pass this in tests that only care about structural graph rules
+// (cycles, orphans, etc.) and explicitly opt out of adapter checking.
+type EmptyResolver struct{}
+
+func (EmptyResolver) Resolve(key string) (ResolvedAdapter, bool) { return ResolvedAdapter{}, false }
+func (EmptyResolver) Names() []string                             { return nil }
+
 // Validate runs all structural validation rules on the graph.
 // Returns a slice of ValidationError, each with a Severity field.
 // This is the single authority for all semantic rules:
@@ -504,9 +529,11 @@ func (g *Graph) notifySubscribers(nodeID string, state NodeState) {
 //   - Orphan nodes
 //   - data_flow edges require at least one contract
 //   - applies_to targets must be service nodes
+//   - unresolved-adapter (only when resolver.Names() is non-empty)
 //
 // Called after Build() and also standalone by 'acthur graph validate'.
-func (g *Graph) Validate() []ValidationError {
+// Pass graph.EmptyResolver{} to skip adapter checking (structural rules only).
+func (g *Graph) Validate(resolver Resolver) []ValidationError {
 	var errs []ValidationError
 
 	// Rule: contract and plugin node types are materialized by the kernel;
@@ -580,7 +607,34 @@ func (g *Graph) Validate() []ValidationError {
 		}
 	}
 
+	// Rule: unresolved-adapter — only runs when resolver has adapter knowledge
+	if len(resolver.Names()) > 0 {
+		available := strings.Join(sortedStrings(resolver.Names()), ", ")
+		for id, n := range g.nodes {
+			if strings.HasPrefix(n.Adapter, "kernel:") {
+				continue
+			}
+			if _, ok := resolver.Resolve(n.Adapter); !ok {
+				errs = append(errs, ValidationError{
+					Node:     id,
+					Rule:     "unresolved-adapter",
+					Message:  fmt.Sprintf("node %q uses unknown adapter %q — available: [%s]", id, n.Adapter, available),
+					Fix:      "check the adapter key in acthur.yml or run 'acthur adapter list'",
+					Severity: SeverityError,
+				})
+			}
+		}
+	}
+
 	return errs
+}
+
+// sortedStrings returns a sorted copy of ss.
+func sortedStrings(ss []string) []string {
+	out := make([]string, len(ss))
+	copy(out, ss)
+	sort.Strings(out)
+	return out
 }
 
 // detectCycleAsValidationError checks for cycles in depends_on edges.
