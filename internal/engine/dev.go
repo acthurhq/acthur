@@ -176,7 +176,12 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 
 	// Build env for this node
 	env := e.buildEnv(node)
-	cmd := a.DevCommand(env)
+	r, ok := a.(adapter.Runnable)
+	if !ok {
+		e.graph.SetState(node.ID, graph.StateFailed)
+		return fmt.Errorf("adapter %q does not support the Runnable capability", node.Adapter)
+	}
+	cmd := r.DevCommand(env)
 
 	nodeDir := nodeDirectory(e.cfg.RootDir, node)
 	_, err = e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)

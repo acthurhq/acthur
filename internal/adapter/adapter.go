@@ -1,11 +1,17 @@
 // Package adapter defines the Adapter interface and the global adapter registry.
 //
 // An adapter is an implementation bridge between an abstract graph node and a
-// concrete technology. It knows how to start, build, scaffold, test, and produce
-// a deployment artifact for exactly one framework.
+// concrete technology. It knows how to detect, scaffold, run, and containerize
+// exactly one framework. It has ZERO knowledge of plugins, contracts, or other
+// adapters.
 //
-// An adapter has ZERO knowledge of plugins, contracts, or other adapters.
-// It only knows its own framework's toolchain.
+// # Capability model
+//
+// Every adapter implements the core Adapter interface (Name, Category, Detect,
+// EnvVars). Optional capabilities are expressed as separate interfaces
+// (Scaffolder, Runnable, Containerized, Migratable, Deployable). The kernel
+// type-asserts against these at call sites. CapabilitiesOf is the single source
+// of truth for what a concrete adapter supports.
 package adapter
 
 import (
@@ -21,18 +27,18 @@ import (
 type Category string
 
 const (
-	CategoryBackend  Category = "backend"
-	CategoryFrontend Category = "frontend"
-	CategoryDatabase Category = "database"
-	CategoryCache    Category = "cache"
-	CategoryStorage  Category = "storage"
-	CategoryQueue    Category = "queue"
-	CategorySecrets  Category = "secrets"
+	CategoryBackend   Category = "backend"
+	CategoryFrontend  Category = "frontend"
+	CategoryDatabase  Category = "database"
+	CategoryCache     Category = "cache"
+	CategoryStorage   Category = "storage"
+	CategoryQueue     Category = "queue"
+	CategorySecrets   Category = "secrets"
 	CategoryAnalytics Category = "analytics"
-	CategoryObserve  Category = "observability"
-	CategoryDeploy   Category = "deploy"
-	CategoryMobile   Category = "mobile"
-	CategoryDesktop  Category = "desktop"
+	CategoryObserve   Category = "observability"
+	CategoryDeploy    Category = "deploy"
+	CategoryMobile    Category = "mobile"
+	CategoryDesktop   Category = "desktop"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,6 +86,7 @@ type ScaffoldContext struct {
 }
 
 // BuildConfig is the context provided to an adapter's Dockerfile() method.
+// Kept for internal use by adapters (e.g. gofiber uses it inside Scaffold).
 type BuildConfig struct {
 	ProjectName string
 	NodeID      string
@@ -88,12 +95,64 @@ type BuildConfig struct {
 }
 
 // ---------------------------------------------------------------------------
-// Adapter interface
+// Container types (needed by Containerized capability)
 // ---------------------------------------------------------------------------
 
-// Adapter is the interface every adapter must implement.
-// Implementing 8 methods is all that is required to add a new runtime
-// to Acthur. The kernel calls these methods — the adapter never calls back.
+// ContainerContext carries node-level facts the adapter needs to build a spec.
+type ContainerContext struct {
+	NodeID  string
+	Version string // from node's version: field in acthur.yml
+	Env     map[string]string
+}
+
+// ContainerSpec is a declarative description of a container resource.
+// The kernel projects this onto docker run / compose / k8s in later phases.
+type ContainerSpec struct {
+	Image       string
+	Tag         string
+	Ports       []int
+	Volumes     []Volume
+	Env         map[string]string
+	Healthcheck Healthcheck
+	Cmd         []string
+}
+
+// Volume describes a named volume mount inside a container.
+type Volume struct {
+	Name      string
+	MountPath string
+}
+
+// Healthcheck describes how the container runtime should probe liveness.
+type Healthcheck struct {
+	Test     []string
+	Interval string
+	Timeout  string
+	Retries  int
+}
+
+// ---------------------------------------------------------------------------
+// Capability enum
+// ---------------------------------------------------------------------------
+
+// Capability is a named capability that an adapter may expose.
+type Capability string
+
+const (
+	CapabilityScaffold  Capability = "Scaffold"
+	CapabilityRun       Capability = "Run"
+	CapabilityContainer Capability = "Container"
+	CapabilityMigrate   Capability = "Migrate"
+	CapabilityDeploy    Capability = "Deploy"
+)
+
+// ---------------------------------------------------------------------------
+// Core Adapter interface
+// ---------------------------------------------------------------------------
+
+// Adapter is the minimal interface every adapter must implement.
+// Optional capabilities are expressed as Scaffolder, Runnable, Containerized,
+// Migratable, and Deployable. Use CapabilitiesOf to introspect them.
 type Adapter interface {
 	// Name returns the adapter's unique key in "runtime:framework" format.
 	// Examples: "go:fiber", "rust:axum", "ui:astro", "db:postgres"
@@ -106,31 +165,70 @@ type Adapter interface {
 	// in the given directory. Used by `acthur init` to auto-detect the stack.
 	Detect(dir string) bool
 
-	// Scaffold returns the minimal set of files to create for a new node
-	// of this adapter type. Produces a runnable but empty starting point.
-	Scaffold(ctx ScaffoldContext) ([]File, error)
-
-	// DevCommand returns the command to start this service in development mode.
-	DevCommand(env map[string]string) Command
-
-	// BuildCommand returns the command to build this service for production.
-	BuildCommand(env map[string]string) Command
-
-	// TestCommand returns the command to run this service's tests.
-	TestCommand(env map[string]string) Command
-
-	// GeneratorTargets returns the code generation targets this adapter can
-	// receive from plugins. Plugins register generators for these target names.
-	// Example: ["handler", "middleware", "model", "migration", "service", "dto"]
-	GeneratorTargets() []string
-
-	// Dockerfile returns the Dockerfile content for this adapter.
-	// Used by the deploy engine to build production images.
-	Dockerfile(cfg BuildConfig) string
-
 	// EnvVars returns the environment variables this adapter requires.
 	// Used by acthur to generate .env.example and validate environments.
 	EnvVars() []EnvVar
+}
+
+// ---------------------------------------------------------------------------
+// Capability interfaces
+// ---------------------------------------------------------------------------
+
+// Scaffolder can produce a minimal set of files for a new project node.
+type Scaffolder interface {
+	Scaffold(ctx ScaffoldContext) ([]File, error)
+}
+
+// Runnable can produce dev, build, and test shell commands.
+type Runnable interface {
+	DevCommand(env map[string]string) Command
+	BuildCommand(env map[string]string) Command
+	TestCommand(env map[string]string) Command
+}
+
+// Containerized can describe itself as a declarative container spec.
+// The kernel projects this onto docker run / compose / k8s.
+type Containerized interface {
+	Container(ctx ContainerContext) ContainerSpec
+}
+
+// Migratable can produce a migration command (database schema management).
+// No implementations in this phase — defined for forward compatibility.
+type Migratable interface {
+	MigrateCommand(env map[string]string) Command
+}
+
+// Deployable can produce a deploy command for production release.
+// No implementations in this phase — defined for forward compatibility.
+type Deployable interface {
+	DeployCommand(env map[string]string) Command
+}
+
+// ---------------------------------------------------------------------------
+// CapabilitiesOf — single source of truth
+// ---------------------------------------------------------------------------
+
+// CapabilitiesOf returns the capabilities supported by adapter a.
+// It type-asserts against each capability interface; adapters must NOT
+// implement a Capabilities() method — this free function is authoritative.
+func CapabilitiesOf(a Adapter) []Capability {
+	var caps []Capability
+	if _, ok := a.(Scaffolder); ok {
+		caps = append(caps, CapabilityScaffold)
+	}
+	if _, ok := a.(Runnable); ok {
+		caps = append(caps, CapabilityRun)
+	}
+	if _, ok := a.(Containerized); ok {
+		caps = append(caps, CapabilityContainer)
+	}
+	if _, ok := a.(Migratable); ok {
+		caps = append(caps, CapabilityMigrate)
+	}
+	if _, ok := a.(Deployable); ok {
+		caps = append(caps, CapabilityDeploy)
+	}
+	return caps
 }
 
 // ---------------------------------------------------------------------------

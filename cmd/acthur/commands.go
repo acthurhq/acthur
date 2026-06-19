@@ -6,8 +6,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/spf13/cobra"
+	"github.com/acthur/acthur/internal/adapter"
+	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/graph"
@@ -71,6 +74,7 @@ func init() {
 	Root.AddCommand(flagCmd)
 	Root.AddCommand(monitorCmd)
 	Root.AddCommand(versionCmd)
+	Root.AddCommand(adapterCmd)
 }
 
 // Execute runs the root command. Called from main().
@@ -814,6 +818,99 @@ var versionCmd = &cobra.Command{
 		})
 		fmt.Println()
 	},
+}
+
+// ---------------------------------------------------------------------------
+// acthur adapter
+// ---------------------------------------------------------------------------
+
+var adapterCmd = &cobra.Command{
+	Use:   "adapter",
+	Short: "Adapter introspection",
+}
+
+var adapterListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all registered adapters grouped by category",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		all := adapter.All()
+
+		// Group by category.
+		grouped := map[adapter.Category][]adapter.Adapter{}
+		for _, a := range all {
+			grouped[a.Category()] = append(grouped[a.Category()], a)
+		}
+
+		// Collect and sort category keys.
+		categories := make([]string, 0, len(grouped))
+		for c := range grouped {
+			categories = append(categories, string(c))
+		}
+		sort.Strings(categories)
+
+		for _, cat := range categories {
+			fmt.Printf("\n  %s\n", cat)
+			adapters := grouped[adapter.Category(cat)]
+			sort.Slice(adapters, func(i, j int) bool {
+				return adapters[i].Name() < adapters[j].Name()
+			})
+			for _, a := range adapters {
+				caps := adapter.CapabilitiesOf(a)
+				capNames := make([]string, len(caps))
+				for i, c := range caps {
+					capNames[i] = string(c)
+				}
+				fmt.Printf("    %-20s  %v\n", a.Name(), capNames)
+			}
+		}
+		fmt.Println()
+		return nil
+	},
+}
+
+var adapterInspectCmd = &cobra.Command{
+	Use:   "inspect <key>",
+	Short: "Show adapter name, category, and capability table",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		key := args[0]
+		a, err := adapter.Resolve(key)
+		if err != nil {
+			return fmt.Errorf("adapter %q not found — run 'acthur adapter list' to see available adapters", key)
+		}
+
+		fmt.Printf("\n  Name:     %s\n", a.Name())
+		fmt.Printf("  Category: %s\n\n", a.Category())
+
+		allCaps := []adapter.Capability{
+			adapter.CapabilityScaffold,
+			adapter.CapabilityRun,
+			adapter.CapabilityContainer,
+			adapter.CapabilityMigrate,
+			adapter.CapabilityDeploy,
+		}
+		caps := adapter.CapabilitiesOf(a)
+		capSet := make(map[adapter.Capability]bool)
+		for _, c := range caps {
+			capSet[c] = true
+		}
+
+		fmt.Println("  Capabilities:")
+		for _, c := range allCaps {
+			symbol := "✗"
+			if capSet[c] {
+				symbol = "✓"
+			}
+			fmt.Printf("    %s  %s\n", symbol, c)
+		}
+		fmt.Println()
+		return nil
+	},
+}
+
+func init() {
+	adapterCmd.AddCommand(adapterListCmd)
+	adapterCmd.AddCommand(adapterInspectCmd)
 }
 
 // ---------------------------------------------------------------------------
