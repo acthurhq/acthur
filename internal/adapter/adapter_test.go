@@ -62,7 +62,7 @@ func TestRegistry_DuplicatePanics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber adapter tests
+// go:fiber core interface tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_Name(t *testing.T) {
@@ -115,59 +115,6 @@ func TestGoFiber_Detect_NoGoMod(t *testing.T) {
 	}
 }
 
-func TestGoFiber_DevCommand(t *testing.T) {
-	a := mustResolve(t, "go:fiber")
-	cmd := a.DevCommand(nil)
-	if cmd.Bin != "air" {
-		t.Errorf("expected dev command bin=air, got %q", cmd.Bin)
-	}
-	if len(cmd.Args) == 0 {
-		t.Error("expected air to have arguments (-c .air.toml)")
-	}
-}
-
-func TestGoFiber_BuildCommand(t *testing.T) {
-	a := mustResolve(t, "go:fiber")
-	cmd := a.BuildCommand(nil)
-	if cmd.Bin != "go" {
-		t.Errorf("expected build command bin=go, got %q", cmd.Bin)
-	}
-}
-
-func TestGoFiber_TestCommand(t *testing.T) {
-	a := mustResolve(t, "go:fiber")
-	cmd := a.TestCommand(nil)
-	if cmd.Bin != "go" {
-		t.Errorf("expected test command bin=go, got %q", cmd.Bin)
-	}
-}
-
-func TestGoFiber_GeneratorTargets_NotEmpty(t *testing.T) {
-	a := mustResolve(t, "go:fiber")
-	targets := a.GeneratorTargets()
-	if len(targets) == 0 {
-		t.Error("expected generator targets, got empty list")
-	}
-}
-
-func TestGoFiber_GeneratorTargets_ContainsCore(t *testing.T) {
-	a := mustResolve(t, "go:fiber")
-	targets := a.GeneratorTargets()
-	required := []string{"handler", "service", "repository", "migration"}
-	for _, req := range required {
-		found := false
-		for _, t := range targets {
-			if t == req {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected %q in generator targets", req)
-		}
-	}
-}
-
 func TestGoFiber_EnvVars_NotEmpty(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
 	envVars := a.EnvVars()
@@ -186,9 +133,60 @@ func TestGoFiber_EnvVars_ContainsDatabaseURL(t *testing.T) {
 	t.Error("expected DATABASE_URL in env vars")
 }
 
+// ---------------------------------------------------------------------------
+// go:fiber Runnable capability tests
+// ---------------------------------------------------------------------------
+
+func TestGoFiber_DevCommand(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	r, ok := a.(adapter.Runnable)
+	if !ok {
+		t.Fatal("go:fiber does not implement Runnable")
+	}
+	cmd := r.DevCommand(nil)
+	if cmd.Bin != "air" {
+		t.Errorf("expected dev command bin=air, got %q", cmd.Bin)
+	}
+	if len(cmd.Args) == 0 {
+		t.Error("expected air to have arguments (-c .air.toml)")
+	}
+}
+
+func TestGoFiber_BuildCommand(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	r, ok := a.(adapter.Runnable)
+	if !ok {
+		t.Fatal("go:fiber does not implement Runnable")
+	}
+	cmd := r.BuildCommand(nil)
+	if cmd.Bin != "go" {
+		t.Errorf("expected build command bin=go, got %q", cmd.Bin)
+	}
+}
+
+func TestGoFiber_TestCommand(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	r, ok := a.(adapter.Runnable)
+	if !ok {
+		t.Fatal("go:fiber does not implement Runnable")
+	}
+	cmd := r.TestCommand(nil)
+	if cmd.Bin != "go" {
+		t.Errorf("expected test command bin=go, got %q", cmd.Bin)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// go:fiber Scaffolder capability tests
+// ---------------------------------------------------------------------------
+
 func TestGoFiber_Scaffold_ProducesFiles(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
-	files, err := a.Scaffold(adapter.ScaffoldContext{
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
 		RootDir:     t.TempDir(),
@@ -203,7 +201,11 @@ func TestGoFiber_Scaffold_ProducesFiles(t *testing.T) {
 
 func TestGoFiber_Scaffold_ContainsMainGo(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
-	files, err := a.Scaffold(adapter.ScaffoldContext{
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
 	})
@@ -220,7 +222,11 @@ func TestGoFiber_Scaffold_ContainsMainGo(t *testing.T) {
 
 func TestGoFiber_Scaffold_ContainsDockerfile(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
-	files, err := a.Scaffold(adapter.ScaffoldContext{
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
 	})
@@ -237,7 +243,11 @@ func TestGoFiber_Scaffold_ContainsDockerfile(t *testing.T) {
 
 func TestGoFiber_Scaffold_FilesHaveContent(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
-	files, err := a.Scaffold(adapter.ScaffoldContext{
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
 	})
@@ -251,28 +261,83 @@ func TestGoFiber_Scaffold_FilesHaveContent(t *testing.T) {
 	}
 }
 
-func TestGoFiber_Dockerfile_ContainsPort(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Capability model tests
+// ---------------------------------------------------------------------------
+
+// Behavior 1: CapabilitiesOf(go:fiber) returns exactly {Scaffold, Run}.
+func TestCapabilitiesOf_GoFiber_ExactlyScaffoldAndRun(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
-	df := a.Dockerfile(adapter.BuildConfig{
-		ProjectName: "testproject",
-		NodeID:      "api",
-		Port:        8080,
-	})
-	if !containsStr(df, "8080") {
-		t.Error("expected Dockerfile to contain port 8080")
+	caps := adapter.CapabilitiesOf(a)
+
+	want := map[adapter.Capability]bool{
+		adapter.CapabilityScaffold: true,
+		adapter.CapabilityRun:      true,
+	}
+	notWant := []adapter.Capability{
+		adapter.CapabilityContainer,
+		adapter.CapabilityMigrate,
+		adapter.CapabilityDeploy,
+	}
+
+	if len(caps) != 2 {
+		t.Errorf("expected exactly 2 capabilities, got %d: %v", len(caps), caps)
+	}
+	for _, c := range caps {
+		if !want[c] {
+			t.Errorf("unexpected capability %q in CapabilitiesOf(go:fiber)", c)
+		}
+	}
+	capSet := make(map[adapter.Capability]bool)
+	for _, c := range caps {
+		capSet[c] = true
+	}
+	for _, c := range notWant {
+		if capSet[c] {
+			t.Errorf("capability %q should not be present for go:fiber", c)
+		}
 	}
 }
 
-func TestGoFiber_Dockerfile_IsMultiStage(t *testing.T) {
+// Behavior 2: go:fiber satisfies Scaffolder.
+func TestGoFiber_SatisfiesScaffolder(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
-	df := a.Dockerfile(adapter.BuildConfig{ProjectName: "test", NodeID: "api", Port: 8080})
-	if !containsStr(df, "FROM golang:") {
-		t.Error("expected Dockerfile to have Go build stage")
-	}
-	if !containsStr(df, "FROM gcr.io/distroless") {
-		t.Error("expected Dockerfile to have distroless run stage")
+	if _, ok := a.(adapter.Scaffolder); !ok {
+		t.Error("go:fiber does not satisfy Scaffolder interface")
 	}
 }
+
+// Behavior 3: go:fiber satisfies Runnable.
+func TestGoFiber_SatisfiesRunnable(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := a.(adapter.Runnable); !ok {
+		t.Error("go:fiber does not satisfy Runnable interface")
+	}
+}
+
+// Behavior 4: go:fiber does NOT satisfy Containerized.
+func TestGoFiber_DoesNotSatisfyContainerized(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := a.(adapter.Containerized); ok {
+		t.Error("go:fiber should not satisfy Containerized — it has no Container() method")
+	}
+}
+
+// Behavior 5: CapabilitiesOf returns empty slice for a minimal adapter with no capabilities.
+func TestCapabilitiesOf_MinimalAdapter_ReturnsEmpty(t *testing.T) {
+	caps := adapter.CapabilitiesOf(&minimalAdapter{})
+	if len(caps) != 0 {
+		t.Errorf("expected empty capability slice for minimal adapter, got %v", caps)
+	}
+}
+
+// minimalAdapter is a stub that satisfies only the core Adapter interface.
+type minimalAdapter struct{}
+
+func (m *minimalAdapter) Name() string             { return "test:minimal" }
+func (m *minimalAdapter) Category() adapter.Category { return adapter.CategoryBackend }
+func (m *minimalAdapter) Detect(dir string) bool   { return false }
+func (m *minimalAdapter) EnvVars() []adapter.EnvVar { return nil }
 
 // ---------------------------------------------------------------------------
 // Helpers
