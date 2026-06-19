@@ -1387,6 +1387,228 @@ func TestValidate_UnresolvedAdapter_KernelPrefixExempt(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2 Slice 2 — adapter-category-mismatch rule (issue #20)
+// ---------------------------------------------------------------------------
+
+// Behavior 1: A service node using a database-category adapter →
+// ValidationError with Rule="adapter-category-mismatch", Severity=error.
+func TestValidate_AdapterCategoryMismatch_ServiceWithDatabaseCategory(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "db:postgres",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"db:postgres": {Name: "db:postgres", Category: "database"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "adapter-category-mismatch" && errs[i].Node == "api" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected ValidationError with Rule=adapter-category-mismatch for service node using database adapter, got: %v", errs)
+	}
+	if found.Severity != graph.SeverityError {
+		t.Errorf("expected SeverityError, got %q", found.Severity)
+	}
+}
+
+// Behavior 2: An infra node using a backend-category adapter →
+// ValidationError with Rule="adapter-category-mismatch".
+func TestValidate_AdapterCategoryMismatch_InfraWithBackendCategory(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"myinfra": {
+			ID:      "myinfra",
+			Type:    config.NodeTypeInfra,
+			Adapter: "go:fiber",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "myinfra", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"go:fiber": {Name: "go:fiber", Category: "backend"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "adapter-category-mismatch" && errs[i].Node == "myinfra" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected ValidationError with Rule=adapter-category-mismatch for infra node using backend adapter, got: %v", errs)
+	}
+	if found.Severity != graph.SeverityError {
+		t.Errorf("expected SeverityError, got %q", found.Severity)
+	}
+}
+
+// Behavior 3: A service node using a backend-category adapter → no
+// "adapter-category-mismatch" error. (Valid pairing.)
+func TestValidate_AdapterCategoryMismatch_ServiceWithBackendCategory_NoError(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"go:fiber":    {Name: "go:fiber", Category: "backend"},
+			"db:postgres": {Name: "db:postgres", Category: "database"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	for _, e := range errs {
+		if e.Rule == "adapter-category-mismatch" && e.Node == "api" {
+			t.Errorf("expected no adapter-category-mismatch for service node with backend adapter, got: %v", e)
+		}
+	}
+}
+
+// Behavior 4: An infra node using a database-category adapter → no
+// "adapter-category-mismatch" error. (Valid pairing.)
+func TestValidate_AdapterCategoryMismatch_InfraWithDatabaseCategory_NoError(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"go:fiber":    {Name: "go:fiber", Category: "backend"},
+			"db:postgres": {Name: "db:postgres", Category: "database"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	for _, e := range errs {
+		if e.Rule == "adapter-category-mismatch" && e.Node == "db" {
+			t.Errorf("expected no adapter-category-mismatch for infra node with database adapter, got: %v", e)
+		}
+	}
+}
+
+// Behavior 5 (#20): kernel: adapter keys are exempt from adapter-category-mismatch,
+// even when the fakeResolver is non-empty.
+func TestValidate_AdapterCategoryMismatch_KernelPrefixExempt(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"proxy": {
+			ID:      "proxy",
+			Type:    config.NodeTypeInfra,
+			Adapter: "kernel:proxy",
+		},
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "proxy", Type: config.EdgeDependsOn})
+
+	// Resolver knows go:fiber but not kernel:proxy
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"go:fiber": {Name: "go:fiber", Category: "backend"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	for _, e := range errs {
+		if e.Rule == "adapter-category-mismatch" && e.Node == "proxy" {
+			t.Errorf("expected kernel:proxy to be exempt from adapter-category-mismatch rule, got: %v", e)
+		}
+	}
+}
+
+// Behavior 6: Infra node with cache-category adapter → no error (cache is infra-valid).
+// Service node with frontend-category adapter → no error (frontend is service-valid).
+func TestValidate_AdapterCategoryMismatch_CacheAndFrontend_NoError(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"web": {
+			ID:      "web",
+			Type:    config.NodeTypeService,
+			Adapter: "ui:astro",
+		},
+		"cache": {
+			ID:      "cache",
+			Type:    config.NodeTypeInfra,
+			Adapter: "cache:redis",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "web", To: "cache", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"ui:astro":    {Name: "ui:astro", Category: "frontend"},
+			"cache:redis": {Name: "cache:redis", Category: "cache"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	for _, e := range errs {
+		if e.Rule == "adapter-category-mismatch" {
+			t.Errorf("expected no adapter-category-mismatch errors, got: %v", e)
+		}
+	}
+}
+
 // Behavior 5: EmptyResolver (resolver.Names() returns nil/empty) → unresolved-adapter
 // rule is skipped entirely (no errors from this rule).
 func TestValidate_UnresolvedAdapter_EmptyResolverSkipsRule(t *testing.T) {

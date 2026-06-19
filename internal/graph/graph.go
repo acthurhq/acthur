@@ -522,6 +522,22 @@ type EmptyResolver struct{}
 func (EmptyResolver) Resolve(key string) (ResolvedAdapter, bool) { return ResolvedAdapter{}, false }
 func (EmptyResolver) Names() []string                             { return nil }
 
+// serviceCategorySet is the set of adapter categories valid for service nodes.
+var serviceCategorySet = map[string]bool{
+	"backend":  true,
+	"frontend": true,
+	"mobile":   true,
+	"desktop":  true,
+}
+
+// infraCategorySet is the set of adapter categories valid for infra nodes.
+var infraCategorySet = map[string]bool{
+	"database": true,
+	"cache":    true,
+	"storage":  true,
+	"queue":    true,
+}
+
 // Validate runs all structural validation rules on the graph.
 // Returns a slice of ValidationError, each with a Severity field.
 // This is the single authority for all semantic rules:
@@ -622,6 +638,41 @@ func (g *Graph) Validate(resolver Resolver) []ValidationError {
 					Fix:      "check the adapter key in acthur.yml or run 'acthur adapter list'",
 					Severity: SeverityError,
 				})
+			}
+		}
+
+		// adapter-category-mismatch rule
+		for id, n := range g.nodes {
+			if strings.HasPrefix(n.Adapter, "kernel:") {
+				continue
+			}
+			resolved, ok := resolver.Resolve(n.Adapter)
+			if !ok {
+				continue // unresolved-adapter already caught this
+			}
+			cat := resolved.Category
+
+			switch n.Type {
+			case config.NodeTypeService:
+				if !serviceCategorySet[cat] {
+					errs = append(errs, ValidationError{
+						Node:     id,
+						Rule:     "adapter-category-mismatch",
+						Message:  fmt.Sprintf("node %q is type service but adapter %q has category %q — service nodes require a service-category adapter (backend, frontend, mobile, desktop)", id, n.Adapter, cat),
+						Fix:      "use a service-category adapter or change the node type to infra",
+						Severity: SeverityError,
+					})
+				}
+			case config.NodeTypeInfra:
+				if !infraCategorySet[cat] {
+					errs = append(errs, ValidationError{
+						Node:     id,
+						Rule:     "adapter-category-mismatch",
+						Message:  fmt.Sprintf("node %q is type infra but adapter %q has category %q — infra nodes require an infra-category adapter (database, cache, storage, queue)", id, n.Adapter, cat),
+						Fix:      "use an infra-category adapter or change the node type to service",
+						Severity: SeverityError,
+					})
+				}
 			}
 		}
 	}
