@@ -181,11 +181,6 @@ func Build(cfg *config.Config) (*Graph, error) {
 		g.adjIn[ec.To] = append(g.adjIn[ec.To], edge)
 	}
 
-	// Detect cycles in depends_on edges
-	if err := g.detectCycle(); err != nil {
-		return nil, err
-	}
-
 	return g, nil
 }
 
@@ -488,34 +483,45 @@ func (g *Graph) notifySubscribers(nodeID string, state NodeState) {
 // ---------------------------------------------------------------------------
 
 // Validate runs all structural validation rules on the graph.
-// Returns a slice of human-readable error strings.
-// This is called after Build() and can also be called standalone by
-// 'acthur graph validate'.
+// Returns a slice of ValidationError, each with a Severity field.
+// This is the single authority for all semantic rules:
+//   - Cycle detection (depends_on cycles)
+//   - Orphan nodes
+//   - data_flow edges require at least one contract
+//   - applies_to targets must be service nodes
+//
+// Called after Build() and also standalone by 'acthur graph validate'.
 func (g *Graph) Validate() []ValidationError {
 	var errs []ValidationError
+
+	// Rule: No cycles in depends_on edges
+	if cycleErr := g.detectCycleAsValidationError(); cycleErr != nil {
+		errs = append(errs, *cycleErr)
+	}
 
 	// Rule: No orphan nodes (every node must have at least one edge)
 	for id := range g.nodes {
 		if len(g.adjOut[id]) == 0 && len(g.adjIn[id]) == 0 {
 			errs = append(errs, ValidationError{
-				Node:    id,
-				Rule:    "orphan-node",
-				Message: fmt.Sprintf("node %q has no edges — connect it to the graph or remove it", id),
-				Fix:     fmt.Sprintf("add an edge involving node %q to acthur.yml graph.edges", id),
+				Node:     id,
+				Rule:     "orphan-node",
+				Message:  fmt.Sprintf("node %q has no edges — connect it to the graph or remove it", id),
+				Fix:      fmt.Sprintf("add an edge involving node %q to acthur.yml graph.edges", id),
+				Severity: SeverityError,
 			})
 		}
 	}
 
-	// Rule: data_flow edges must have at least one contract (already checked
-	// in config.Validate, but double-checked here for graph-level errors)
+	// Rule: data_flow edges must have at least one contract
 	for _, e := range g.edges {
 		if e.Type == config.EdgeDataFlow && len(e.Contracts) == 0 {
 			errs = append(errs, ValidationError{
-				Edge:    fmt.Sprintf("%s→%s", e.From, e.To),
-				Rule:    "missing-contract",
-				Message: fmt.Sprintf("data_flow edge %s→%s has no contracts", e.From, e.To),
-				Fix:     "add contracts: [contracts/<name>.contract.yml] to this edge",
-				DocsURL: "https://acthur.dev/docs/contracts",
+				Edge:     fmt.Sprintf("%s→%s", e.From, e.To),
+				Rule:     "missing-contract",
+				Message:  fmt.Sprintf("data_flow edge %s→%s has no contracts", e.From, e.To),
+				Fix:      "add contracts: [contracts/<name>.contract.yml] to this edge",
+				DocsURL:  "https://acthur.dev/docs/contracts",
+				Severity: SeverityError,
 			})
 		}
 	}
@@ -526,10 +532,11 @@ func (g *Graph) Validate() []ValidationError {
 			target := g.nodes[e.To]
 			if target != nil && target.Type != config.NodeTypeService {
 				errs = append(errs, ValidationError{
-					Edge:    fmt.Sprintf("%s→%s", e.From, e.To),
-					Rule:    "invalid-applies-to",
-					Message: fmt.Sprintf("applies_to edge targets %q which is not a service node", e.To),
-					Fix:     "applies_to edges must point at service nodes only",
+					Edge:     fmt.Sprintf("%s→%s", e.From, e.To),
+					Rule:     "invalid-applies-to",
+					Message:  fmt.Sprintf("applies_to edge targets %q which is not a service node", e.To),
+					Fix:      "applies_to edges must point at service nodes only",
+					Severity: SeverityError,
 				})
 			}
 		}
@@ -538,14 +545,86 @@ func (g *Graph) Validate() []ValidationError {
 	return errs
 }
 
+// detectCycleAsValidationError checks for cycles in depends_on edges.
+// Returns a ValidationError if a cycle is found, nil otherwise.
+func (g *Graph) detectCycleAsValidationError() *ValidationError {
+	const (
+		unvisited = 0
+		inStack   = 1
+		done      = 2
+	)
+	color := make(map[string]int)
+	var path []string
+
+	var dfs func(id string) bool
+	dfs = func(id string) bool {
+		color[id] = inStack
+		path = append(path, id)
+		for _, e := range g.adjOut[id] {
+			if e.Type != config.EdgeDependsOn {
+				continue
+			}
+			switch color[e.To] {
+			case inStack:
+				// Cycle detected — append the repeated node to close the cycle path
+				path = append(path, e.To)
+				return true
+			case unvisited:
+				if dfs(e.To) {
+					return true
+				}
+			}
+		}
+		color[id] = done
+		path = path[:len(path)-1]
+		return false
+	}
+
+	// Collect node IDs in stable order for deterministic output
+	ids := make([]string, 0, len(g.nodes))
+	for id := range g.nodes {
+		ids = append(ids, id)
+	}
+	sortStrings(ids)
+
+	for _, id := range ids {
+		if color[id] == unvisited {
+			path = nil
+			if dfs(id) {
+				// Build a human-readable cycle path: [a → b → a]
+				parts := make([]string, len(path))
+				copy(parts, path)
+				cycleStr := strings.Join(parts, " → ")
+				return &ValidationError{
+					Rule:     "cycle",
+					Message:  fmt.Sprintf("cycle detected in depends_on edges: [%s]", cycleStr),
+					Fix:      "remove one of the depends_on edges that form the cycle",
+					Severity: SeverityError,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Severity classifies the urgency of a ValidationError.
+type Severity string
+
+const (
+	SeverityError   Severity = "error"
+	SeverityWarning Severity = "warning"
+	SeverityInfo    Severity = "info"
+)
+
 // ValidationError represents a single graph validation failure.
 type ValidationError struct {
-	Node    string
-	Edge    string
-	Rule    string
-	Message string
-	Fix     string
-	DocsURL string
+	Node     string
+	Edge     string
+	Rule     string
+	Message  string
+	Fix      string
+	DocsURL  string
+	Severity Severity
 }
 
 func (e ValidationError) Error() string { return e.Message }

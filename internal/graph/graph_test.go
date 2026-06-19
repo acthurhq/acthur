@@ -50,6 +50,8 @@ func TestBuild_ErrorOnNonExistentNodeRef(t *testing.T) {
 }
 
 func TestBuild_CycleDetection(t *testing.T) {
+	// Phase 1B: cycle detection moved to Validate. Build must succeed; the
+	// cycle is surfaced by g.Validate() as a ValidationError with rule="cycle".
 	cfg := minConfig()
 	// Create a cycle: a → b → a
 	cfg.Graph.Nodes["a"] = config.NodeConfig{Type: "service", Adapter: "go:fiber"}
@@ -58,9 +60,20 @@ func TestBuild_CycleDetection(t *testing.T) {
 		{From: "a", To: "b", Type: config.EdgeDependsOn},
 		{From: "b", To: "a", Type: config.EdgeDependsOn},
 	}
-	_, err := graph.Build(cfg)
-	if err == nil {
-		t.Error("expected cycle detection error, got nil")
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("Build must not fail for cyclic graph (cycle detection moved to Validate): %v", err)
+	}
+	errs := g.Validate()
+	found := false
+	for _, ve := range errs {
+		if ve.Rule == "cycle" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected g.Validate() to return a ValidationError with rule=cycle")
 	}
 }
 
@@ -633,6 +646,103 @@ func buildMinGraph(t *testing.T) *graph.Graph {
 // ---------------------------------------------------------------------------
 // Validation tests
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Phase 1B — Severity, Cycle-as-Validation-Error, three-tier pipeline
+// ---------------------------------------------------------------------------
+
+// Behavior 1: ValidationError struct has an accessible Severity field.
+func TestValidationError_HasSeverityField(t *testing.T) {
+	ve := graph.ValidationError{
+		Node:     "api",
+		Rule:     "test-rule",
+		Message:  "test message",
+		Severity: graph.SeverityError,
+	}
+	if ve.Severity != graph.SeverityError {
+		t.Errorf("expected SeverityError, got %q", ve.Severity)
+	}
+}
+
+// Behavior 2: All existing validation rules emit SeverityError by default.
+func TestValidate_ExistingRulesHaveSeverityError(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Domain: "test.test", Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"api":    {Type: "service", Adapter: "go:fiber"},
+				"orphan": {Type: "service", Adapter: "go:fiber"},
+			},
+			Edges: []config.EdgeConfig{},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	errs := g.Validate()
+	for _, e := range errs {
+		if e.Severity != graph.SeverityError {
+			t.Errorf("rule %q: expected SeverityError, got %q", e.Rule, e.Severity)
+		}
+	}
+}
+
+// Behavior 3: A cyclic graph builds successfully; Validate returns a
+// ValidationError with SeverityError containing the cycle path.
+func TestValidate_CycleDetected(t *testing.T) {
+	cfg := minConfig()
+	cfg.Graph.Nodes["a"] = config.NodeConfig{Type: "service", Adapter: "go:fiber"}
+	cfg.Graph.Nodes["b"] = config.NodeConfig{Type: "service", Adapter: "go:fiber"}
+	cfg.Graph.Edges = []config.EdgeConfig{
+		{From: "a", To: "b", Type: config.EdgeDependsOn},
+		{From: "b", To: "a", Type: config.EdgeDependsOn},
+	}
+	// Behavior 4 test is implicit: Build must NOT return an error for this config
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("Build should succeed for cyclic graph (cycle is a Validate concern): %v", err)
+	}
+
+	errs := g.Validate()
+	var cycleErr *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "cycle" {
+			cycleErr = &errs[i]
+			break
+		}
+	}
+	if cycleErr == nil {
+		t.Fatal("expected a ValidationError with rule=cycle, got none")
+	}
+	if cycleErr.Severity != graph.SeverityError {
+		t.Errorf("cycle error: expected SeverityError, got %q", cycleErr.Severity)
+	}
+	// Message must name the cycle path
+	if cycleErr.Message == "" {
+		t.Error("cycle error: expected non-empty message naming cycle nodes")
+	}
+	// Fix hint must be present
+	if cycleErr.Fix == "" {
+		t.Error("cycle error: expected a non-empty Fix hint")
+	}
+}
+
+// Behavior 4 (standalone): Build does NOT return an error for a cyclic graph.
+func TestBuild_CyclicGraph_BuildsSuccessfully(t *testing.T) {
+	cfg := minConfig()
+	cfg.Graph.Nodes["a"] = config.NodeConfig{Type: "service", Adapter: "go:fiber"}
+	cfg.Graph.Nodes["b"] = config.NodeConfig{Type: "service", Adapter: "go:fiber"}
+	cfg.Graph.Edges = []config.EdgeConfig{
+		{From: "a", To: "b", Type: config.EdgeDependsOn},
+		{From: "b", To: "a", Type: config.EdgeDependsOn},
+	}
+	_, err := graph.Build(cfg)
+	if err != nil {
+		t.Errorf("Build must not return an error for cyclic graph — cycle detection moved to Validate: %v", err)
+	}
+}
 
 func TestValidate_OrphanNode(t *testing.T) {
 	cfg := &config.Config{
