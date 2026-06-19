@@ -68,7 +68,7 @@ func (e *DevEngine) Start() error {
 	output.Info("", "loading graph for %s...", e.cfg.Project)
 
 	// Validate
-	errs := e.graph.Validate()
+	errs := e.graph.Validate(graph.EmptyResolver{})
 	if len(errs) != 0 {
 		for _, err := range errs {
 			output.Error("graph", "%s", err.Error())

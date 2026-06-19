@@ -64,7 +64,7 @@ func TestBuild_CycleDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build must not fail for cyclic graph (cycle detection moved to Validate): %v", err)
 	}
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 	found := false
 	for _, ve := range errs {
 		if ve.Rule == "cycle" {
@@ -681,7 +681,7 @@ func TestValidate_ExistingRulesHaveSeverityError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected build error: %v", err)
 	}
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 	for _, e := range errs {
 		if e.Severity != graph.SeverityError {
 			t.Errorf("rule %q: expected SeverityError, got %q", e.Rule, e.Severity)
@@ -705,7 +705,7 @@ func TestValidate_CycleDetected(t *testing.T) {
 		t.Fatalf("Build should succeed for cyclic graph (cycle is a Validate concern): %v", err)
 	}
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 	var cycleErr *graph.ValidationError
 	for i := range errs {
 		if errs[i].Rule == "cycle" {
@@ -760,7 +760,7 @@ func TestValidate_OrphanNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected build error: %v", err)
 	}
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 	if len(errs) == 0 {
 		t.Error("expected orphan node validation error")
 	}
@@ -768,7 +768,7 @@ func TestValidate_OrphanNode(t *testing.T) {
 
 func TestValidate_CleanGraph(t *testing.T) {
 	g := buildTestGraph(t)
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 	if len(errs) != 0 {
 		for _, e := range errs {
 			t.Errorf("unexpected validation error: %s", e.Error())
@@ -1016,7 +1016,7 @@ func TestValidate_ContractNode_RejectsWithReservedNodeTypeRule(t *testing.T) {
 	g := graph.NewTestGraph(nodes)
 	g.AddEdge(&graph.Edge{From: "auth", To: "user-contract", Type: config.EdgeSatisfies})
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 
 	var found *graph.ValidationError
 	for i := range errs {
@@ -1050,7 +1050,7 @@ func TestValidate_ContractNode_FixPointsToDataFlowContracts(t *testing.T) {
 	g := graph.NewTestGraph(nodes)
 	g.AddEdge(&graph.Edge{From: "auth", To: "user-contract", Type: config.EdgeSatisfies})
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 
 	var found *graph.ValidationError
 	for i := range errs {
@@ -1091,7 +1091,7 @@ func TestValidate_PluginNode_RejectsWithReservedNodeTypeRule(t *testing.T) {
 	g := graph.NewTestGraph(nodes)
 	g.AddEdge(&graph.Edge{From: "my-plugin", To: "api", Type: config.EdgeAppliesTo})
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 
 	var found *graph.ValidationError
 	for i := range errs {
@@ -1125,7 +1125,7 @@ func TestValidate_PluginNode_FixPointsToPluginsList(t *testing.T) {
 	g := graph.NewTestGraph(nodes)
 	g.AddEdge(&graph.Edge{From: "my-plugin", To: "api", Type: config.EdgeAppliesTo})
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 
 	var found *graph.ValidationError
 	for i := range errs {
@@ -1165,7 +1165,7 @@ func TestValidate_ServiceNode_NotRejectedAsReserved(t *testing.T) {
 	g := graph.NewTestGraph(nodes)
 	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 
 	for _, e := range errs {
 		if e.Rule == "reserved-node-type" {
@@ -1191,7 +1191,7 @@ func TestValidate_InfraNode_NotRejectedAsReserved(t *testing.T) {
 	g := graph.NewTestGraph(nodes)
 	g.AddEdge(&graph.Edge{From: "svc", To: "cache", Type: config.EdgeDependsOn})
 
-	errs := g.Validate()
+	errs := g.Validate(graph.EmptyResolver{})
 
 	for _, e := range errs {
 		if e.Rule == "reserved-node-type" {
@@ -1210,4 +1210,206 @@ func containsSubstr(s, substr string) bool {
 		}
 		return false
 	}()
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1H — Resolver abstraction and unresolved-adapter rule (issue #18)
+// ---------------------------------------------------------------------------
+
+// fakeResolver is a map-backed test helper that implements graph.Resolver.
+type fakeResolver struct {
+	adapters map[string]graph.ResolvedAdapter
+}
+
+func (f fakeResolver) Resolve(key string) (graph.ResolvedAdapter, bool) {
+	a, ok := f.adapters[key]
+	return a, ok
+}
+
+func (f fakeResolver) Names() []string {
+	names := make([]string, 0, len(f.adapters))
+	for k := range f.adapters {
+		names = append(names, k)
+	}
+	return names
+}
+
+// Behavior 1: Unknown adapter key → ValidationError with Rule="unresolved-adapter",
+// Severity=error, message contains the unknown key name.
+func TestValidate_UnresolvedAdapter_UnknownKeyProducesError(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"db:postgres": {Name: "db:postgres", Category: "infra"},
+			// go:fiber intentionally missing
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "unresolved-adapter" {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected ValidationError with Rule=unresolved-adapter, got: %v", errs)
+	}
+	if found.Severity != graph.SeverityError {
+		t.Errorf("expected SeverityError, got %q", found.Severity)
+	}
+	if !containsSubstr(found.Message, "go:fiber") {
+		t.Errorf("expected message to contain unknown adapter key %q, got: %q", "go:fiber", found.Message)
+	}
+}
+
+// Behavior 2: Error message lists available adapters.
+func TestValidate_UnresolvedAdapter_MessageListsAvailableAdapters(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"db:postgres": {Name: "db:postgres", Category: "infra"},
+			// go:fiber missing
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	var found *graph.ValidationError
+	for i := range errs {
+		if errs[i].Rule == "unresolved-adapter" && containsSubstr(errs[i].Node, "api") {
+			found = &errs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected unresolved-adapter error for api node, got: %v", errs)
+	}
+	if !containsSubstr(found.Message, "db:postgres") {
+		t.Errorf("expected message to list available adapter %q, got: %q", "db:postgres", found.Message)
+	}
+}
+
+// Behavior 3: Known adapter key → no "unresolved-adapter" error.
+func TestValidate_UnresolvedAdapter_KnownKeyNoError(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "db:postgres",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"go:fiber":    {Name: "go:fiber", Category: "service"},
+			"db:postgres": {Name: "db:postgres", Category: "infra"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	for _, e := range errs {
+		if e.Rule == "unresolved-adapter" {
+			t.Errorf("expected no unresolved-adapter error when all adapters are known, got: %v", e)
+		}
+	}
+}
+
+// Behavior 4: kernel: namespace keys are NEVER flagged, even when resolver is
+// non-empty and doesn't know about them.
+func TestValidate_UnresolvedAdapter_KernelPrefixExempt(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"proxy": {
+			ID:      "proxy",
+			Type:    config.NodeTypeInfra,
+			Adapter: "kernel:proxy",
+		},
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "go:fiber",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "proxy", Type: config.EdgeDependsOn})
+
+	// Resolver knows go:fiber but NOT kernel:proxy
+	resolver := fakeResolver{
+		adapters: map[string]graph.ResolvedAdapter{
+			"go:fiber": {Name: "go:fiber", Category: "service"},
+		},
+	}
+
+	errs := g.Validate(resolver)
+
+	for _, e := range errs {
+		if e.Rule == "unresolved-adapter" && e.Node == "proxy" {
+			t.Errorf("expected kernel:proxy to be exempt from unresolved-adapter rule, got error: %v", e)
+		}
+	}
+}
+
+// Behavior 5: EmptyResolver (resolver.Names() returns nil/empty) → unresolved-adapter
+// rule is skipped entirely (no errors from this rule).
+func TestValidate_UnresolvedAdapter_EmptyResolverSkipsRule(t *testing.T) {
+	nodes := map[string]*graph.Node{
+		"api": {
+			ID:      "api",
+			Type:    config.NodeTypeService,
+			Adapter: "nonexistent:adapter",
+		},
+		"db": {
+			ID:      "db",
+			Type:    config.NodeTypeInfra,
+			Adapter: "totally:unknown",
+		},
+	}
+	g := graph.NewTestGraph(nodes)
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	errs := g.Validate(graph.EmptyResolver{})
+
+	for _, e := range errs {
+		if e.Rule == "unresolved-adapter" {
+			t.Errorf("expected unresolved-adapter rule to be skipped with EmptyResolver, got: %v", e)
+		}
+	}
 }

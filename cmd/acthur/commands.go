@@ -8,12 +8,32 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/acthur/acthur/internal/adapter"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/doctor"
-	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/engine"
+	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
 )
+
+// ---------------------------------------------------------------------------
+// registryResolver — wires the adapter registry to the graph.Resolver interface.
+// Assembled at the CLI entrypoint so the graph engine never imports the adapter package.
+// ---------------------------------------------------------------------------
+
+type registryResolver struct{}
+
+func (registryResolver) Resolve(key string) (graph.ResolvedAdapter, bool) {
+	a, err := adapter.Resolve(key)
+	if err != nil {
+		return graph.ResolvedAdapter{}, false
+	}
+	return graph.ResolvedAdapter{Name: a.Name(), Category: string(a.Category())}, true
+}
+
+func (registryResolver) Names() []string {
+	return adapter.Names()
+}
 
 // ---------------------------------------------------------------------------
 // Root command
@@ -470,7 +490,7 @@ var graphValidateCmd = &cobra.Command{
 		}
 		sp.Stop(true, "graph built")
 
-		errs := g.Validate()
+		errs := g.Validate(registryResolver{})
 		if len(errs) == 0 {
 			output.Success("graph", "all %d nodes and %d edges are valid",
 				len(g.Nodes()), len(g.Edges()))
