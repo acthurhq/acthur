@@ -83,6 +83,12 @@ type ScaffoldContext struct {
 	RootDir     string
 	Env         map[string]string
 	Extra       map[string]any // adapter-specific extra config from acthur.yml
+	// ModulePath is the fully-resolved Go module path (e.g. "github.com/myorg/api").
+	// Resolved by the kernel from module_prefix + "/" + nodeID; adapters use it verbatim.
+	ModulePath string
+	// IDStrategy is the identifier generation strategy from acthur.yml identifiers.strategy.
+	// e.g. "ulid" (default) or "uuid-v4".
+	IDStrategy string
 }
 
 // BuildConfig is the context provided to an adapter's Dockerfile() method.

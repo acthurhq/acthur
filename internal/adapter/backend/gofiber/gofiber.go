@@ -4,13 +4,57 @@
 package gofiber
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
+	"text/template"
 
 	"github.com/acthur/acthur/internal/adapter"
 )
+
+//go:embed templates/go.mod.tmpl
+var tmplGoMod []byte
+
+//go:embed templates/main.go.tmpl
+var tmplMainGo []byte
+
+//go:embed templates/server.go.tmpl
+var tmplServerGo []byte
+
+//go:embed templates/routes.go.tmpl
+var tmplRoutesGo []byte
+
+//go:embed templates/health.go.tmpl
+var tmplHealthGo []byte
+
+//go:embed templates/config.go.tmpl
+var tmplConfigGo []byte
+
+//go:embed templates/errors.go.tmpl
+var tmplErrorsGo []byte
+
+//go:embed templates/ids_ulid.go.tmpl
+var tmplIDsULID []byte
+
+//go:embed templates/ids_uuid.go.tmpl
+var tmplIDsUUID []byte
+
+//go:embed templates/middleware_logger.go.tmpl
+var tmplMiddlewareLogger []byte
+
+//go:embed templates/air.toml.tmpl
+var tmplAirToml []byte
+
+//go:embed templates/env.example.tmpl
+var tmplEnvExample []byte
+
+//go:embed templates/gitignore.tmpl
+var tmplGitignore []byte
+
+//go:embed templates/dockerfile.tmpl
+var tmplDockerfile []byte
 
 // Adapter implements adapter.Adapter for Go Fiber.
 type Adapter struct{}
@@ -19,7 +63,7 @@ func init() {
 	adapter.Register(&Adapter{})
 }
 
-func (a *Adapter) Name() string         { return "go:fiber" }
+func (a *Adapter) Name() string              { return "go:fiber" }
 func (a *Adapter) Category() adapter.Category { return adapter.CategoryBackend }
 
 // Detect returns true if a go.mod containing fiber is found in dir.
@@ -85,638 +129,128 @@ func (a *Adapter) TestCommand(env map[string]string) adapter.Command {
 // EnvVars returns the environment variables a Fiber app requires.
 func (a *Adapter) EnvVars() []adapter.EnvVar {
 	return []adapter.EnvVar{
-		{Key: "APP_ENV",     Description: "application environment",     Required: true,  Default: "development"},
-		{Key: "APP_PORT",    Description: "HTTP port",                    Required: true,  Default: "8080"},
-		{Key: "APP_SECRET",  Description: "application secret key",       Required: true,  Secret: true},
-		{Key: "DATABASE_URL", Description: "PostgreSQL connection string", Required: true,  Secret: true},
-		{Key: "REDIS_URL",   Description: "Redis connection string",       Required: false, Default: "redis://localhost:6379"},
+		{Key: "APP_ENV", Description: "application environment", Required: true, Default: "development"},
+		{Key: "APP_PORT", Description: "HTTP port", Required: true, Default: "8080"},
+		{Key: "APP_SECRET", Description: "application secret key", Required: true, Secret: true},
+		{Key: "DATABASE_URL", Description: "PostgreSQL connection string", Required: true, Secret: true},
+		{Key: "REDIS_URL", Description: "Redis connection string", Required: false, Default: "redis://localhost:6379"},
 	}
 }
 
 // Scaffold returns the minimal file set for a new go:fiber service.
 func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) {
+	goMod, err := renderTemplate("go.mod.tmpl", tmplGoMod, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("go.mod: %w", err)
+	}
+	mainGo, err := renderTemplate("main.go.tmpl", tmplMainGo, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("main.go: %w", err)
+	}
+	serverGo, err := renderTemplate("server.go.tmpl", tmplServerGo, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("server.go: %w", err)
+	}
+	routesGo, err := renderTemplate("routes.go.tmpl", tmplRoutesGo, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("routes.go: %w", err)
+	}
+	healthGo, err := renderTemplate("health.go.tmpl", tmplHealthGo, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("health.go: %w", err)
+	}
+	configGo, err := renderTemplate("config.go.tmpl", tmplConfigGo, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("config.go: %w", err)
+	}
+	errorsGo, err := renderTemplate("errors.go.tmpl", tmplErrorsGo, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("errors.go: %w", err)
+	}
+	idsGo, err := a.renderIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ids.go: %w", err)
+	}
+	loggerGo, err := renderTemplate("middleware_logger.go.tmpl", tmplMiddlewareLogger, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("middleware_logger.go: %w", err)
+	}
+	airToml, err := renderTemplate("air.toml.tmpl", tmplAirToml, ctx)
+	if err != nil {
+		return nil, fmt.Errorf(".air.toml: %w", err)
+	}
+	envExample, err := renderTemplate("env.example.tmpl", tmplEnvExample, ctx)
+	if err != nil {
+		return nil, fmt.Errorf(".env.example: %w", err)
+	}
+	gitignore, err := renderTemplate("gitignore.tmpl", tmplGitignore, ctx)
+	if err != nil {
+		return nil, fmt.Errorf(".gitignore: %w", err)
+	}
+	dockerfile, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Dockerfile: %w", err)
+	}
+
 	return []adapter.File{
-		{Path: "go.mod",           Content: a.goMod(ctx.ProjectName)},
-		{Path: "main.go",          Content: a.mainGo()},
-		{Path: ".air.toml",        Content: a.airToml()},
-		{Path: ".env.example",     Content: a.envExample()},
-		{Path: ".gitignore",       Content: a.gitignore()},
-		{Path: "internal/server/server.go",   Content: a.serverGo()},
-		{Path: "internal/server/routes.go",   Content: a.routesGo()},
-		{Path: "internal/health/handler.go",  Content: a.healthGo()},
-		{Path: "internal/config/config.go",   Content: a.configGo()},
-		{Path: "internal/errors/errors.go",   Content: a.errorsGo()},
-		{Path: "internal/ids/ids.go",         Content: a.idsGo()},
-		{Path: "internal/middleware/logger.go", Content: a.loggerMiddlewareGo()},
-		{Path: "Dockerfile",       Content: []byte(a.Dockerfile(adapter.BuildConfig{
-			ProjectName: ctx.ProjectName,
-			NodeID:      ctx.NodeID,
-			Port:        8080,
-		}))},
+		{Path: "go.mod", Content: goMod},
+		{Path: "main.go", Content: mainGo},
+		{Path: ".air.toml", Content: airToml},
+		{Path: ".env.example", Content: envExample},
+		{Path: ".gitignore", Content: gitignore},
+		{Path: "internal/server/server.go", Content: serverGo},
+		{Path: "internal/server/routes.go", Content: routesGo},
+		{Path: "internal/health/handler.go", Content: healthGo},
+		{Path: "internal/config/config.go", Content: configGo},
+		{Path: "internal/errors/errors.go", Content: errorsGo},
+		{Path: "internal/ids/ids.go", Content: idsGo},
+		{Path: "internal/middleware/logger.go", Content: loggerGo},
+		{Path: "Dockerfile", Content: dockerfile},
 	}, nil
 }
 
 // Dockerfile returns a multi-stage Go Dockerfile.
 func (a *Adapter) Dockerfile(cfg adapter.BuildConfig) string {
-	return fmt.Sprintf(`# syntax=docker/dockerfile:1
-# Generated by Acthur for go:fiber adapter
-# Project: %s — Service: %s
-
-# ── Build stage ───────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS builder
-
-WORKDIR /build
-
-# Download dependencies first (better layer caching)
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Build
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /build/app \
-    ./...
-
-# ── Run stage ─────────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/static-debian12:nonroot
-
-COPY --from=builder /build/app /app
-
-EXPOSE %d
-
-USER nonroot:nonroot
-ENTRYPOINT ["/app"]
-`, cfg.ProjectName, cfg.NodeID, cfg.Port)
-}
-
-// ---------------------------------------------------------------------------
-// Scaffold templates
-// ---------------------------------------------------------------------------
-
-func (a *Adapter) goMod(project string) []byte {
-	return []byte(fmt.Sprintf(`module github.com/yourorg/%s
-
-go 1.22
-
-require (
-	github.com/gofiber/fiber/v2     v2.52.4
-	github.com/gofiber/contrib/otelfiber v1.0.10
-	github.com/jackc/pgx/v5         v5.5.5
-	github.com/redis/go-redis/v9    v9.5.1
-	github.com/golang-migrate/migrate/v4 v4.17.1
-	github.com/golang-jwt/jwt/v5    v5.2.1
-	go.uber.org/zap                 v1.27.0
-	go.opentelemetry.io/otel        v1.24.0
-)
-`, project))
-}
-
-func (a *Adapter) mainGo() []byte {
-	return []byte(`package main
-
-import (
-	"log"
-	"os"
-	"os/signal"
-	"syscall"
-
-	"github.com/yourorg/app/internal/config"
-	"github.com/yourorg/app/internal/server"
-)
-
-func main() {
-	cfg, err := config.Load()
+	ctx := adapter.ScaffoldContext{
+		ProjectName: cfg.ProjectName,
+		NodeID:      cfg.NodeID,
+	}
+	content, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		// Fallback: return a minimal Dockerfile with the port
+		return fmt.Sprintf("FROM gcr.io/distroless/static-debian12:nonroot\nEXPOSE %d\nENTRYPOINT [\"/app\"]\n", cfg.Port)
 	}
+	return string(content)
+}
 
-	app := server.New(cfg)
+// ---------------------------------------------------------------------------
+// Template rendering
+// ---------------------------------------------------------------------------
 
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		if err := app.Listen(":" + cfg.Port); err != nil {
-			log.Fatalf("server error: %v", err)
-		}
-	}()
-
-	<-quit
-	log.Println("shutting down...")
-	if err := app.Shutdown(); err != nil {
-		log.Fatalf("shutdown error: %v", err)
+// renderTemplate executes a pre-loaded template with the given data.
+func renderTemplate(name string, tmplBytes []byte, data any) ([]byte, error) {
+	t, err := template.New(name).Parse(string(tmplBytes))
+	if err != nil {
+		return nil, err
 	}
-}
-`)
-}
-
-func (a *Adapter) airToml() []byte {
-	return []byte(`# .air.toml — Hot reload config for go:fiber
-# Generated by Acthur
-
-root = "."
-tmp_dir = "tmp"
-
-[build]
-  bin = "./tmp/main"
-  cmd = "go build -o ./tmp/main ."
-  delay = 200
-  exclude_dir = ["assets", "tmp", "vendor", "testdata", "node_modules"]
-  exclude_file = []
-  exclude_regex = ["_test.go"]
-  exclude_unchanged = false
-  follow_symlink = false
-  full_bin = ""
-  include_dir = []
-  include_ext = ["go", "tpl", "tmpl", "html"]
-  kill_delay = "0s"
-  log = "build-errors.log"
-  send_interrupt = false
-  stop_on_error = true
-
-[color]
-  app = ""
-  build = "yellow"
-  main = "magenta"
-  runner = "green"
-  watcher = "cyan"
-
-[log]
-  time = false
-
-[misc]
-  clean_on_exit = true
-
-[screen]
-  clear_on_rebuild = false
-`)
-}
-
-func (a *Adapter) envExample() []byte {
-	return []byte(`# .env.example — Generated by Acthur for go:fiber
-# Copy to .env and fill in your values. Never commit .env.
-
-APP_ENV=development
-APP_PORT=8080
-APP_SECRET=change-me-in-production
-
-# Database (set by Acthur from db:postgres node)
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/app_development?sslmode=disable
-
-# Redis (set by Acthur from cache:redis node)
-REDIS_URL=redis://localhost:6379
-
-# OpenTelemetry (set by Acthur if observability plugin active)
-# OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-# OTEL_SERVICE_NAME=api
-`)
-}
-
-func (a *Adapter) gitignore() []byte {
-	return []byte(`# Go
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-vendor/
-tmp/
-bin/
-
-# Environment
-.env
-.env.*
-!.env.example
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Acthur runtime state (never commit)
-.acthur/
-
-# Logs
-*.log
-`)
-}
-
-func (a *Adapter) serverGo() []byte {
-	return []byte(`package server
-
-import (
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/compress"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/gofiber/fiber/v2/middleware/requestid"
-	"github.com/yourorg/app/internal/config"
-	"github.com/yourorg/app/internal/middleware"
-)
-
-// New creates and configures the Fiber application.
-// Middleware is registered here in a fixed order:
-//   1. Recover (panic → 500, never crash the process)
-//   2. RequestID (trace correlation)
-//   3. Logger (structured request logging)
-//   4. CORS (generated from graph data_flow edges by security plugin)
-//   5. Compress
-//   6. Routes
-func New(cfg *config.Config) *fiber.App {
-	app := fiber.New(fiber.Config{
-		AppName:               cfg.AppName,
-		ReadTimeout:           cfg.ReadTimeout,
-		WriteTimeout:          cfg.WriteTimeout,
-		IdleTimeout:           cfg.IdleTimeout,
-		DisableStartupMessage: true,
-		ErrorHandler:          middleware.ErrorHandler,
-	})
-
-	app.Use(recover.New())
-	app.Use(requestid.New())
-	app.Use(middleware.Logger())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins: cfg.CORSOrigins,
-		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders: "Origin,Content-Type,Authorization,X-Request-ID",
-	}))
-	app.Use(compress.New())
-
-	registerRoutes(app, cfg)
-
-	return app
-}
-`)
-}
-
-func (a *Adapter) routesGo() []byte {
-	return []byte(`package server
-
-import (
-	"github.com/gofiber/fiber/v2"
-	"github.com/yourorg/app/internal/config"
-	"github.com/yourorg/app/internal/health"
-)
-
-// registerRoutes wires all routes onto the Fiber app.
-// Generated handlers are registered here by the generator engine.
-// Middleware order per route group:
-//   1. tenant middleware  (if multitenancy active)
-//   2. auth middleware    (if auth plugin active)
-//   3. rbac middleware    (if rbac plugin active)
-//   4. handler
-func registerRoutes(app *fiber.App, cfg *config.Config) {
-	// Health check — no auth, no tenant
-	app.Get("/health", health.Handler)
-
-	// API v1 routes
-	v1 := app.Group("/api/v1")
-	_ = v1 // routes added by generators below
-
-	// Example (generated by: acthur generate from-contract users.contract.yml):
-	// users := v1.Group("/users",
-	//     middleware.Tenant,
-	//     middleware.Auth,
-	// )
-	// users.Post("",         usersHandler.Create)
-	// users.Get("/:id",      usersHandler.Get)
-	// users.Get("",          usersHandler.List)
-	// users.Put("/:id",      usersHandler.Update)
-	// users.Delete("/:id",   usersHandler.Delete)
-}
-`)
-}
-
-func (a *Adapter) healthGo() []byte {
-	return []byte(`package health
-
-import (
-	"time"
-
-	"github.com/gofiber/fiber/v2"
-)
-
-// Response is the structured health check response.
-// Acthur's health checker polls GET /health and parses this.
-type Response struct {
-	Status  string            ` + "`json:\"status\"`" + `
-	Service string            ` + "`json:\"service\"`" + `
-	Uptime  float64           ` + "`json:\"uptime_seconds\"`" + `
-	Checks  map[string]Check  ` + "`json:\"checks\"`" + `
-}
-
-// Check is a single dependency health check result.
-type Check struct {
-	Status    string ` + "`json:\"status\"`" + `
-	LatencyMs int64  ` + "`json:\"latency_ms,omitempty\"`" + `
-	Error     string ` + "`json:\"error,omitempty\"`" + `
-}
-
-var startTime = time.Now()
-
-// Handler handles GET /health.
-// Returns 200 if all checks pass, 503 if any fail.
-func Handler(c *fiber.Ctx) error {
-	checks := map[string]Check{
-		// Checks added here by migrations plugin, auth plugin, etc.
-		// Example (added by db:postgres adapter + migrations plugin):
-		// "database": checkDatabase(db),
-		// "redis":    checkRedis(redis),
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return nil, err
 	}
+	return buf.Bytes(), nil
+}
 
-	status := "healthy"
-	httpStatus := fiber.StatusOK
-	for _, ch := range checks {
-		if ch.Status != "healthy" {
-			status = "degraded"
-			httpStatus = fiber.StatusServiceUnavailable
-			break
-		}
+// renderIDs selects the correct ids template based on ctx.IDStrategy.
+func (a *Adapter) renderIDs(ctx adapter.ScaffoldContext) ([]byte, error) {
+	if ctx.IDStrategy == "uuid-v4" {
+		return renderTemplate("ids_uuid.go.tmpl", tmplIDsUUID, ctx)
 	}
-
-	return c.Status(httpStatus).JSON(Response{
-		Status:  status,
-		Service: c.App().Config().AppName,
-		Uptime:  time.Since(startTime).Seconds(),
-		Checks:  checks,
-	})
-}
-`)
-}
-
-func (a *Adapter) configGo() []byte {
-	return []byte(`package config
-
-import (
-	"fmt"
-	"os"
-	"time"
-)
-
-// Config holds all application configuration.
-// Values are read from environment variables (set by Acthur at startup).
-type Config struct {
-	AppName      string
-	Port         string
-	AppEnv       string
-	Secret       string
-	DatabaseURL  string
-	RedisURL     string
-	CORSOrigins  string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
-}
-
-// Load reads config from environment variables.
-// Missing required variables cause a clear, immediate failure.
-func Load() (*Config, error) {
-	cfg := &Config{
-		AppName:      getEnv("APP_NAME", "api"),
-		Port:         getEnv("APP_PORT", "8080"),
-		AppEnv:       getEnv("APP_ENV", "development"),
-		Secret:       mustGetEnv("APP_SECRET"),
-		DatabaseURL:  mustGetEnv("DATABASE_URL"),
-		RedisURL:     getEnv("REDIS_URL", "redis://localhost:6379"),
-		CORSOrigins:  getEnv("CORS_ORIGINS", "*"),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-	return cfg, nil
-}
-
-func (c *Config) IsDevelopment() bool { return c.AppEnv == "development" }
-func (c *Config) IsProduction()   bool { return c.AppEnv == "production" }
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func mustGetEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		panic(fmt.Sprintf("required environment variable %q is not set\n"+
-			"  Check your .env file or secrets provider.", key))
-	}
-	return v
-}
-`)
-}
-
-func (a *Adapter) errorsGo() []byte {
-	return []byte(`package errors
-
-import (
-	"fmt"
-	"net/http"
-
-	"github.com/gofiber/fiber/v2"
-)
-
-// Code is a machine-readable error code returned to API clients.
-type Code string
-
-const (
-	CodeNotFound       Code = "not_found"
-	CodeUnauthorized   Code = "unauthorized"
-	CodeForbidden      Code = "forbidden"
-	CodeValidation     Code = "validation_failed"
-	CodeConflict       Code = "conflict"
-	CodeInternal       Code = "internal_error"
-	CodeBadRequest     Code = "bad_request"
-	CodeRateLimit      Code = "rate_limit_exceeded"
-)
-
-// AppError is the standard error type for this service.
-// All handler errors should return an AppError for consistent API responses.
-type AppError struct {
-	HTTPStatus int    ` + "`json:\"-\"`" + `
-	Code       Code   ` + "`json:\"code\"`" + `
-	Message    string ` + "`json:\"message\"`" + `
-	Details    any    ` + "`json:\"details,omitempty\"`" + `
-}
-
-func (e *AppError) Error() string {
-	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
-}
-
-// Common constructors
-func NotFound(resource string) *AppError {
-	return &AppError{HTTPStatus: http.StatusNotFound,
-		Code: CodeNotFound, Message: resource + " not found"}
-}
-func Unauthorized(msg string) *AppError {
-	return &AppError{HTTPStatus: http.StatusUnauthorized,
-		Code: CodeUnauthorized, Message: msg}
-}
-func Forbidden(msg string) *AppError {
-	return &AppError{HTTPStatus: http.StatusForbidden,
-		Code: CodeForbidden, Message: msg}
-}
-func Validation(details any) *AppError {
-	return &AppError{HTTPStatus: http.StatusUnprocessableEntity,
-		Code: CodeValidation, Message: "validation failed", Details: details}
-}
-func Conflict(msg string) *AppError {
-	return &AppError{HTTPStatus: http.StatusConflict,
-		Code: CodeConflict, Message: msg}
-}
-func Internal(err error) *AppError {
-	return &AppError{HTTPStatus: http.StatusInternalServerError,
-		Code: CodeInternal, Message: "an internal error occurred"}
-}
-
-// ErrorHandler is the Fiber error handler registered in server.New().
-// It converts AppError and fiber.Error into consistent JSON responses.
-func ErrorHandler(c *fiber.Ctx, err error) error {
-	if e, ok := err.(*AppError); ok {
-		return c.Status(e.HTTPStatus).JSON(fiber.Map{
-			"error": e,
-		})
-	}
-	if e, ok := err.(*fiber.Error); ok {
-		return c.Status(e.Code).JSON(fiber.Map{
-			"error": &AppError{
-				HTTPStatus: e.Code,
-				Code:       CodeInternal,
-				Message:    e.Message,
-			},
-		})
-	}
-	return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
-		"error": &AppError{
-			HTTPStatus: http.StatusInternalServerError,
-			Code:       CodeInternal,
-			Message:    "an internal error occurred",
-		},
-	})
-}
-`)
-}
-
-func (a *Adapter) idsGo() []byte {
-	idStrategy := detectIDStrategy()
-	switch idStrategy {
-	case "ulid":
-		return a.idsGoULID()
-	case "uuid-v4":
-		return a.idsGoUUID()
-	default:
-		return a.idsGoULID()
-	}
-}
-
-func (a *Adapter) idsGoULID() []byte {
-	return []byte(`package ids
-
-// Package ids provides the project-wide ID generation strategy.
-// Strategy: ULID — sortable, URL-safe, collision-resistant.
-// Generated by Acthur — change the strategy in acthur.yml identifiers.strategy.
-//
-// IMPORTANT: Always use ids.New() — never use uuid.New() or rand directly.
-
-import (
-	"math/rand"
-	"time"
-
-	"github.com/oklog/ulid/v2"
-)
-
-// ID is the type alias for all entity identifiers in this project.
-type ID = string
-
-// New generates a new ULID identifier.
-func New() ID {
-	entropy := rand.New(rand.NewSource(time.Now().UnixNano()))
-	ms := ulid.Timestamp(time.Now())
-	return ulid.MustNew(ms, entropy).String()
-}
-
-// Validate returns true if the given string is a valid ULID.
-func Validate(id string) bool {
-	_, err := ulid.ParseStrict(id)
-	return err == nil
-}
-
-// Zero is the zero value for an ID (all zeros ULID).
-const Zero = "00000000000000000000000000"
-`)
-}
-
-func (a *Adapter) idsGoUUID() []byte {
-	return []byte(`package ids
-
-// Package ids provides the project-wide ID generation strategy.
-// Strategy: UUID v4 — universal standard.
-// Generated by Acthur — change the strategy in acthur.yml identifiers.strategy.
-
-import "github.com/google/uuid"
-
-type ID = string
-
-func New() ID          { return uuid.New().String() }
-func Validate(id string) bool { _, err := uuid.Parse(id); return err == nil }
-const Zero = "00000000-0000-0000-0000-000000000000"
-`)
-}
-
-func (a *Adapter) loggerMiddlewareGo() []byte {
-	return []byte(`package middleware
-
-import (
-	"time"
-
-	"github.com/gofiber/fiber/v2"
-	"go.uber.org/zap"
-)
-
-var log, _ = zap.NewProduction()
-
-// Logger returns a structured request logging middleware.
-// Logs: method, path, status, latency, request_id, ip.
-// Format: JSON in production, human-readable in development.
-func Logger() fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		start := time.Now()
-		err := c.Next()
-		latency := time.Since(start)
-
-		log.Info("request",
-			zap.String("method",     c.Method()),
-			zap.String("path",       c.Path()),
-			zap.Int("status",        c.Response().StatusCode()),
-			zap.Duration("latency",  latency),
-			zap.String("request_id", c.GetRespHeader("X-Request-ID")),
-			zap.String("ip",         c.IP()),
-		)
-		return err
-	}
-}
-`)
+	return renderTemplate("ids_ulid.go.tmpl", tmplIDsULID, ctx)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-func detectIDStrategy() string {
-	// In practice this would read from the ScaffoldContext.
-	// Default to ULID as per the PRD recommendation.
-	return "ulid"
-}
 
 func mergeEnv(base, extra map[string]string) map[string]string {
 	result := make(map[string]string, len(base)+len(extra))
@@ -742,6 +276,3 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
-
-// Ensure runtime.GOOS is used (build tag awareness).
-var _ = runtime.GOOS

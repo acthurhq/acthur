@@ -1,0 +1,36 @@
+package main
+
+import (
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"{{.ModulePath}}/internal/config"
+	"{{.ModulePath}}/internal/server"
+)
+
+func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	app := server.New(cfg)
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		if err := app.Listen(":" + cfg.Port); err != nil {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	<-quit
+	log.Println("shutting down...")
+	if err := app.Shutdown(); err != nil {
+		log.Fatalf("shutdown error: %v", err)
+	}
+}

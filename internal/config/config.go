@@ -30,6 +30,11 @@ type Config struct {
 	Plugins      []PluginEntry          `yaml:"plugins"`
 	AI           AIConfig               `yaml:"ai"`
 
+	// ModulePrefix is the Go module path prefix for scaffolded services.
+	// The kernel resolves ModulePath = ModulePrefix + "/" + nodeID.
+	// Defaults to the project name when unset.
+	ModulePrefix string `yaml:"module_prefix"`
+
 	// Runtime fields — not in YAML, populated by loader
 	RootDir   string `yaml:"-"`
 	ConfigPath string `yaml:"-"`

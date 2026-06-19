@@ -1,15 +1,18 @@
 package adapter_test
 
 import (
+	"bufio"
+	"bytes"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"strings"
-
 	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"        // register go:fiber
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"          // register db:postgres
+	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"   // register go:fiber
+	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"    // register db:postgres
 )
 
 // ---------------------------------------------------------------------------
@@ -192,6 +195,8 @@ func TestGoFiber_Scaffold_ProducesFiles(t *testing.T) {
 	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
 		RootDir:     t.TempDir(),
 	})
 	if err != nil {
@@ -211,6 +216,8 @@ func TestGoFiber_Scaffold_ContainsMainGo(t *testing.T) {
 	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
 	})
 	if err != nil {
 		t.Fatalf("unexpected scaffold error: %v", err)
@@ -232,6 +239,8 @@ func TestGoFiber_Scaffold_ContainsDockerfile(t *testing.T) {
 	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
 	})
 	if err != nil {
 		t.Fatalf("unexpected scaffold error: %v", err)
@@ -253,6 +262,8 @@ func TestGoFiber_Scaffold_FilesHaveContent(t *testing.T) {
 	files, err := s.Scaffold(adapter.ScaffoldContext{
 		ProjectName: "testproject",
 		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
 	})
 	if err != nil {
 		t.Fatalf("unexpected scaffold error: %v", err)
@@ -345,6 +356,150 @@ func (m *minimalAdapter) EnvVars() []adapter.EnvVar { return nil }
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Behavior 1 (tracer bullet): scaffold into a temp dir and run go build.
+// Compilation is the strongest assertion — it kills the module-path inconsistency bug.
+func TestGoFiber_Scaffold_CompilesWithGoBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compilation test in short mode")
+	}
+	a := mustResolve(t, "go:fiber")
+	sc, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	dir := t.TempDir()
+	ctx := adapter.ScaffoldContext{
+		ProjectName: "testapi",
+		NodeID:      "api",
+		ModulePath:  "github.com/acthurtest/api",
+		IDStrategy:  "ulid",
+		RootDir:     dir,
+	}
+	files, err := sc.Scaffold(ctx)
+	if err != nil {
+		t.Fatalf("scaffold error: %v", err)
+	}
+	for _, f := range files {
+		path := filepath.Join(dir, f.Path)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		mode := fs.FileMode(f.Mode)
+		if mode == 0 {
+			mode = 0644
+		}
+		if err := os.WriteFile(path, f.Content, mode); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = dir
+	if out, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+	}
+	build := exec.Command("go", "build", "./...")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+}
+
+// Behavior 2 (toolchain-free): go.mod module path must equal the import prefix
+// in every generated .go file — no hardcoded "yourorg" mismatch.
+func TestGoFiber_Scaffold_ModulePathConsistent(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	sc, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	const modulePath = "github.com/acthurtest/myservice"
+	files, err := sc.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "myservice",
+		NodeID:      "myservice",
+		ModulePath:  modulePath,
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("scaffold error: %v", err)
+	}
+	// Extract module path from go.mod
+	var goModPath string
+	for _, f := range files {
+		if f.Path == "go.mod" {
+			scanner := bufio.NewScanner(bytes.NewReader(f.Content))
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if strings.HasPrefix(line, "module ") {
+					goModPath = strings.TrimPrefix(line, "module ")
+					goModPath = strings.TrimSpace(goModPath)
+					break
+				}
+			}
+		}
+	}
+	if goModPath != modulePath {
+		t.Errorf("go.mod module path = %q, want %q", goModPath, modulePath)
+	}
+	// Every .go import of an internal package must use goModPath as prefix
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, ".go") {
+			continue
+		}
+		content := string(f.Content)
+		if strings.Contains(content, "\"github.com/yourorg") {
+			t.Errorf("file %q still contains hardcoded 'yourorg' import", f.Path)
+		}
+	}
+}
+
+// Behavior 3: IDStrategy="ulid" → ids package contains ulid logic.
+func TestGoFiber_Scaffold_IDStrategy_ULID(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	sc := a.(adapter.Scaffolder)
+	files, err := sc.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "p",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "ids/ids.go") || strings.HasSuffix(f.Path, "ids.go") {
+			if !containsStr(string(f.Content), "ulid") {
+				t.Errorf("ids.go does not reference ulid for strategy=ulid; content:\n%s", f.Content)
+			}
+			return
+		}
+	}
+	t.Error("ids.go not found in scaffold output")
+}
+
+// Behavior 4: IDStrategy="uuid-v4" → ids package contains uuid logic.
+func TestGoFiber_Scaffold_IDStrategy_UUID(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	sc := a.(adapter.Scaffolder)
+	files, err := sc.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "p",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "uuid-v4",
+	})
+	if err != nil {
+		t.Fatalf("scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "ids/ids.go") || strings.HasSuffix(f.Path, "ids.go") {
+			if !containsStr(string(f.Content), "uuid") {
+				t.Errorf("ids.go does not reference uuid for strategy=uuid-v4; content:\n%s", f.Content)
+			}
+			return
+		}
+	}
+	t.Error("ids.go not found in scaffold output")
+}
 
 // ---------------------------------------------------------------------------
 // db:postgres adapter tests

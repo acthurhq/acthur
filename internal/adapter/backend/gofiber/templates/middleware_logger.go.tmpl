@@ -1,0 +1,31 @@
+package middleware
+
+import (
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"go.uber.org/zap"
+)
+
+var log, _ = zap.NewProduction()
+
+// Logger returns a structured request logging middleware.
+// Logs: method, path, status, latency, request_id, ip.
+// Format: JSON in production, human-readable in development.
+func Logger() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		start := time.Now()
+		err := c.Next()
+		latency := time.Since(start)
+
+		log.Info("request",
+			zap.String("method", c.Method()),
+			zap.String("path", c.Path()),
+			zap.Int("status", c.Response().StatusCode()),
+			zap.Duration("latency", latency),
+			zap.String("request_id", c.GetRespHeader("X-Request-ID")),
+			zap.String("ip", c.IP()),
+		)
+		return err
+	}
+}

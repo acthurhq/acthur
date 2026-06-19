@@ -1,0 +1,53 @@
+package health
+
+import (
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+// Response is the structured health check response.
+// Acthur's health checker polls GET /health and parses this.
+type Response struct {
+	Status  string           `json:"status"`
+	Service string           `json:"service"`
+	Uptime  float64          `json:"uptime_seconds"`
+	Checks  map[string]Check `json:"checks"`
+}
+
+// Check is a single dependency health check result.
+type Check struct {
+	Status    string `json:"status"`
+	LatencyMs int64  `json:"latency_ms,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+var startTime = time.Now()
+
+// Handler handles GET /health.
+// Returns 200 if all checks pass, 503 if any fail.
+func Handler(c *fiber.Ctx) error {
+	checks := map[string]Check{
+		// Checks added here by migrations plugin, auth plugin, etc.
+		// Example (added by db:postgres adapter + migrations plugin):
+		// "database": checkDatabase(db),
+		// "redis":    checkRedis(redis),
+	}
+
+	status := "healthy"
+	httpStatus := fiber.StatusOK
+	for _, ch := range checks {
+		if ch.Status != "healthy" {
+			status = "degraded"
+			httpStatus = fiber.StatusServiceUnavailable
+			break
+		}
+	}
+
+	return c.Status(httpStatus).JSON(Response{
+		Status:  status,
+		Service: c.App().Config().AppName,
+		Uptime:  time.Since(startTime).Seconds(),
+		Checks:  checks,
+	})
+}

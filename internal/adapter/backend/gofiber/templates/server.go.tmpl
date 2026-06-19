@@ -1,0 +1,45 @@
+package server
+
+import (
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v2/middleware/requestid"
+	apperrors "{{.ModulePath}}/internal/errors"
+	"{{.ModulePath}}/internal/config"
+	"{{.ModulePath}}/internal/middleware"
+)
+
+// New creates and configures the Fiber application.
+// Middleware is registered here in a fixed order:
+//  1. Recover (panic -> 500, never crash the process)
+//  2. RequestID (trace correlation)
+//  3. Logger (structured request logging)
+//  4. CORS (generated from graph data_flow edges by security plugin)
+//  5. Compress
+//  6. Routes
+func New(cfg *config.Config) *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:               cfg.AppName,
+		ReadTimeout:           cfg.ReadTimeout,
+		WriteTimeout:          cfg.WriteTimeout,
+		IdleTimeout:           cfg.IdleTimeout,
+		DisableStartupMessage: true,
+		ErrorHandler:          apperrors.ErrorHandler,
+	})
+
+	app.Use(recover.New())
+	app.Use(requestid.New())
+	app.Use(middleware.Logger())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: cfg.CORSOrigins,
+		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Authorization,X-Request-ID",
+	}))
+	app.Use(compress.New())
+
+	registerRoutes(app, cfg)
+
+	return app
+}
