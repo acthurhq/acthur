@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/acthur/acthur/internal/config"
 )
@@ -92,6 +93,10 @@ type Graph struct {
 	edges    []*Edge
 	adjOut   map[string][]*Edge // from → edges
 	adjIn    map[string][]*Edge // to   → edges
+
+	// sealed marks the end of the setup phase. Once true, structural mutations
+	// (AddNode, AddEdge) are programming errors and will panic.
+	sealed atomic.Bool
 
 	// State subscription — plugins and monitor subscribe to state changes.
 	// subMu protects subscribers and nextSubID for concurrent sub/unsub vs notify.
@@ -181,6 +186,41 @@ func Build(cfg *config.Config) (*Graph, error) {
 	}
 
 	return g, nil
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+// Freeze seals the graph topology, ending the setup phase. After Freeze the
+// graph enters the runtime phase: structural mutations (AddNode, AddEdge) are
+// programming errors and will panic. Calling Freeze a second time is a no-op.
+func (g *Graph) Freeze() {
+	g.sealed.Store(true)
+}
+
+// IsSealed reports whether the graph has been sealed by Freeze.
+func (g *Graph) IsSealed() bool {
+	return g.sealed.Load()
+}
+
+// AddNode adds a node to the graph. Panics if the graph is sealed.
+func (g *Graph) AddNode(n *Node) {
+	if g.sealed.Load() {
+		panic("graph is sealed: structural mutation after Freeze is a programming error")
+	}
+	g.nodes[n.ID] = n
+}
+
+// AddEdge adds a directed edge to the graph and updates the adjacency indexes.
+// Panics if the graph is sealed.
+func (g *Graph) AddEdge(e *Edge) {
+	if g.sealed.Load() {
+		panic("graph is sealed: structural mutation after Freeze is a programming error")
+	}
+	g.edges = append(g.edges, e)
+	g.adjOut[e.From] = append(g.adjOut[e.From], e)
+	g.adjIn[e.To] = append(g.adjIn[e.To], e)
 }
 
 // ---------------------------------------------------------------------------

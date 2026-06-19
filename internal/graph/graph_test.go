@@ -605,3 +605,114 @@ func contains(ss []string, s string) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1F — Two-phase lifecycle: Freeze/seal with post-seal mutation guard
+// ---------------------------------------------------------------------------
+
+// Behavior 1: Freeze() seals the graph; IsSealed() reflects the change.
+func TestFreeze_SetsSealed(t *testing.T) {
+	g := buildMinGraph(t)
+	if g.IsSealed() {
+		t.Error("expected graph to be unsealed before Freeze()")
+	}
+	g.Freeze()
+	if !g.IsSealed() {
+		t.Error("expected graph to be sealed after Freeze()")
+	}
+}
+
+// Behavior 1b: Calling Freeze() a second time is a no-op (not a panic).
+func TestFreeze_IsIdempotent(t *testing.T) {
+	g := buildMinGraph(t)
+	g.Freeze()
+	// Should not panic.
+	g.Freeze()
+	if !g.IsSealed() {
+		t.Error("expected graph to remain sealed after second Freeze()")
+	}
+}
+
+// Behavior 2: AddNode works before seal.
+func TestAddNode_BeforeSeal_Succeeds(t *testing.T) {
+	cfg := minConfig()
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	g.AddNode(&graph.Node{ID: "new-node", Type: config.NodeTypeService, Adapter: "go:fiber"})
+	if g.Node("new-node") == nil {
+		t.Error("expected new-node to be added before seal")
+	}
+}
+
+// Behavior 3: AddNode panics after seal.
+func TestAddNode_AfterSeal_Panics(t *testing.T) {
+	g := buildMinGraph(t)
+	g.Freeze()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic when adding a node to a sealed graph")
+		}
+	}()
+	g.AddNode(&graph.Node{ID: "too-late", Type: config.NodeTypeService, Adapter: "go:fiber"})
+}
+
+// Behavior 4: AddEdge panics after seal.
+func TestAddEdge_AfterSeal_Panics(t *testing.T) {
+	g := buildMinGraph(t)
+	g.Freeze()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Error("expected panic when adding an edge to a sealed graph")
+		}
+	}()
+	g.AddEdge(&graph.Edge{From: "a", To: "b", Type: config.EdgeDependsOn})
+}
+
+// Behavior 4b: AddEdge works before seal.
+func TestAddEdge_BeforeSeal_Succeeds(t *testing.T) {
+	cfg := minConfig()
+	cfg.Graph.Nodes["x"] = config.NodeConfig{Type: config.NodeTypeService, Adapter: "go:fiber"}
+	cfg.Graph.Nodes["y"] = config.NodeConfig{Type: config.NodeTypeInfra, Adapter: "db:postgres"}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("unexpected build error: %v", err)
+	}
+	g.AddEdge(&graph.Edge{From: "x", To: "y", Type: config.EdgeDependsOn})
+	edges := g.EdgesFrom("x")
+	if len(edges) == 0 {
+		t.Error("expected edge to be present after AddEdge before seal")
+	}
+}
+
+// Behavior 5: SetState on a sealed graph still works (state is not structural).
+func TestSetState_AfterSeal_Succeeds(t *testing.T) {
+	g := buildMinGraph(t)
+	g.Freeze()
+	// Must not panic.
+	g.SetState("a", graph.StateHealthy)
+	if got := g.GetState("a"); got != graph.StateHealthy {
+		t.Errorf("expected healthy after SetState on sealed graph, got %q", got)
+	}
+}
+
+// Behavior 6: Read traversals work normally on a sealed graph.
+func TestReadTraversals_AfterSeal_Succeed(t *testing.T) {
+	g := buildMinGraph(t)
+	g.Freeze()
+	nodes := g.Nodes()
+	if len(nodes) == 0 {
+		t.Error("expected Nodes() to work on sealed graph")
+	}
+	edges := g.Edges()
+	_ = edges // nil is fine for a min graph with no edges added post-build
+	order := g.StartupOrder()
+	if len(order) == 0 {
+		t.Error("expected StartupOrder() to work on sealed graph")
+	}
+}
