@@ -91,15 +91,6 @@ type ScaffoldContext struct {
 	IDStrategy string
 }
 
-// BuildConfig is the context provided to an adapter's Dockerfile() method.
-// Kept for internal use by adapters (e.g. gofiber uses it inside Scaffold).
-type BuildConfig struct {
-	ProjectName string
-	NodeID      string
-	Port        int
-	Env         map[string]string
-}
-
 // ---------------------------------------------------------------------------
 // Container types (needed by Containerized capability)
 // ---------------------------------------------------------------------------

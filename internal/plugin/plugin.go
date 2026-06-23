@@ -52,7 +52,8 @@ type KernelAPI interface {
 	RegisterCommand(cmd CLICommand)
 
 	// Register a code generator for a specific target name
-	// The adapter must declare support for the target via GeneratorTargets()
+	// Adapter support for generator targets will be modeled as a capability
+	// when the generator engine lands.
 	RegisterGenerator(target string, gen Generator)
 
 	// Register a type schema (added to contract type registry)

@@ -63,7 +63,7 @@ func init() {
 	adapter.Register(&Adapter{})
 }
 
-func (a *Adapter) Name() string              { return "go:fiber" }
+func (a *Adapter) Name() string               { return "go:fiber" }
 func (a *Adapter) Category() adapter.Category { return adapter.CategoryBackend }
 
 // Detect returns true if a go.mod containing fiber is found in dir.
@@ -74,29 +74,6 @@ func (a *Adapter) Detect(dir string) bool {
 		return false
 	}
 	return contains(string(data), "github.com/gofiber/fiber")
-}
-
-// GeneratorTargets returns all code generation targets this adapter supports.
-// Plugins register generators against these target names.
-func (a *Adapter) GeneratorTargets() []string {
-	return []string{
-		"handler",
-		"middleware",
-		"service",
-		"repository",
-		"dto",
-		"model",
-		"migration",
-		"router",
-		"auth-handler",
-		"auth-middleware",
-		"auth-service",
-		"rbac-middleware",
-		"tenant-middleware",
-		"tenant-migration",
-		"health-handler",
-		"error-handler",
-	}
 }
 
 // DevCommand returns the air command for hot reload.
@@ -207,20 +184,6 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 		{Path: "internal/middleware/logger.go", Content: loggerGo},
 		{Path: "Dockerfile", Content: dockerfile},
 	}, nil
-}
-
-// Dockerfile returns a multi-stage Go Dockerfile.
-func (a *Adapter) Dockerfile(cfg adapter.BuildConfig) string {
-	ctx := adapter.ScaffoldContext{
-		ProjectName: cfg.ProjectName,
-		NodeID:      cfg.NodeID,
-	}
-	content, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
-	if err != nil {
-		// Fallback: return a minimal Dockerfile with the port
-		return fmt.Sprintf("FROM gcr.io/distroless/static-debian12:nonroot\nEXPOSE %d\nENTRYPOINT [\"/app\"]\n", cfg.Port)
-	}
-	return string(content)
 }
 
 // ---------------------------------------------------------------------------

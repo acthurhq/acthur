@@ -7,12 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"   // register go:fiber
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"    // register db:postgres
+	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber" // register go:fiber
+	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"  // register db:postgres
 )
 
 // ---------------------------------------------------------------------------
@@ -329,7 +330,23 @@ func TestGoFiber_SatisfiesRunnable(t *testing.T) {
 	}
 }
 
-// Behavior 4: go:fiber does NOT satisfy Containerized.
+// Behavior 4: go:fiber does NOT expose an ad hoc generator target surface.
+func TestGoFiber_DoesNotExposeGeneratorTargets(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := a.(interface{ GeneratorTargets() []string }); ok {
+		t.Error("go:fiber should not expose GeneratorTargets outside a capability interface")
+	}
+}
+
+// Behavior 5: go:fiber leaves Dockerfile ownership to scaffolded files.
+func TestGoFiber_DoesNotExposeDockerfileMethod(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := reflect.TypeOf(a).MethodByName("Dockerfile"); ok {
+		t.Error("go:fiber should not expose a Dockerfile method")
+	}
+}
+
+// Behavior 6: go:fiber does NOT satisfy Containerized.
 func TestGoFiber_DoesNotSatisfyContainerized(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
 	if _, ok := a.(adapter.Containerized); ok {
@@ -337,7 +354,7 @@ func TestGoFiber_DoesNotSatisfyContainerized(t *testing.T) {
 	}
 }
 
-// Behavior 5: CapabilitiesOf returns empty slice for a minimal adapter with no capabilities.
+// Behavior 7: CapabilitiesOf returns empty slice for a minimal adapter with no capabilities.
 func TestCapabilitiesOf_MinimalAdapter_ReturnsEmpty(t *testing.T) {
 	caps := adapter.CapabilitiesOf(&minimalAdapter{})
 	if len(caps) != 0 {
@@ -348,10 +365,10 @@ func TestCapabilitiesOf_MinimalAdapter_ReturnsEmpty(t *testing.T) {
 // minimalAdapter is a stub that satisfies only the core Adapter interface.
 type minimalAdapter struct{}
 
-func (m *minimalAdapter) Name() string             { return "test:minimal" }
+func (m *minimalAdapter) Name() string               { return "test:minimal" }
 func (m *minimalAdapter) Category() adapter.Category { return adapter.CategoryBackend }
-func (m *minimalAdapter) Detect(dir string) bool   { return false }
-func (m *minimalAdapter) EnvVars() []adapter.EnvVar { return nil }
+func (m *minimalAdapter) Detect(dir string) bool     { return false }
+func (m *minimalAdapter) EnvVars() []adapter.EnvVar  { return nil }
 
 // ---------------------------------------------------------------------------
 // Helpers
