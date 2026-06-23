@@ -8,14 +8,15 @@ import (
 	"os"
 	"sort"
 
-	"github.com/spf13/cobra"
 	"github.com/acthur/acthur/internal/adapter"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
+	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/engine"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
+	"github.com/spf13/cobra"
 )
 
 // ---------------------------------------------------------------------------
@@ -233,9 +234,9 @@ var buildCmd = &cobra.Command{
 // ---------------------------------------------------------------------------
 
 var (
-	deployEnv     string
-	deployTarget  string
-	deployDryRun  bool
+	deployEnv    string
+	deployTarget string
+	deployDryRun bool
 )
 
 var deployCmd = &cobra.Command{
