@@ -47,6 +47,7 @@ type Process struct {
 	cancel   context.CancelFunc
 	restarts int
 	lastExit time.Time
+	outputWG sync.WaitGroup
 
 	// exited is closed by the background waiter goroutine started in startLocked
 	// when cmd.Wait() returns. Stop() and Supervisor.loop() both read from this
@@ -131,6 +132,7 @@ func (p *Process) startLocked(ctx context.Context) error {
 	p.setState(StateRunning)
 
 	// Pipe output to log router
+	p.outputWG.Add(2)
 	go p.pipeLines(stdout)
 	go p.pipeLines(stderr)
 
@@ -160,6 +162,7 @@ func (p *Process) Stop(timeout time.Duration) error {
 
 	select {
 	case <-exited:
+		p.outputWG.Wait()
 		p.setState(StateStopped)
 		return nil
 	case <-time.After(timeout):
@@ -167,6 +170,7 @@ func (p *Process) Stop(timeout time.Duration) error {
 		if p.cmd != nil && p.cmd.Process != nil {
 			p.cmd.Process.Kill()
 		}
+		p.outputWG.Wait()
 		p.setState(StateStopped)
 		return nil
 	}
@@ -212,6 +216,7 @@ func (p *Process) setState(s State) {
 }
 
 func (p *Process) pipeLines(r io.Reader) {
+	defer p.outputWG.Done()
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
