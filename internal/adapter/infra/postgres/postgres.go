@@ -55,3 +55,14 @@ func (a *Adapter) Container(ctx adapter.ContainerContext) adapter.ContainerSpec 
 		},
 	}
 }
+
+// ConnectionEnv returns the connection variables exported to dependent nodes.
+func (a *Adapter) ConnectionEnv(ctx adapter.ContainerContext) map[string]string {
+	spec := a.Container(ctx)
+	return map[string]string{
+		"DATABASE_URL": "postgres://" +
+			spec.Env["POSTGRES_USER"] + ":" +
+			spec.Env["POSTGRES_PASSWORD"] + "@localhost:5432/" +
+			spec.Env["POSTGRES_DB"],
+	}
+}

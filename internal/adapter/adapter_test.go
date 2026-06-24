@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -354,6 +355,13 @@ func TestGoFiber_DoesNotSatisfyContainerized(t *testing.T) {
 	}
 }
 
+func TestGoFiber_DoesNotSatisfyConnectable(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := a.(adapter.Connectable); ok {
+		t.Error("go:fiber should not satisfy Connectable")
+	}
+}
+
 // Behavior 7: CapabilitiesOf returns empty slice for a minimal adapter with no capabilities.
 func TestCapabilitiesOf_MinimalAdapter_ReturnsEmpty(t *testing.T) {
 	caps := adapter.CapabilitiesOf(&minimalAdapter{})
@@ -541,15 +549,16 @@ func TestPostgres_Category(t *testing.T) {
 	}
 }
 
-// Behavior 3: CapabilitiesOf(db:postgres) returns exactly {CapabilityContainer}.
-func TestPostgres_CapabilitiesOf_ExactlyContainer(t *testing.T) {
+// Behavior 3: CapabilitiesOf(db:postgres) returns exactly {CapabilityContainer, CapabilityConnectable}.
+func TestPostgres_CapabilitiesOf_ExactlyContainerAndConnectable(t *testing.T) {
 	a := mustResolve(t, "db:postgres")
 	caps := adapter.CapabilitiesOf(a)
-	if len(caps) != 1 {
-		t.Fatalf("expected exactly 1 capability for db:postgres, got %d: %v", len(caps), caps)
+	want := []adapter.Capability{
+		adapter.CapabilityContainer,
+		adapter.CapabilityConnectable,
 	}
-	if caps[0] != adapter.CapabilityContainer {
-		t.Errorf("expected CapabilityContainer, got %q", caps[0])
+	if !reflect.DeepEqual(caps, want) {
+		t.Fatalf("capabilities mismatch\nwant: %v\n got: %v", want, caps)
 	}
 }
 
@@ -561,7 +570,48 @@ func TestPostgres_SatisfiesContainerized(t *testing.T) {
 	}
 }
 
-// Behavior 5: Container returns spec with Image == "postgres".
+// Behavior 5: db:postgres returns DATABASE_URL from its ContainerSpec facts.
+func TestPostgres_ConnectionEnv_DatabaseURLMatchesContainerSpec(t *testing.T) {
+	a := mustResolve(t, "db:postgres")
+	connectable, ok := a.(adapter.Connectable)
+	if !ok {
+		t.Fatal("expected db:postgres to satisfy Connectable")
+	}
+	ctx := adapter.ContainerContext{NodeID: "db", Version: "15"}
+	spec := mustContainerized(t, "db:postgres").Container(ctx)
+
+	env := connectable.ConnectionEnv(ctx)
+	databaseURL := env["DATABASE_URL"]
+	if databaseURL == "" {
+		t.Fatal("expected DATABASE_URL to be exported")
+	}
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatalf("DATABASE_URL is not parseable: %v", err)
+	}
+
+	if parsed.Scheme != "postgres" {
+		t.Errorf("expected postgres scheme, got %q", parsed.Scheme)
+	}
+	if parsed.User.Username() != spec.Env["POSTGRES_USER"] {
+		t.Errorf("expected user from ContainerSpec, got %q", parsed.User.Username())
+	}
+	password, _ := parsed.User.Password()
+	if password != spec.Env["POSTGRES_PASSWORD"] {
+		t.Errorf("expected password from ContainerSpec, got %q", password)
+	}
+	if parsed.Hostname() != "localhost" {
+		t.Errorf("expected localhost host, got %q", parsed.Hostname())
+	}
+	if parsed.Port() != "5432" {
+		t.Errorf("expected port 5432, got %q", parsed.Port())
+	}
+	if strings.TrimPrefix(parsed.Path, "/") != spec.Env["POSTGRES_DB"] {
+		t.Errorf("expected database from ContainerSpec, got %q", parsed.Path)
+	}
+}
+
+// Behavior 6: Container returns spec with Image == "postgres".
 func TestPostgres_Container_Image(t *testing.T) {
 	spec := mustContainerized(t, "db:postgres").Container(adapter.ContainerContext{})
 	if spec.Image != "postgres" {

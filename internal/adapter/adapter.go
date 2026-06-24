@@ -9,7 +9,7 @@
 //
 // Every adapter implements the core Adapter interface (Name, Category, Detect,
 // EnvVars). Optional capabilities are expressed as separate interfaces
-// (Scaffolder, Runnable, Containerized, Migratable, Deployable). The kernel
+// (Scaffolder, Runnable, Containerized, Connectable, Migratable, Deployable). The kernel
 // type-asserts against these at call sites. CapabilitiesOf is the single source
 // of truth for what a concrete adapter supports.
 package adapter
@@ -136,11 +136,12 @@ type Healthcheck struct {
 type Capability string
 
 const (
-	CapabilityScaffold  Capability = "Scaffold"
-	CapabilityRun       Capability = "Run"
-	CapabilityContainer Capability = "Container"
-	CapabilityMigrate   Capability = "Migrate"
-	CapabilityDeploy    Capability = "Deploy"
+	CapabilityScaffold    Capability = "Scaffold"
+	CapabilityRun         Capability = "Run"
+	CapabilityContainer   Capability = "Container"
+	CapabilityConnectable Capability = "Connectable"
+	CapabilityMigrate     Capability = "Migrate"
+	CapabilityDeploy      Capability = "Deploy"
 )
 
 // ---------------------------------------------------------------------------
@@ -189,6 +190,11 @@ type Containerized interface {
 	Container(ctx ContainerContext) ContainerSpec
 }
 
+// Connectable can export environment variables that consumers use to connect.
+type Connectable interface {
+	ConnectionEnv(ctx ContainerContext) map[string]string
+}
+
 // Migratable can produce a migration command (database schema management).
 // No implementations in this phase — defined for forward compatibility.
 type Migratable interface {
@@ -218,6 +224,9 @@ func CapabilitiesOf(a Adapter) []Capability {
 	}
 	if _, ok := a.(Containerized); ok {
 		caps = append(caps, CapabilityContainer)
+	}
+	if _, ok := a.(Connectable); ok {
+		caps = append(caps, CapabilityConnectable)
 	}
 	if _, ok := a.(Migratable); ok {
 		caps = append(caps, CapabilityMigrate)
