@@ -1,9 +1,11 @@
 package health_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/acthur/acthur/internal/config"
@@ -143,6 +145,39 @@ func TestHTTPStrategy_NoPort(t *testing.T) {
 // TCP strategy tests
 // ---------------------------------------------------------------------------
 
+func TestInfraStrategy_DeclaredHealthcheckRunsDockerExec(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	strategy := health.InfraStrategy("acthur-db", []string{"CMD-SHELL", "pg_isready -U postgres"}, health.CommandRunnerFunc(
+		func(ctx context.Context, name string, args ...string) error {
+			gotName = name
+			gotArgs = append([]string(nil), args...)
+			return nil
+		},
+	))
+
+	node := makeInfraNode("db", "db:postgres", 5432)
+	if err := strategy.Check(context.Background(), node); err != nil {
+		t.Fatalf("expected declared healthcheck to pass, got: %v", err)
+	}
+
+	if gotName != "docker" {
+		t.Fatalf("expected docker command, got %q", gotName)
+	}
+	wantArgs := []string{"exec", "acthur-db", "sh", "-c", "pg_isready -U postgres"}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Fatalf("docker exec args mismatch\nwant: %#v\n got: %#v", wantArgs, gotArgs)
+	}
+}
+
+func TestInfraStrategy_NoDeclaredHealthcheckFallsBackToTCP(t *testing.T) {
+	strategy := health.InfraStrategy("acthur-db", nil, nil)
+
+	if got := strategy.Name(); got != "tcp" {
+		t.Fatalf("expected tcp fallback, got %q", got)
+	}
+}
+
 func TestTCPStrategy_ListeningServer(t *testing.T) {
 	// Start an HTTP server to listen on a port (TCP will connect successfully)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -217,4 +252,3 @@ func extractPort(t *testing.T, rawURL string) int {
 	t.Fatalf("could not extract port from %q", rawURL)
 	return 0
 }
-

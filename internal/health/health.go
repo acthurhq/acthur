@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os/exec"
 	"time"
 
 	"github.com/acthur/acthur/internal/graph"
@@ -104,15 +105,65 @@ func (s *TCPStrategy) Check(ctx context.Context, node *graph.Node) error {
 // ExecStrategy runs a command and checks its exit code.
 // Used for database nodes where a SELECT 1 or ping is more reliable.
 type ExecStrategy struct {
-	Cmd  string
-	Args []string
+	Cmd    string
+	Args   []string
+	Runner CommandRunner
 }
 
 func (s *ExecStrategy) Name() string { return "exec" }
 
 func (s *ExecStrategy) Check(ctx context.Context, node *graph.Node) error {
-	// Stub — actual implementation would run the command
+	runner := s.Runner
+	if runner == nil {
+		runner = osExecRunner{}
+	}
+	if err := runner.Run(ctx, s.Cmd, s.Args...); err != nil {
+		return fmt.Errorf("exec health check failed: %w", err)
+	}
 	return nil
+}
+
+// CommandRunner runs a command for ExecStrategy.
+type CommandRunner interface {
+	Run(ctx context.Context, name string, args ...string) error
+}
+
+// CommandRunnerFunc adapts a function into a CommandRunner.
+type CommandRunnerFunc func(ctx context.Context, name string, args ...string) error
+
+func (f CommandRunnerFunc) Run(ctx context.Context, name string, args ...string) error {
+	return f(ctx, name, args...)
+}
+
+type osExecRunner struct{}
+
+func (osExecRunner) Run(ctx context.Context, name string, args ...string) error {
+	return exec.CommandContext(ctx, name, args...).Run()
+}
+
+// InfraStrategy selects the readiness strategy for an infra container.
+func InfraStrategy(containerName string, healthcheck []string, runner CommandRunner) Strategy {
+	if len(healthcheck) == 0 {
+		return &TCPStrategy{}
+	}
+	return &ExecStrategy{
+		Cmd:    "docker",
+		Args:   dockerExecArgs(containerName, healthcheck),
+		Runner: runner,
+	}
+}
+
+func dockerExecArgs(containerName string, healthcheck []string) []string {
+	args := []string{"exec", containerName}
+	switch healthcheck[0] {
+	case "CMD-SHELL":
+		if len(healthcheck) > 1 {
+			return append(args, "sh", "-c", healthcheck[1])
+		}
+	case "CMD":
+		return append(args, healthcheck[1:]...)
+	}
+	return append(args, healthcheck...)
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +189,12 @@ func New() *Checker {
 // It logs progress and returns an error if the timeout expires.
 func (c *Checker) WaitFor(ctx context.Context, node *graph.Node, timeout time.Duration) error {
 	strategy := c.strategyFor(node)
+	return c.WaitForStrategy(ctx, node, strategy, timeout)
+}
 
+// WaitForStrategy polls a node with the provided health check strategy until
+// healthy or timeout.
+func (c *Checker) WaitForStrategy(ctx context.Context, node *graph.Node, strategy Strategy, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	interval := 500 * time.Millisecond
 	attempt := 0
@@ -209,13 +265,13 @@ func (c *Checker) infraStrategy(node *graph.Node) Strategy {
 // DefaultPorts provides well-known default ports for infra adapters.
 // Used when no port is explicitly set in acthur.yml.
 var DefaultPorts = map[string]int{
-	"db:postgres":    5432,
-	"db:mysql":       3306,
-	"db:sqlite":      0,    // file-based, no port
-	"cache:redis":    6379,
-	"storage:minio":  9000,
-	"queue:nats":     4222,
-	"analytics:posthog":     8000,
+	"db:postgres":            5432,
+	"db:mysql":               3306,
+	"db:sqlite":              0, // file-based, no port
+	"cache:redis":            6379,
+	"storage:minio":          9000,
+	"queue:nats":             4222,
+	"analytics:posthog":      8000,
 	"webanalytics:plausible": 8001,
 }
 
