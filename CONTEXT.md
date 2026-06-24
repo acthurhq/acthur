@@ -59,6 +59,10 @@ _Avoid_: kernel adapter, built-in adapter.
 The abstraction the graph engine uses to ask whether an adapter key is known. The engine depends on this interface, never on the discovery mechanism behind it (the global registry, and later plugin loaders or remote catalogs). An unknown key surfaces as a validation error, not a build error.
 _Avoid_: registry, catalog, loader (those are *implementations* of a Resolver, not the concept).
 
+**Connection env**:
+The set of environment variables a provider node exports to the consumer nodes that depend on it — `DATABASE_URL` from a `db:postgres` node, `REDIS_URL` from `cache:redis`. The provider adapter derives them from the same declaration the resource runs with, so the coordinates a consumer receives cannot drift from the resource's actual credentials, port, or database name. Exposed by the `Connectable` capability; the kernel injects them into a consumer along its dependency edges.
+_Avoid_: service discovery (that is host/URL only, no credentials), secrets, config.
+
 ### Correctness tiers
 
 **Parse error**:
@@ -84,3 +88,13 @@ Everything after seal. Topology is fixed and read lock-free; only per-node state
 
 **State subscription**:
 The mechanism by which consumers (e.g. the monitor) observe node state changes. Delivery is ordered *per node* — a node's own transitions are never observed out of order — but makes no promise about ordering *across* nodes, so parallel execution stays possible. Subscribers must not block the setter.
+
+### Execution
+
+**Execution context**:
+The strategy by which the kernel runs the graph's nodes — **Local** (native service processes plus container infra, all reachable on `localhost`), **Docker** (every node containerized on a shared network), or **Cloud** (deployed to a target platform). The same graph runs under any context; only the projection of each node differs. Distinct from an *environment* (`dev` / `staging` / `production`), which selects configuration values, not the run strategy.
+_Avoid_: environment, mode, runtime.
+
+**Projection**:
+Rendering a node's declarative spec into the concrete form one execution context needs — a `ContainerSpec` becomes `docker run` arguments under Local, and a compose service or k8s manifest under Cloud. The adapter declares the spec once and never emits context-specific commands; the kernel owns every projection, so adapter knowledge cannot leak into the runtime.
+_Avoid_: render, compile, generate (*generate* is reserved for user-owned code output).
