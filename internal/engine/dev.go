@@ -14,6 +14,7 @@ import (
 
 	"github.com/acthur/acthur/internal/adapter"
 	"github.com/acthur/acthur/internal/config"
+	"github.com/acthur/acthur/internal/container"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
@@ -25,28 +26,48 @@ import (
 // DevEngine
 // ---------------------------------------------------------------------------
 
+// AdapterResolver is the dev runtime's adapter knowledge boundary.
+// It validates graph adapter keys through graph.Resolver and returns concrete
+// adapters only at runtime capability call sites.
+type AdapterResolver interface {
+	graph.Resolver
+	Adapter(key string) (adapter.Adapter, bool)
+}
+
+type processManager interface {
+	Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*process.Process, error)
+	StopAll(nodeIDs []string)
+}
+
+type healthChecker interface {
+	WaitFor(ctx context.Context, node *graph.Node, timeout time.Duration) error
+	WaitForStrategy(ctx context.Context, node *graph.Node, strategy health.Strategy, timeout time.Duration) error
+}
+
 // DevEngine is the runtime brain of `acthur dev`.
 // It owns the full lifecycle: startup → supervision → shutdown.
 type DevEngine struct {
-	cfg     *config.Config
-	graph   *graph.Graph
-	pm      *process.Manager
-	checker *health.Checker
-	proxy   *proxy.Proxy
-	ctx     context.Context
-	cancel  context.CancelFunc
+	cfg      *config.Config
+	graph    *graph.Graph
+	resolver AdapterResolver
+	pm       processManager
+	checker  healthChecker
+	proxy    *proxy.Proxy
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // NewDevEngine creates a DevEngine. Call Start() to begin.
-func NewDevEngine(cfg *config.Config, g *graph.Graph) *DevEngine {
+func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver) *DevEngine {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DevEngine{
-		cfg:     cfg,
-		graph:   g,
-		pm:      process.NewManager(),
-		checker: health.New(),
-		ctx:     ctx,
-		cancel:  cancel,
+		cfg:      cfg,
+		graph:    g,
+		resolver: resolver,
+		pm:       process.NewManager(),
+		checker:  health.New(),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -62,13 +83,14 @@ func NewDevEngine(cfg *config.Config, g *graph.Graph) *DevEngine {
 //  7. Start dev proxy
 //  8. Print ready message
 //  9. Wait for SIGINT/SIGTERM
+//
 // 10. Graceful shutdown in reverse order
 func (e *DevEngine) Start() error {
 	output.Banner()
 	output.Info("", "loading graph for %s...", e.cfg.Project)
 
 	// Validate
-	errs := e.graph.Validate(graph.EmptyResolver{})
+	errs := e.graph.Validate(e.resolver)
 	if len(errs) != 0 {
 		for _, err := range errs {
 			output.Error("graph", "%s", err.Error())
@@ -135,16 +157,26 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	e.graph.SetState(node.ID, graph.StateStarting)
 	output.Info(node.ID, "starting %s (%s)...", node.ID, node.Adapter)
 
-	port := health.ResolvePort(node)
-	if port == 0 {
+	a, ok := e.resolver.Adapter(node.Adapter)
+	if !ok {
+		e.graph.SetState(node.ID, graph.StateFailed)
+		return fmt.Errorf("adapter %q not found", node.Adapter)
+	}
+	c, ok := a.(adapter.Containerized)
+	if !ok {
+		e.graph.SetState(node.ID, graph.StateFailed)
+		return fmt.Errorf("adapter %q does not support the Container capability", node.Adapter)
+	}
+	spec := c.Container(adapter.ContainerContext{
+		NodeID:  node.ID,
+		Version: node.Config.Version,
+	})
+	if len(spec.Ports) == 0 {
 		// File-based infra (sqlite) — nothing to start
 		e.graph.SetState(node.ID, graph.StateHealthy)
 		return nil
 	}
-
-	// Determine Docker image
-	image := dockerImageFor(node)
-	args := buildDockerArgs(node, image, port)
+	args := container.ToRunArgs(spec, node.ID)
 
 	_, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
 	if err != nil {
@@ -152,8 +184,8 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 		return err
 	}
 
-	// Wait for TCP health
-	if err := e.checker.WaitFor(e.ctx, node, 60*time.Second); err != nil {
+	strategy := health.InfraStrategy("acthur-"+node.ID, spec.Healthcheck.Test, nil)
+	if err := e.checker.WaitForStrategy(e.ctx, node, strategy, 60*time.Second); err != nil {
 		e.graph.SetState(node.ID, graph.StateDegraded)
 		return err
 	}
@@ -167,11 +199,10 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	e.graph.SetState(node.ID, graph.StateStarting)
 	output.Info(node.ID, "starting %s (%s)...", node.ID, node.Adapter)
 
-	// Resolve adapter
-	a, err := adapter.Resolve(node.Adapter)
-	if err != nil {
+	a, ok := e.resolver.Adapter(node.Adapter)
+	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q not found: %w", node.Adapter, err)
+		return fmt.Errorf("adapter %q not found", node.Adapter)
 	}
 
 	// Build env for this node
@@ -184,7 +215,7 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	cmd := r.DevCommand(env)
 
 	nodeDir := nodeDirectory(e.cfg.RootDir, node)
-	_, err = e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
+	_, err := e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
 		return err
@@ -215,6 +246,10 @@ func (e *DevEngine) shutdown(order []*graph.Node) {
 // buildEnv constructs the environment for a node.
 // Injects service discovery URLs from data_flow edges.
 func (e *DevEngine) buildEnv(node *graph.Node) map[string]string {
+	return resolveNodeEnv(e.graph, e.resolver, node)
+}
+
+func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node) map[string]string {
 	env := make(map[string]string)
 
 	// Port
@@ -224,15 +259,27 @@ func (e *DevEngine) buildEnv(node *graph.Node) map[string]string {
 	}
 
 	// Service discovery: inject URLs for nodes this one calls
-	for _, edge := range e.graph.EdgesFrom(node.ID) {
+	for _, edge := range g.EdgesFrom(node.ID) {
 		if edge.Type == config.EdgeDataFlow || edge.Type == config.EdgeDependsOn {
-			target := e.graph.Node(edge.To)
-			if target == nil || target.Port == 0 {
+			target := g.Node(edge.To)
+			if target == nil {
 				continue
 			}
-			// e.g. api → USER_SERVICE_URL=http://localhost:8081
-			envKey := envKeyFor(edge.To) + "_URL"
-			env[envKey] = fmt.Sprintf("http://localhost:%d", target.Port)
+			if target.Port != 0 {
+				// e.g. api → USER_SERVICE_URL=http://localhost:8081
+				envKey := envKeyFor(edge.To) + "_URL"
+				env[envKey] = fmt.Sprintf("http://localhost:%d", target.Port)
+			}
+			if a, ok := resolver.Adapter(target.Adapter); ok {
+				if c, ok := a.(adapter.Connectable); ok {
+					for key, value := range c.ConnectionEnv(adapter.ContainerContext{
+						NodeID:  target.ID,
+						Version: target.Config.Version,
+					}) {
+						env[key] = value
+					}
+				}
+			}
 		}
 	}
 
@@ -261,64 +308,6 @@ func (e *DevEngine) waitForShutdown() {
 	<-quit
 	fmt.Println()
 }
-
-// ---------------------------------------------------------------------------
-// Docker helpers
-// ---------------------------------------------------------------------------
-
-func dockerImageFor(node *graph.Node) string {
-	version := node.Config.Version
-	if version == "" {
-		version = "latest"
-	}
-	images := map[string]string{
-		"db:postgres":    "postgres:" + version,
-		"db:mysql":       "mysql:" + version,
-		"cache:redis":    "redis:" + version,
-		"storage:minio":  "minio/minio:" + version,
-		"queue:nats":     "nats:" + version,
-	}
-	if img, ok := images[node.Adapter]; ok {
-		return img
-	}
-	return node.Adapter // fallback: use adapter name as image
-}
-
-func buildDockerArgs(node *graph.Node, image string, port int) []string {
-	args := []string{
-		"run", "--rm",
-		"--name", "acthur-" + node.ID,
-		"-p", fmt.Sprintf("%d:%d", port, port),
-	}
-
-	// Adapter-specific env vars
-	switch node.Adapter {
-	case "db:postgres":
-		args = append(args,
-			"-e", "POSTGRES_PASSWORD=acthur",
-			"-e", "POSTGRES_USER=acthur",
-			"-e", "POSTGRES_DB=acthur_dev",
-		)
-	case "db:mysql":
-		args = append(args,
-			"-e", "MYSQL_ROOT_PASSWORD=acthur",
-			"-e", "MYSQL_DATABASE=acthur_dev",
-		)
-	case "storage:minio":
-		args = append(args,
-			"-e", "MINIO_ROOT_USER=acthur",
-			"-e", "MINIO_ROOT_PASSWORD=acthurdev",
-		)
-		args = append(args, "server", "/data", "--console-address", ":9001")
-	}
-
-	args = append(args, image)
-	return args
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func nodeDirectory(rootDir string, node *graph.Node) string {
 	// If the project is a monorepo, services live in subdirectories

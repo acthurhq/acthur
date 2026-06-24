@@ -38,6 +38,14 @@ func (registryResolver) Names() []string {
 	return adapter.Names()
 }
 
+func (registryResolver) Adapter(key string) (adapter.Adapter, bool) {
+	a, err := adapter.Resolve(key)
+	if err != nil {
+		return nil, false
+	}
+	return a, true
+}
+
 // ---------------------------------------------------------------------------
 // Root command
 // ---------------------------------------------------------------------------
@@ -206,7 +214,7 @@ var devCmd = &cobra.Command{
 manages their processes, starts the unified dev proxy, and enables hot reload.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, g := loadGraph()
-		eng := engine.NewDevEngine(cfg, g)
+		eng := engine.NewDevEngine(cfg, g, registryResolver{})
 		return eng.Start()
 	},
 }
@@ -906,6 +914,7 @@ var adapterInspectCmd = &cobra.Command{
 			adapter.CapabilityScaffold,
 			adapter.CapabilityRun,
 			adapter.CapabilityContainer,
+			adapter.CapabilityConnectable,
 			adapter.CapabilityMigrate,
 			adapter.CapabilityDeploy,
 		}
