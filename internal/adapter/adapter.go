@@ -67,6 +67,10 @@ type EnvVar struct {
 	Required    bool
 	Default     string
 	Secret      bool // should be in secrets provider, not .env
+	// Generate marks a value the kernel synthesizes when it is otherwise unset
+	// (e.g. a dev APP_SECRET). The kernel persists it for stable local dev.
+	// Only meaningful for Required Secret vars that have no Default.
+	Generate bool
 }
 
 // File represents a file that an adapter will scaffold into the project.

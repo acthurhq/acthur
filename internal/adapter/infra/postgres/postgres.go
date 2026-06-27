@@ -4,6 +4,8 @@
 package postgres
 
 import (
+	"fmt"
+
 	"github.com/acthur/acthur/internal/adapter"
 )
 
@@ -57,12 +59,22 @@ func (a *Adapter) Container(ctx adapter.ContainerContext) adapter.ContainerSpec 
 }
 
 // ConnectionEnv returns the connection variables exported to dependent nodes.
+// In the local dev context Postgres runs without TLS, so the URL declares
+// sslmode=disable to keep drivers from negotiating a connection the container
+// can't satisfy. The host port is read from the spec rather than hardcoded.
 func (a *Adapter) ConnectionEnv(ctx adapter.ContainerContext) map[string]string {
 	spec := a.Container(ctx)
+	port := 5432
+	if len(spec.Ports) > 0 {
+		port = spec.Ports[0]
+	}
 	return map[string]string{
-		"DATABASE_URL": "postgres://" +
-			spec.Env["POSTGRES_USER"] + ":" +
-			spec.Env["POSTGRES_PASSWORD"] + "@localhost:5432/" +
+		"DATABASE_URL": fmt.Sprintf(
+			"postgres://%s:%s@localhost:%d/%s?sslmode=disable",
+			spec.Env["POSTGRES_USER"],
+			spec.Env["POSTGRES_PASSWORD"],
+			port,
 			spec.Env["POSTGRES_DB"],
+		),
 	}
 }

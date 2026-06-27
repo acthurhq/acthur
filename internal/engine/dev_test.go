@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/acthur/acthur/internal/adapter"
+	"github.com/acthur/acthur/internal/adapter/backend/gofiber"
+	"github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
@@ -134,17 +136,95 @@ func TestResolveNodeEnv_InjectsConnectableEnvOnlyAcrossConnectionEdges(t *testin
 		},
 	}
 
-	apiEnv := resolveNodeEnv(g, resolver, api)
+	secrets := fakeSecretStore{}
+	apiEnv, err := resolveNodeEnv(g, resolver, api, secrets)
+	if err != nil {
+		t.Fatalf("resolve api env: %v", err)
+	}
 	if apiEnv["DATABASE_URL"] != "postgres://postgres:postgres@localhost:5432/db_development" {
 		t.Fatalf("expected api to receive DATABASE_URL, got %v", apiEnv)
 	}
-	webEnv := resolveNodeEnv(g, resolver, web)
+	webEnv, err := resolveNodeEnv(g, resolver, web, secrets)
+	if err != nil {
+		t.Fatalf("resolve web env: %v", err)
+	}
 	if webEnv["DATABASE_URL"] != "postgres://postgres:postgres@localhost:5432/db_development" {
 		t.Fatalf("expected web to receive DATABASE_URL, got %v", webEnv)
 	}
-	workerEnv := resolveNodeEnv(g, resolver, worker)
+	workerEnv, err := resolveNodeEnv(g, resolver, worker, secrets)
+	if err != nil {
+		t.Fatalf("resolve worker env: %v", err)
+	}
 	if _, ok := workerEnv["DATABASE_URL"]; ok {
 		t.Fatalf("expected unrelated worker to receive no DATABASE_URL, got %v", workerEnv)
+	}
+}
+
+// TestResolveNodeEnv_WitnessGraphBootsWithRealAdapters is the #33 witness at the
+// unit level: it composes the real go:fiber + db:postgres adapters exactly as the
+// Go Fiber + Postgres witness project does and asserts the service receives an env
+// that won't panic on boot — APP_SECRET synthesized, DATABASE_URL with sslmode.
+func TestResolveNodeEnv_WitnessGraphBootsWithRealAdapters(t *testing.T) {
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:fiber", Port: 8080}
+	db := &graph.Node{ID: "db", Type: config.NodeTypeInfra, Adapter: "db:postgres"}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api, "db": db})
+	g.AddEdge(&graph.Edge{From: "api", To: "db", Type: config.EdgeDependsOn})
+
+	resolver := fakeDevResolver{adapters: map[string]adapter.Adapter{
+		"go:fiber":    &gofiber.Adapter{},
+		"db:postgres": &postgres.Adapter{},
+	}}
+
+	env, err := resolveNodeEnv(g, resolver, api, fakeSecretStore{})
+	if err != nil {
+		t.Fatalf("resolve api env: %v", err)
+	}
+
+	if env["APP_SECRET"] == "" {
+		t.Fatal("expected APP_SECRET to be synthesized (config.Load mustGetEnv would panic otherwise)")
+	}
+	if env["APP_ENV"] != "development" {
+		t.Fatalf("expected APP_ENV default, got %q", env["APP_ENV"])
+	}
+	if env["APP_PORT"] != "8080" {
+		t.Fatalf("expected APP_PORT from node port, got %q", env["APP_PORT"])
+	}
+	if got := env["DATABASE_URL"]; !strings.Contains(got, "sslmode=disable") {
+		t.Fatalf("expected DATABASE_URL to disable sslmode for local dev, got %q", got)
+	}
+}
+
+func TestResolveNodeEnv_AppliesAdapterDefaultsAndSynthesizesSecrets(t *testing.T) {
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:env", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api})
+	resolver := fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"go:env": fakeEnvAdapter{vars: []adapter.EnvVar{
+				{Key: "APP_ENV", Default: "development"},
+				{Key: "APP_PORT", Default: "8080"}, // must not clobber the node's real port
+				{Key: "APP_SECRET", Required: true, Secret: true, Generate: true},
+				{Key: "DATABASE_URL", Required: true, Secret: true}, // no default, not generated → left unset
+			}},
+		},
+	}
+
+	secrets := fakeSecretStore{}
+	env, err := resolveNodeEnv(g, resolver, api, secrets)
+	if err != nil {
+		t.Fatalf("resolve env: %v", err)
+	}
+
+	if env["APP_ENV"] != "development" {
+		t.Fatalf("expected APP_ENV default applied, got %q", env["APP_ENV"])
+	}
+	if env["APP_PORT"] != "8080" {
+		t.Fatalf("expected APP_PORT to stay the node port, got %q", env["APP_PORT"])
+	}
+	if env["APP_SECRET"] != "secret::api::APP_SECRET" {
+		t.Fatalf("expected synthesized APP_SECRET, got %q", env["APP_SECRET"])
+	}
+	if _, ok := env["DATABASE_URL"]; ok {
+		t.Fatalf("expected DATABASE_URL unset (no default, not generated), got %q", env["DATABASE_URL"])
 	}
 }
 
@@ -211,6 +291,23 @@ func (f fakeAdapter) Name() string               { return f.name }
 func (f fakeAdapter) Category() adapter.Category { return f.category }
 func (f fakeAdapter) Detect(dir string) bool     { return false }
 func (f fakeAdapter) EnvVars() []adapter.EnvVar  { return nil }
+
+// fakeSecretStore returns deterministic values so env resolution is assertable
+// without touching disk.
+type fakeSecretStore struct{}
+
+func (fakeSecretStore) Secret(nodeID, key string) (string, error) {
+	return "secret::" + nodeID + "::" + key, nil
+}
+
+type fakeEnvAdapter struct {
+	vars []adapter.EnvVar
+}
+
+func (fakeEnvAdapter) Name() string                { return "go:env" }
+func (fakeEnvAdapter) Category() adapter.Category  { return adapter.CategoryBackend }
+func (fakeEnvAdapter) Detect(dir string) bool      { return false }
+func (f fakeEnvAdapter) EnvVars() []adapter.EnvVar { return f.vars }
 
 type fakeContainerAdapter struct {
 	healthcheck adapter.Healthcheck

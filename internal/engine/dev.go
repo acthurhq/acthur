@@ -53,6 +53,7 @@ type DevEngine struct {
 	pm       processManager
 	checker  healthChecker
 	proxy    *proxy.Proxy
+	secrets  secretStore
 	ctx      context.Context
 	cancel   context.CancelFunc
 }
@@ -66,6 +67,7 @@ func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver) 
 		resolver: resolver,
 		pm:       process.NewManager(),
 		checker:  health.New(),
+		secrets:  fileSecretStore{rootDir: cfg.RootDir},
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -206,7 +208,11 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	}
 
 	// Build env for this node
-	env := e.buildEnv(node)
+	env, err := e.buildEnv(node)
+	if err != nil {
+		e.graph.SetState(node.ID, graph.StateFailed)
+		return err
+	}
 	r, ok := a.(adapter.Runnable)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
@@ -215,7 +221,7 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	cmd := r.DevCommand(env)
 
 	nodeDir := nodeDirectory(e.cfg.RootDir, node)
-	_, err := e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
+	_, err = e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
 		return err
@@ -245,17 +251,38 @@ func (e *DevEngine) shutdown(order []*graph.Node) {
 
 // buildEnv constructs the environment for a node.
 // Injects service discovery URLs from data_flow edges.
-func (e *DevEngine) buildEnv(node *graph.Node) map[string]string {
-	return resolveNodeEnv(e.graph, e.resolver, node)
+func (e *DevEngine) buildEnv(node *graph.Node) (map[string]string, error) {
+	return resolveNodeEnv(e.graph, e.resolver, node, e.secrets)
 }
 
-func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node) map[string]string {
+func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node, secrets secretStore) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// Port
 	if node.Port != 0 {
 		env["PORT"] = fmt.Sprintf("%d", node.Port)
 		env["APP_PORT"] = fmt.Sprintf("%d", node.Port)
+	}
+
+	// Apply this node's own adapter EnvVars: defaults, and synthesized values
+	// for Generate-marked secrets. Engine-set keys (PORT) and edge-injected
+	// keys (DATABASE_URL) take precedence, so we never overwrite what's set.
+	if a, ok := resolver.Adapter(node.Adapter); ok {
+		for _, ev := range a.EnvVars() {
+			if _, exists := env[ev.Key]; exists {
+				continue
+			}
+			switch {
+			case ev.Default != "":
+				env[ev.Key] = ev.Default
+			case ev.Generate:
+				value, err := secrets.Secret(node.ID, ev.Key)
+				if err != nil {
+					return nil, fmt.Errorf("synthesize %s for %q: %w", ev.Key, node.ID, err)
+				}
+				env[ev.Key] = value
+			}
+		}
 	}
 
 	// Service discovery: inject URLs for nodes this one calls
@@ -283,7 +310,7 @@ func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node) 
 		}
 	}
 
-	return env
+	return env, nil
 }
 
 // printReady outputs the final "ready" message with all service URLs.

@@ -108,7 +108,7 @@ func (a *Adapter) EnvVars() []adapter.EnvVar {
 	return []adapter.EnvVar{
 		{Key: "APP_ENV", Description: "application environment", Required: true, Default: "development"},
 		{Key: "APP_PORT", Description: "HTTP port", Required: true, Default: "8080"},
-		{Key: "APP_SECRET", Description: "application secret key", Required: true, Secret: true},
+		{Key: "APP_SECRET", Description: "application secret key", Required: true, Secret: true, Generate: true},
 		{Key: "DATABASE_URL", Description: "PostgreSQL connection string", Required: true, Secret: true},
 		{Key: "REDIS_URL", Description: "Redis connection string", Required: false, Default: "redis://localhost:6379"},
 	}
