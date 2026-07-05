@@ -198,7 +198,12 @@ func (f *fakeDockerRunner) run(args ...string) error {
 	return nil
 }
 
-func TestResolveNodeEnv_InjectsConnectableEnvOnlyAcrossConnectionEdges(t *testing.T) {
+// TestResolveNodeEnv_InjectsConnectableEnvOnlyAcrossDependsOnEdges asserts
+// Connectable env (DATABASE_URL, etc.) is injected along depends_on edges
+// only. data_flow edges are contract-governed traffic (ADR 0012) — they get
+// a proxy flow route URL instead, never a Connectable env, even when they
+// target the same infra node a depends_on edge also reaches.
+func TestResolveNodeEnv_InjectsConnectableEnvOnlyAcrossDependsOnEdges(t *testing.T) {
 	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:fiber"}
 	web := &graph.Node{ID: "web", Type: config.NodeTypeService, Adapter: "go:fiber"}
 	db := &graph.Node{ID: "db", Type: config.NodeTypeInfra, Adapter: "db:connectable"}
@@ -219,26 +224,66 @@ func TestResolveNodeEnv_InjectsConnectableEnvOnlyAcrossConnectionEdges(t *testin
 	}
 
 	secrets := fakeSecretStore{}
-	apiEnv, err := resolveNodeEnv(g, resolver, api, secrets)
+	apiEnv, err := resolveNodeEnv(g, resolver, api, secrets, 4000)
 	if err != nil {
 		t.Fatalf("resolve api env: %v", err)
 	}
 	if apiEnv["DATABASE_URL"] != "postgres://postgres:postgres@localhost:5432/db_development" {
-		t.Fatalf("expected api to receive DATABASE_URL, got %v", apiEnv)
+		t.Fatalf("expected api (depends_on) to receive DATABASE_URL, got %v", apiEnv)
 	}
-	webEnv, err := resolveNodeEnv(g, resolver, web, secrets)
+	webEnv, err := resolveNodeEnv(g, resolver, web, secrets, 4000)
 	if err != nil {
 		t.Fatalf("resolve web env: %v", err)
 	}
-	if webEnv["DATABASE_URL"] != "postgres://postgres:postgres@localhost:5432/db_development" {
-		t.Fatalf("expected web to receive DATABASE_URL, got %v", webEnv)
+	if _, ok := webEnv["DATABASE_URL"]; ok {
+		t.Fatalf("expected web (data_flow) to receive no Connectable DATABASE_URL, got %v", webEnv)
 	}
-	workerEnv, err := resolveNodeEnv(g, resolver, worker, secrets)
+	workerEnv, err := resolveNodeEnv(g, resolver, worker, secrets, 4000)
 	if err != nil {
 		t.Fatalf("resolve worker env: %v", err)
 	}
 	if _, ok := workerEnv["DATABASE_URL"]; ok {
 		t.Fatalf("expected unrelated worker to receive no DATABASE_URL, got %v", workerEnv)
+	}
+}
+
+// TestResolveNodeEnv_DataFlowAndDependsOnEdgesDiverge is the direct assertion
+// that the two edge kinds resolve to different discovery URLs for the same
+// devPort/target port (ADR 0012): data_flow points at the proxy's flow
+// route, depends_on keeps the direct node-port URL.
+func TestResolveNodeEnv_DataFlowAndDependsOnEdgesDiverge(t *testing.T) {
+	web := &graph.Node{ID: "web", Type: config.NodeTypeService, Adapter: "go:fiber"}
+	worker := &graph.Node{ID: "worker", Type: config.NodeTypeService, Adapter: "go:fiber"}
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:fiber", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{
+		"web":    web,
+		"worker": worker,
+		"api":    api,
+	})
+	g.AddEdge(&graph.Edge{From: "web", To: "api", Type: config.EdgeDataFlow, Contracts: []string{"api"}})
+	g.AddEdge(&graph.Edge{From: "worker", To: "api", Type: config.EdgeDependsOn})
+
+	resolver := fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"go:fiber": fakeAdapter{name: "go:fiber", category: adapter.CategoryBackend},
+		},
+	}
+	secrets := fakeSecretStore{}
+
+	webEnv, err := resolveNodeEnv(g, resolver, web, secrets, 4000)
+	if err != nil {
+		t.Fatalf("resolve web env: %v", err)
+	}
+	if got := webEnv["API_URL"]; got != "http://localhost:4000/_flow/web/api" {
+		t.Fatalf("expected data_flow edge to resolve to the proxy flow route, got %q", got)
+	}
+
+	workerEnv, err := resolveNodeEnv(g, resolver, worker, secrets, 4000)
+	if err != nil {
+		t.Fatalf("resolve worker env: %v", err)
+	}
+	if got := workerEnv["API_URL"]; got != "http://localhost:8080" {
+		t.Fatalf("expected depends_on edge to resolve to the direct node URL, got %q", got)
 	}
 }
 
@@ -257,7 +302,7 @@ func TestResolveNodeEnv_WitnessGraphBootsWithRealAdapters(t *testing.T) {
 		"db:postgres": &postgres.Adapter{},
 	}}
 
-	env, err := resolveNodeEnv(g, resolver, api, fakeSecretStore{})
+	env, err := resolveNodeEnv(g, resolver, api, fakeSecretStore{}, 4000)
 	if err != nil {
 		t.Fatalf("resolve api env: %v", err)
 	}
@@ -291,7 +336,7 @@ func TestResolveNodeEnv_AppliesAdapterDefaultsAndSynthesizesSecrets(t *testing.T
 	}
 
 	secrets := fakeSecretStore{}
-	env, err := resolveNodeEnv(g, resolver, api, secrets)
+	env, err := resolveNodeEnv(g, resolver, api, secrets, 4000)
 	if err != nil {
 		t.Fatalf("resolve env: %v", err)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/acthur/acthur/internal/adapter"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/container"
+	"github.com/acthur/acthur/internal/contract"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
@@ -59,6 +60,13 @@ type DevEngine struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 
+	// registry is the optional contract registry consulted by the proxy to
+	// enforce contracts on data_flow flow routes. Nil means no enforcement.
+	registry *contract.Registry
+	// strict switches proxy contract enforcement from dev mode (log +
+	// forward) to strict mode (422 + block). Plumbed from `acthur dev --strict`.
+	strict bool
+
 	// runDocker executes a docker CLI command to completion. Seam for tests;
 	// used at shutdown to stop containers the engine started (killing the
 	// docker-run client alone leaves the container running).
@@ -68,10 +76,27 @@ type DevEngine struct {
 	containers []string
 }
 
+// DevEngineOption configures optional DevEngine behavior at construction time.
+type DevEngineOption func(*DevEngine)
+
+// WithStrict enables strict contract enforcement: the proxy blocks (422)
+// data_flow requests that violate their edge's contract instead of logging
+// and forwarding them. Wired from the `acthur dev --strict` flag.
+func WithStrict(strict bool) DevEngineOption {
+	return func(e *DevEngine) { e.strict = strict }
+}
+
+// WithContractRegistry configures the contract registry the proxy consults
+// to enforce contracts on data_flow flow routes. Without this option the
+// proxy still serves flow routes, but never checks a contract.
+func WithContractRegistry(r *contract.Registry) DevEngineOption {
+	return func(e *DevEngine) { e.registry = r }
+}
+
 // NewDevEngine creates a DevEngine. Call Start() to begin.
-func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver) *DevEngine {
+func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver, opts ...DevEngineOption) *DevEngine {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &DevEngine{
+	e := &DevEngine{
 		cfg:      cfg,
 		graph:    g,
 		resolver: resolver,
@@ -84,6 +109,10 @@ func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver) 
 			return exec.Command("docker", args...).Run()
 		},
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // Start runs the full startup sequence and blocks until shutdown.
@@ -128,7 +157,10 @@ func (e *DevEngine) Start() error {
 	}
 
 	// Start proxy
-	p, err := proxy.New(e.graph, e.cfg.Dev.Port)
+	p, err := proxy.New(e.graph, e.cfg.Dev.Port,
+		proxy.WithContractRegistry(e.registry),
+		proxy.WithStrict(e.strict),
+	)
 	if err != nil {
 		e.shutdown(order)
 		return fmt.Errorf("proxy setup failed: %w", err)
@@ -279,12 +311,23 @@ func (e *DevEngine) shutdown(order []*graph.Node) {
 }
 
 // buildEnv constructs the environment for a node.
-// Injects service discovery URLs from data_flow edges.
+// Injects service discovery URLs from data_flow and depends_on edges.
 func (e *DevEngine) buildEnv(node *graph.Node) (map[string]string, error) {
-	return resolveNodeEnv(e.graph, e.resolver, node, e.secrets)
+	return resolveNodeEnv(e.graph, e.resolver, node, e.secrets, e.cfg.Dev.Port)
 }
 
-func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node, secrets secretStore) (map[string]string, error) {
+// resolveNodeEnv builds the environment for node, injecting a discovery URL
+// along each outgoing edge. The two edge kinds diverge (ADR 0012):
+//
+//   - data_flow: contract-governed traffic. The target's discovery URL points
+//     at the dev proxy's flow route (http://localhost:<devPort>/_flow/<from>/<to>)
+//     so the proxy is the single east-west interception point where the
+//     edge's contract is enforced. No Connectable env is injected here —
+//     that is an infra-connection concern, not a data_flow concern.
+//   - depends_on: an infra dependency. It keeps today's direct node-port URL
+//     plus whatever Connectable env the target's adapter exports
+//     (DATABASE_URL, etc.) — contracts do not apply to depends_on.
+func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node, secrets secretStore, devPort int) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// Port
@@ -316,11 +359,24 @@ func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node, 
 
 	// Service discovery: inject URLs for nodes this one calls
 	for _, edge := range g.EdgesFrom(node.ID) {
-		if edge.Type == config.EdgeDataFlow || edge.Type == config.EdgeDependsOn {
-			target := g.Node(edge.To)
-			if target == nil {
-				continue
+		target := g.Node(edge.To)
+		if target == nil {
+			continue
+		}
+
+		switch edge.Type {
+		case config.EdgeDataFlow:
+			if target.Port != 0 {
+				// Contract-governed traffic is routed through the dev proxy's
+				// flow route so the proxy can enforce the edge's contract —
+				// e.g. web → API_URL=http://localhost:4000/_flow/web/api
+				envKey := envKeyFor(edge.To) + "_URL"
+				env[envKey] = fmt.Sprintf("http://localhost:%d/_flow/%s/%s", devPort, node.ID, edge.To)
 			}
+			// data_flow edges carry no Connectable env — contracts, not
+			// connection credentials, govern this traffic.
+
+		case config.EdgeDependsOn:
 			if target.Port != 0 {
 				// e.g. api → USER_SERVICE_URL=http://localhost:8081
 				envKey := envKeyFor(edge.To) + "_URL"
