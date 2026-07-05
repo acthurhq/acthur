@@ -6,12 +6,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/acthur/acthur/internal/adapter"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
 	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
+	"github.com/acthur/acthur/internal/contract"
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/engine"
 	"github.com/acthur/acthur/internal/graph"
@@ -44,6 +47,40 @@ func (registryResolver) Adapter(key string) (adapter.Adapter, bool) {
 		return nil, false
 	}
 	return a, true
+}
+
+// ---------------------------------------------------------------------------
+// contractPathResolver — wires internal/contract's project-relative loading
+// convention (contracts/<name>.contract.yml) to the graph.ContractResolver
+// interface. Assembled at the CLI entrypoint so the graph engine never
+// imports internal/contract (ADR 0005, same pattern as registryResolver).
+// ---------------------------------------------------------------------------
+
+type contractPathResolver struct {
+	root string
+}
+
+func (r contractPathResolver) Resolve(name string) (string, bool) {
+	path := contractFilePath(r.root, name)
+	if _, err := contract.ParseFile(path); err != nil {
+		return path, false
+	}
+	return path, true
+}
+
+// contractFilePath computes the expected file path for a data_flow edge's
+// contract entry. A bare name (e.g. "users") resolves to
+// contracts/users.contract.yml under root, per the Phase 4 convention.
+// An entry that already looks like a path (contains a '/' or already ends
+// in .contract.yml/.contract.yaml) is treated as relative-to-root as-is —
+// this keeps existing fixtures authored with full paths working.
+func contractFilePath(root, name string) string {
+	if strings.Contains(name, "/") ||
+		strings.HasSuffix(name, ".contract.yml") ||
+		strings.HasSuffix(name, ".contract.yaml") {
+		return filepath.Join(root, name)
+	}
+	return filepath.Join(root, "contracts", name+".contract.yml")
 }
 
 // ---------------------------------------------------------------------------
@@ -437,18 +474,10 @@ var contractValidateCmd = &cobra.Command{
 	Use:   "validate",
 	Short: "Validate all contract files structurally",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(4)
-	},
-}
-
-var contractDiffCmd = &cobra.Command{
-	Use:   "diff <contract-name>",
-	Short: "Show changes vs last committed version and flag breaking changes",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(4)
+		if code := runContractValidate(mustCwd()); code != 0 {
+			os.Exit(code)
+		}
+		return nil
 	},
 }
 
@@ -456,16 +485,159 @@ var contractListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all registered contracts with endpoint summary",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(4)
+		if code := runContractList(mustCwd()); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	},
+}
+
+var contractShowCmd = &cobra.Command{
+	Use:   "show <name>",
+	Short: "Show endpoint detail for a single contract",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if code := runContractShow(mustCwd(), args[0]); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	},
+}
+
+var contractDiffCmd = &cobra.Command{
+	Use:   "diff <old-file> <new-file>",
+	Short: "Diff two contract files and flag breaking changes",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if code := runContractDiff(args[0], args[1]); code != 0 {
+			os.Exit(code)
+		}
+		return nil
 	},
 }
 
 func init() {
-	contractDiffCmd.Flags().Bool("fail-on-breaking", false, "exit non-zero if any breaking changes exist")
 	contractCmd.AddCommand(contractValidateCmd)
 	contractCmd.AddCommand(contractDiffCmd)
 	contractCmd.AddCommand(contractListCmd)
+	contractCmd.AddCommand(contractShowCmd)
+}
+
+// runContractValidate loads and structurally validates every contract under
+// contracts/ in root (LoadDir folds structural Validate() into Register(),
+// so a load error already means "invalid"). Returns 0 on success — including
+// the "no contracts found" case, since an optional contracts/ dir is not a
+// failure — or output.ExitContractError on any load/parse/structural error.
+func runContractValidate(root string) int {
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	all := reg.All()
+	if len(all) == 0 {
+		output.Warn(output.PrefixContract, "no contracts found under %s", filepath.Join(root, "contracts"))
+		return 0
+	}
+
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	for _, c := range all {
+		output.Success(output.PrefixContract, "%s@%s is valid (%d endpoint(s), %s)", c.Name, c.Version, len(c.Endpoints), c.Transport)
+	}
+	return 0
+}
+
+// runContractList prints name, version, transport, and endpoint count for
+// every contract loadable from root.
+func runContractList(root string) int {
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	all := reg.All()
+	if len(all) == 0 {
+		output.Warn(output.PrefixContract, "no contracts found under %s", filepath.Join(root, "contracts"))
+		return 0
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+
+	output.Header("Contracts")
+	for _, c := range all {
+		output.Info(output.PrefixContract, "%-20s v%-6s %-8s %d endpoint(s)", c.Name, c.Version, c.Transport, len(c.Endpoints))
+	}
+	return 0
+}
+
+// runContractShow prints endpoint detail for the latest version of the
+// named contract loadable from root.
+func runContractShow(root, name string) int {
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	c, err := reg.GetLatest(name)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	output.Header(fmt.Sprintf("%s@%s (%s)", c.Name, c.Version, c.Transport))
+	for _, ep := range c.Endpoints {
+		output.Info(output.PrefixContract, "%-6s %-30s %s", ep.Method, ep.Path, ep.ID)
+		if ep.Auth != "" {
+			output.Info(output.PrefixContract, "  auth: %s", ep.Auth)
+		}
+		for field, typ := range ep.Input {
+			output.Info(output.PrefixContract, "  in    %s: %s", field, typ)
+		}
+		for field, typ := range ep.Output {
+			output.Info(output.PrefixContract, "  out   %s: %s", field, typ)
+		}
+	}
+	return 0
+}
+
+// runContractDiff parses two contract files and prints the classified
+// changes between them. Returns output.ExitContractBreak when any change is
+// breaking, 0 otherwise (including "no changes").
+func runContractDiff(oldPath, newPath string) int {
+	oldC, err := contract.ParseFile(oldPath)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+	newC, err := contract.ParseFile(newPath)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	result := contract.Diff(oldC, newC)
+	if len(result.Changes) == 0 {
+		output.Success(output.PrefixContract, "no changes between %s and %s", oldPath, newPath)
+		return 0
+	}
+
+	for _, ch := range result.Changes {
+		switch ch.Type {
+		case contract.ChangeBreaking:
+			output.Error(output.PrefixContract, "[breaking] %s", ch.Description)
+		case contract.ChangeNonBreaking:
+			output.Warn(output.PrefixContract, "[non-breaking] %s", ch.Description)
+		default:
+			output.Info(output.PrefixContract, "[info] %s", ch.Description)
+		}
+	}
+
+	if result.HasBreaking {
+		return int(output.ExitContractBreak)
+	}
+	return 0
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +674,7 @@ var graphValidateCmd = &cobra.Command{
 		}
 		sp.Stop(true, "graph built")
 
-		errs := g.Validate(registryResolver{})
+		errs := g.Validate(registryResolver{}, contractPathResolver{root: mustCwd()})
 		if len(errs) == 0 {
 			output.Success("graph", "all %d nodes and %d edges are valid",
 				len(g.Nodes()), len(g.Edges()))

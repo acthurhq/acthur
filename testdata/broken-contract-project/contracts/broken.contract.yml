@@ -1,0 +1,5 @@
+# Missing required 'contract' name field — used to test that
+# `acthur contract validate` fails loudly and names this file.
+version: "1"
+transport: http
+endpoints: []

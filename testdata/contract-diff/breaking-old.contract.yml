@@ -1,0 +1,14 @@
+contract: widgets
+version: "1"
+transport: http
+endpoints:
+  - id: get_widget
+    method: GET
+    path: /api/v1/widgets/:id
+    auth: none
+    output:
+      id: ulid
+      name: string
+  - id: list_widgets
+    method: GET
+    path: /api/v1/widgets
