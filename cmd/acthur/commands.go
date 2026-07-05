@@ -19,6 +19,7 @@ import (
 	"github.com/acthur/acthur/internal/engine"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
+	"github.com/acthur/acthur/internal/plugin"
 	"github.com/spf13/cobra"
 )
 
@@ -179,7 +180,10 @@ func loadConfig() *config.Config {
 	return cfg
 }
 
-// loadGraph loads acthur.yml and builds the graph.
+// loadGraph loads acthur.yml, builds the graph, and loads cfg.Plugins
+// through the real KernelAPI (ADR 0005 resolver-injection pattern) before
+// sealing the graph (ADR 0003 two-phase lifecycle). Plugins may mutate the
+// graph (AddNode/AddEdge) only during this window — Freeze() below ends it.
 func loadGraph() (*config.Config, *graph.Graph) {
 	cfg := loadConfig()
 	g, err := graph.Build(cfg)
@@ -192,7 +196,121 @@ func loadGraph() (*config.Config, *graph.Graph) {
 			DocsURL: "https://acthur.dev/docs/graph",
 		})
 	}
+
+	if err := loadPlugins(cfg, g); err != nil {
+		output.Fatal(&output.ActhurError{
+			Code:    output.ExitPluginError,
+			Message: "plugin loading failed",
+			Problem: err.Error(),
+			Fix:     "Run 'acthur plugin list' to see available plugins, or remove the offending entry from acthur.yml's plugins list.",
+		})
+	}
+
+	g.Freeze()
 	return cfg, g
+}
+
+// ---------------------------------------------------------------------------
+// Plugin loading — CLI assembly wiring for internal/plugin (Phase 5, ADR 0005/0003)
+// ---------------------------------------------------------------------------
+
+// kernelBus is the single kernel event bus shared by every plugin loaded
+// during this process's lifetime. Constructed once at CLI assembly.
+var kernelBus = plugin.NewBus()
+
+// loadedPlugins holds the result of the most recent loadPlugins call, used
+// by `acthur plugin list` to show which plugins are active for this project.
+var loadedPlugins []*plugin.LoadedPlugin
+
+// loadPlugins resolves cfg.Plugins against the plugin registry and loads
+// them, in dependency order, against a real KernelAPI bound to g and Root.
+// An unknown plugin name fails before anything is loaded or started, with a
+// pointed error naming the plugin and listing every registered plugin.
+//
+// Graph mutation via the KernelAPI (AddNode/AddEdge) is only valid here —
+// the caller must seal g (Freeze) immediately after this returns.
+func loadPlugins(cfg *config.Config, g *graph.Graph) error {
+	loadedPlugins = nil
+	if len(cfg.Plugins) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(cfg.Plugins))
+	for i, p := range cfg.Plugins {
+		names[i] = p.Name
+	}
+
+	if err := checkPluginsKnown(names); err != nil {
+		return err
+	}
+
+	k := plugin.NewKernelAPI(kernelBus, g, registerPluginCommand, pluginLog)
+
+	loaded, err := plugin.Load(names, kernelBus, k)
+	if err != nil {
+		return err
+	}
+	loadedPlugins = loaded
+	return nil
+}
+
+// checkPluginsKnown returns a pointed error naming the first unknown plugin
+// in names and listing every plugin registered in the plugin registry.
+func checkPluginsKnown(names []string) error {
+	available := plugin.All()
+	known := make(map[string]bool, len(available))
+	availableNames := make([]string, 0, len(available))
+	for _, p := range available {
+		known[p.Name()] = true
+		availableNames = append(availableNames, p.Name())
+	}
+	sort.Strings(availableNames)
+
+	for _, name := range names {
+		if known[name] {
+			continue
+		}
+		if len(availableNames) == 0 {
+			return fmt.Errorf("unknown plugin %q — no plugins are registered in this build", name)
+		}
+		return fmt.Errorf("unknown plugin %q — available plugins: %s", name, strings.Join(availableNames, ", "))
+	}
+	return nil
+}
+
+// registerPluginCommand adapts a plugin.CLICommand into a *cobra.Command
+// and attaches it to Root, so it appears in `acthur --help` and is runnable.
+func registerPluginCommand(cmd plugin.CLICommand) {
+	cc := &cobra.Command{
+		Use:   cmd.Use,
+		Short: cmd.Short,
+		Long:  cmd.Long,
+		RunE: func(_ *cobra.Command, args []string) error {
+			if cmd.Run == nil {
+				return nil
+			}
+			return cmd.Run(args)
+		},
+	}
+	for _, f := range cmd.Flags {
+		cc.Flags().StringP(f.Name, f.Short, f.Default, f.Usage)
+	}
+	Root.AddCommand(cc)
+}
+
+// pluginLog routes plugin.KernelAPI.Log calls through the kernel's output
+// system, scoped under the "plugin" prefix.
+func pluginLog(level plugin.LogLevel, format string, args ...any) {
+	switch level {
+	case plugin.LogWarn:
+		output.Warn(output.PrefixPlugin, format, args...)
+	case plugin.LogError:
+		output.Error(output.PrefixPlugin, format, args...)
+	case plugin.LogDebug:
+		output.Debug(output.PrefixPlugin, format, args...)
+	default:
+		output.Info(output.PrefixPlugin, format, args...)
+	}
 }
 
 // notImplemented prints a "coming soon" message for Phase N commands.
@@ -757,7 +875,28 @@ var pluginListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List installed and available plugins",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return notImplemented(5)
+		_, _ = loadGraph()
+
+		output.Header("Loaded plugins")
+		if len(loadedPlugins) == 0 {
+			output.Info(output.PrefixPlugin, "no plugins loaded — add entries under 'plugins:' in acthur.yml")
+		} else {
+			for _, lp := range loadedPlugins {
+				output.Info(output.PrefixPlugin, "%-20s v%s", lp.Plugin.Name(), lp.Plugin.Version())
+			}
+		}
+
+		all := plugin.All()
+		output.Header("Available plugins")
+		if len(all) == 0 {
+			output.Info(output.PrefixPlugin, "no plugins registered in this build")
+			return nil
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].Name() < all[j].Name() })
+		for _, p := range all {
+			output.Info(output.PrefixPlugin, "%-20s v%s", p.Name(), p.Version())
+		}
+		return nil
 	},
 }
 
