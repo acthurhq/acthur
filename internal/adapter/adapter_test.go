@@ -731,3 +731,108 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+// TestGoFiber_Scaffold_ServesHealthThroughProxyPrefix: the dev proxy routes
+// /api/* to the api service without stripping the prefix, so the scaffolded
+// service must expose health under its /api prefix as well as at /health
+// (the kernel checker's contract). Found by the #33 live witness:
+// curl localhost:4000/api/health 404'd through the proxy.
+func TestGoFiber_Scaffold_ServesHealthThroughProxyPrefix(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "testproject",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if f.Path != "internal/server/routes.go" {
+			continue
+		}
+		content := string(f.Content)
+		if !strings.Contains(content, `app.Get("/health", health.Handler)`) {
+			t.Error("expected kernel health contract route /health")
+		}
+		if !strings.Contains(content, `app.Get("/api/health", health.Handler)`) {
+			t.Error("expected through-proxy health route /api/health")
+		}
+		return
+	}
+	t.Fatal("internal/server/routes.go not in scaffolded files")
+}
+
+// TestGoFiber_Scaffold_LoggerReportsErrorStatus: the logger middleware runs
+// before Fiber's error handler writes the response, so on an error path
+// c.Response().StatusCode() is still the default 200. The scaffolded logger
+// must derive the status from the returned *fiber.Error (the #33 witness
+// showed 404 responses logged as status 200).
+func TestGoFiber_Scaffold_LoggerReportsErrorStatus(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "testproject",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if f.Path != "internal/middleware/logger.go" {
+			continue
+		}
+		content := string(f.Content)
+		if !strings.Contains(content, "*fiber.Error") {
+			t.Error("expected logger to derive status from the returned *fiber.Error on error paths")
+		}
+		return
+	}
+	t.Fatal("internal/middleware/logger.go not in scaffolded files")
+}
+
+// TestGoFiber_Scaffold_AirRerunsCrashedBinary: when the service binary exits
+// (panic, or a transient bind failure during a supervised restart), air must
+// rerun it rather than give up until the next file change — otherwise a
+// crashed service stays down with air alive, invisible to the supervisor
+// (found by the #33 live witness).
+func TestGoFiber_Scaffold_AirRerunsCrashedBinary(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "testproject",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if f.Path != ".air.toml" {
+			continue
+		}
+		content := string(f.Content)
+		if !strings.Contains(content, "rerun = true") {
+			t.Error("expected air rerun = true so a crashed binary is rerun")
+		}
+		if !strings.Contains(content, "rerun_delay") {
+			t.Error("expected rerun_delay so a persistently-failing binary does not spin")
+		}
+		return
+	}
+	t.Fatal(".air.toml not in scaffolded files")
+}

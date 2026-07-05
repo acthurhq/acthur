@@ -35,11 +35,11 @@ const (
 
 // Process wraps an os/exec.Cmd with supervision, log routing, and state tracking.
 type Process struct {
-	NodeID  string
-	Bin     string
-	Args    []string
-	Env     map[string]string
-	Dir     string
+	NodeID string
+	Bin    string
+	Args   []string
+	Env    map[string]string
+	Dir    string
 
 	cmd      *exec.Cmd
 	state    State
@@ -94,6 +94,18 @@ func (p *Process) Start(ctx context.Context) error {
 
 func (p *Process) startLocked(ctx context.Context) error {
 	p.cmd = exec.CommandContext(ctx, p.Bin, p.Args...)
+
+	// Graceful cancellation: deliver SIGTERM to the whole process group so the
+	// full tree can clean up (air stops its compiled binary, docker-run proxies
+	// the signal into the container). The default context-cancel behavior is an
+	// immediate SIGKILL of only the direct child, which gives it no chance and
+	// orphans grandchildren — an orphan keeps its port bound, so a supervised
+	// restart could never recover. Stop() still force-kills on timeout.
+	setProcessGroup(p.cmd)
+	cmd := p.cmd
+	p.cmd.Cancel = func() error {
+		return terminateTree(cmd)
+	}
 
 	// Build environment: inherit current env + override with process-specific vars
 	p.cmd.Env = os.Environ()
@@ -166,9 +178,10 @@ func (p *Process) Stop(timeout time.Duration) error {
 		p.setState(StateStopped)
 		return nil
 	case <-time.After(timeout):
-		// Force kill
+		// Force kill the whole process group — killing only the direct child
+		// would orphan grandchildren (air's compiled binary).
 		if p.cmd != nil && p.cmd.Process != nil {
-			p.cmd.Process.Kill()
+			killTree(p.cmd) //nolint:errcheck // best-effort force kill
 		}
 		p.outputWG.Wait()
 		p.setState(StateStopped)
@@ -183,7 +196,25 @@ func (p *Process) Restart(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// If the process crashed (rather than being stopped by us), the context
+	// Cancel never fired — it only runs while the process is alive — so its
+	// process group may still hold orphaned grandchildren. Reap them before
+	// starting the replacement, or an orphan keeps the port bound and the
+	// restarted service can never come up.
+	if p.cmd != nil && p.cmd.Process != nil {
+		killTree(p.cmd) //nolint:errcheck // best-effort orphan reaping
+	}
 	return p.startLocked(ctx)
+}
+
+// Pid returns the OS process ID of the running process, or 0 if not running.
+func (p *Process) Pid() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
 }
 
 // State returns the current process state.
@@ -234,10 +265,10 @@ func (p *Process) pipeLines(r io.Reader) {
 
 // SupervisionPolicy defines how a process is restarted on failure.
 type SupervisionPolicy struct {
-	MaxRestarts   int           // 0 = unlimited
-	InitialDelay  time.Duration // delay before first restart
-	MaxDelay      time.Duration // cap on exponential backoff
-	ResetAfter    time.Duration // reset restart count if stable for this long
+	MaxRestarts  int           // 0 = unlimited
+	InitialDelay time.Duration // delay before first restart
+	MaxDelay     time.Duration // cap on exponential backoff
+	ResetAfter   time.Duration // reset restart count if stable for this long
 }
 
 // DefaultPolicy is the default supervision policy for service nodes.
@@ -250,8 +281,8 @@ var DefaultPolicy = SupervisionPolicy{
 
 // Supervisor watches a Process and restarts it according to a policy.
 type Supervisor struct {
-	process *Process
-	policy  SupervisionPolicy
+	process  *Process
+	policy   SupervisionPolicy
 	onGiveUp func(nodeID string, restarts int)
 }
 
@@ -353,11 +384,11 @@ func (s *Supervisor) backoff(restarts int) time.Duration {
 // Manager tracks all managed processes in the system.
 // It is the single place the dev engine creates and monitors processes.
 type Manager struct {
-	processes map[string]*Process
+	processes   map[string]*Process
 	supervisors map[string]*Supervisor
-	mu        sync.RWMutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	mu          sync.RWMutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // NewManager creates a process manager.

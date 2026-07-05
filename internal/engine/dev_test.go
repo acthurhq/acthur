@@ -77,6 +77,46 @@ func TestStart_UnknownAdapterFailsValidationBeforeStartup(t *testing.T) {
 	}
 }
 
+// TestStartNode_SkipsKernelMaterializedProxyNode: the graph always materializes
+// the kernel proxy node ("kernel:proxy"). The engine runs the proxy itself —
+// startNode must not try to resolve kernel-namespaced nodes through the adapter
+// resolver (the #33 live witness failed startup on exactly this).
+func TestStartNode_SkipsKernelMaterializedProxyNode(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"api": {Type: config.NodeTypeService, Adapter: "go:fiber"},
+			},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("build graph: %v", err)
+	}
+	proxyNode := g.Node("proxy")
+	if proxyNode == nil {
+		t.Fatal("expected materialized proxy node in graph")
+	}
+
+	pm := &fakeProcessManager{}
+	eng := NewDevEngine(cfg, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"go:fiber": fakeAdapter{name: "go:fiber", category: adapter.CategoryBackend},
+		},
+	})
+	eng.pm = pm
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startNode(proxyNode); err != nil {
+		t.Fatalf("expected kernel proxy node to be skipped, got error: %v", err)
+	}
+	if pm.bin != "" {
+		t.Fatalf("expected no process spawned for kernel proxy node, got %q", pm.bin)
+	}
+}
+
 func TestStartInfraNode_UsesResolvedAdapterContainerSpecForDockerArgs(t *testing.T) {
 	node := &graph.Node{
 		ID:      "db",
@@ -114,6 +154,48 @@ func TestStartInfraNode_UsesResolvedAdapterContainerSpecForDockerArgs(t *testing
 	if !reflect.DeepEqual(pm.args, want) {
 		t.Fatalf("docker args mismatch\nwant: %#v\n got: %#v", want, pm.args)
 	}
+}
+
+// TestShutdown_StopsStartedContainersViaDockerStop: killing the docker-run
+// client process does not stop the container it launched. Shutdown must issue
+// `docker stop` for every container the engine started (found by the #33
+// live witness: teardown reported "stopped" while acthur-db kept running).
+func TestShutdown_StopsStartedContainersViaDockerStop(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+		Config:  config.NodeConfig{Version: "14"},
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	docker := &fakeDockerRunner{}
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"db:custom": fakeContainerAdapter{},
+		},
+	})
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+	eng.runDocker = docker.run
+
+	if err := eng.startInfraNode(node); err != nil {
+		t.Fatalf("start infra node: %v", err)
+	}
+	eng.shutdown([]*graph.Node{node})
+
+	want := [][]string{{"stop", "acthur-db"}}
+	if !reflect.DeepEqual(docker.calls, want) {
+		t.Fatalf("docker stop calls mismatch\nwant: %#v\n got: %#v", want, docker.calls)
+	}
+}
+
+type fakeDockerRunner struct {
+	calls [][]string
+}
+
+func (f *fakeDockerRunner) run(args ...string) error {
+	f.calls = append(f.calls, append([]string(nil), args...))
+	return nil
 }
 
 func TestResolveNodeEnv_InjectsConnectableEnvOnlyAcrossConnectionEdges(t *testing.T) {

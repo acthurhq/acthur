@@ -39,6 +39,14 @@ func ToRunArgs(spec adapter.ContainerSpec, nodeID string) []string {
 	return args
 }
 
+// ToStopArgs projects a node ID onto the `docker stop` arguments that stop
+// the container ToRunArgs named. Stopping the container (rather than killing
+// the docker-run client) is the only way the containerized process actually
+// terminates; with --rm the client then exits and cleans up on its own.
+func ToStopArgs(nodeID string) []string {
+	return []string{"stop", "acthur-" + nodeID}
+}
+
 func imageRef(spec adapter.ContainerSpec) string {
 	if spec.Tag == "" {
 		return spec.Image

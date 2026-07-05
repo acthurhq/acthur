@@ -39,3 +39,14 @@ func TestToRunArgs_ProjectsContainerSpecToDockerRunArgs(t *testing.T) {
 		t.Fatalf("docker run args mismatch\nwant: %#v\n got: %#v", want, got)
 	}
 }
+
+// TestToStopArgs_ProjectsNodeIDToDockerStopArgs: stopping an infra node must
+// stop the *container*, not just the docker-run client process — killing the
+// client leaves the container running (found by the #33 live witness).
+func TestToStopArgs_ProjectsNodeIDToDockerStopArgs(t *testing.T) {
+	got := container.ToStopArgs("db")
+	want := []string{"stop", "acthur-db"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("stop args mismatch\nwant: %#v\n got: %#v", want, got)
+	}
+}

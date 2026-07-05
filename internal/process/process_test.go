@@ -2,7 +2,10 @@ package process_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -278,4 +281,124 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestProcess_StopDeliversSIGTERMBeforeKill: Stop's contract is graceful
+// termination — the child must receive SIGTERM and get a chance to clean up
+// (air kills its compiled binary, docker-run proxies the signal to the
+// container). A context-cancel SIGKILL gives the child no chance at all.
+func TestProcess_StopDeliversSIGTERMBeforeKill(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping signal test")
+	}
+
+	marker := t.TempDir() + "/got-term"
+	script := `trap 'echo yes > ` + marker + `; exit 0' TERM; while true; do sleep 0.1; done`
+	p := process.NewProcess("term-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond) // let the trap install
+
+	if err := p.Stop(5 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("expected child to observe SIGTERM (marker file missing): %v", err)
+	}
+}
+
+// TestProcess_StopTerminatesWholeProcessTree: dev tools (air) spawn the real
+// service binary as a child. Stopping only the direct child orphans the
+// grandchild, which keeps the port bound so a supervised restart can never
+// recover (found by the #33 live witness). Stop must take down the whole
+// process group.
+func TestProcess_StopTerminatesWholeProcessTree(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping process-group test")
+	}
+
+	pidFile := t.TempDir() + "/grandchild.pid"
+	script := `sleep 60 & echo $! > ` + pidFile + `; wait`
+	p := process.NewProcess("tree-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("grandchild pid never appeared")
+	}
+
+	if err := p.Stop(5 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if err := syscall.Kill(pid, 0); err == nil {
+		syscall.Kill(pid, syscall.SIGKILL) // clean up
+		t.Fatalf("grandchild %d survived Stop — process tree not terminated", pid)
+	}
+}
+
+// TestProcess_RestartReapsOrphanedGrandchildren: when the supervised process
+// is killed externally (crash), its grandchildren are orphaned — the context
+// Cancel never fires because the process already exited. Restart must reap
+// the old process group before starting the replacement, or the orphan keeps
+// the port bound and the restarted service can never come up (found by the
+// #33 live witness).
+func TestProcess_RestartReapsOrphanedGrandchildren(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping process-group test")
+	}
+
+	pidFile := t.TempDir() + "/grandchild.pid"
+	script := `sleep 60 & echo $! > ` + pidFile + `; wait`
+	p := process.NewProcess("orphan-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("grandchild pid never appeared")
+	}
+
+	// Simulate a hard crash of the supervised process itself.
+	syscall.Kill(p.Pid(), syscall.SIGKILL)
+	time.Sleep(200 * time.Millisecond)
+
+	if err := p.Restart(ctx); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer p.Stop(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	if err := syscall.Kill(pid, 0); err == nil {
+		syscall.Kill(pid, syscall.SIGKILL) // clean up
+		t.Fatalf("orphaned grandchild %d survived restart", pid)
+	}
 }

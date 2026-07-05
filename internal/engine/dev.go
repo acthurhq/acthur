@@ -8,7 +8,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,6 +58,14 @@ type DevEngine struct {
 	secrets  secretStore
 	ctx      context.Context
 	cancel   context.CancelFunc
+
+	// runDocker executes a docker CLI command to completion. Seam for tests;
+	// used at shutdown to stop containers the engine started (killing the
+	// docker-run client alone leaves the container running).
+	runDocker func(args ...string) error
+	// containers records node IDs whose containers the engine started,
+	// so shutdown stops exactly what it created.
+	containers []string
 }
 
 // NewDevEngine creates a DevEngine. Call Start() to begin.
@@ -70,6 +80,9 @@ func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver) 
 		secrets:  fileSecretStore{rootDir: cfg.RootDir},
 		ctx:      ctx,
 		cancel:   cancel,
+		runDocker: func(args ...string) error {
+			return exec.Command("docker", args...).Run()
+		},
 	}
 }
 
@@ -144,6 +157,12 @@ func (e *DevEngine) Start() error {
 
 // startNode starts a single graph node according to its type.
 func (e *DevEngine) startNode(node *graph.Node) error {
+	// kernel:* nodes are materialized and run by the kernel itself (the proxy
+	// is started by the engine after all graph nodes) — they never resolve
+	// through the adapter registry, mirroring the graph validation exemption.
+	if strings.HasPrefix(node.Adapter, "kernel:") {
+		return nil
+	}
 	switch node.Type {
 	case config.NodeTypeInfra:
 		return e.startInfraNode(node)
@@ -185,6 +204,7 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 		e.graph.SetState(node.ID, graph.StateFailed)
 		return err
 	}
+	e.containers = append(e.containers, node.ID)
 
 	strategy := health.InfraStrategy("acthur-"+node.ID, spec.Healthcheck.Test, nil)
 	if err := e.checker.WaitForStrategy(e.ctx, node, strategy, 60*time.Second); err != nil {
@@ -239,9 +259,18 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	return nil
 }
 
-// shutdown stops all processes in reverse order.
+// shutdown stops all processes in reverse order. Containers the engine
+// started are stopped through the container runtime first — stopping only
+// the docker-run client process would leave them running.
 func (e *DevEngine) shutdown(order []*graph.Node) {
 	e.cancel()
+	for i := len(e.containers) - 1; i >= 0; i-- {
+		nodeID := e.containers[i]
+		if err := e.runDocker(container.ToStopArgs(nodeID)...); err != nil {
+			output.Warn(nodeID, "container stop error: %v", err)
+		}
+	}
+	e.containers = nil
 	ids := make([]string, len(order))
 	for i, n := range order {
 		ids[i] = n.ID

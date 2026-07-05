@@ -18,10 +18,22 @@ func Logger() fiber.Handler {
 		err := c.Next()
 		latency := time.Since(start)
 
+		// The error handler runs after this middleware returns, so on error
+		// paths the response status is still the default 200 — derive the
+		// real status from the error instead.
+		status := c.Response().StatusCode()
+		if err != nil {
+			if fe, ok := err.(*fiber.Error); ok {
+				status = fe.Code
+			} else {
+				status = fiber.StatusInternalServerError
+			}
+		}
+
 		log.Info("request",
 			zap.String("method", c.Method()),
 			zap.String("path", c.Path()),
-			zap.Int("status", c.Response().StatusCode()),
+			zap.Int("status", status),
 			zap.Duration("latency", latency),
 			zap.String("request_id", c.GetRespHeader("X-Request-ID")),
 			zap.String("ip", c.IP()),
