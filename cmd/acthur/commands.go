@@ -256,7 +256,14 @@ violates its edge's contract instead of logging the violation and
 forwarding it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, g := loadGraph()
-		eng := engine.NewDevEngine(cfg, g, registryResolver{}, engine.WithStrict(devStrict))
+		reg, err := contract.LoadDir(cfg.RootDir)
+		if err != nil {
+			return fmt.Errorf("loading contracts: %w", err)
+		}
+		eng := engine.NewDevEngine(cfg, g, registryResolver{},
+			engine.WithStrict(devStrict),
+			engine.WithContractRegistry(reg),
+		)
 		return eng.Start()
 	},
 }
