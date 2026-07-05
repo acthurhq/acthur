@@ -205,16 +205,21 @@ existing files.`,
 var (
 	devDocker bool
 	devEnv    string
+	devStrict bool
 )
 
 var devCmd = &cobra.Command{
 	Use:   "dev",
 	Short: "Start the development environment",
 	Long: `Starts all services defined in acthur.yml in the correct order,
-manages their processes, starts the unified dev proxy, and enables hot reload.`,
+manages their processes, starts the unified dev proxy, and enables hot reload.
+
+With --strict, the dev proxy blocks (422) any data_flow request that
+violates its edge's contract instead of logging the violation and
+forwarding it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, g := loadGraph()
-		eng := engine.NewDevEngine(cfg, g, registryResolver{})
+		eng := engine.NewDevEngine(cfg, g, registryResolver{}, engine.WithStrict(devStrict))
 		return eng.Start()
 	},
 }
@@ -222,6 +227,7 @@ manages their processes, starts the unified dev proxy, and enables hot reload.`,
 func init() {
 	devCmd.Flags().BoolVar(&devDocker, "docker", false, "run all services in Docker (full containerization)")
 	devCmd.Flags().StringVar(&devEnv, "env", "dev", "environment name from acthur.yml")
+	devCmd.Flags().BoolVar(&devStrict, "strict", false, "block (422) data_flow requests that violate their contract instead of logging and forwarding")
 }
 
 // ---------------------------------------------------------------------------
