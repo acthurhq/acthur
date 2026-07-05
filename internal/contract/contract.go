@@ -7,7 +7,7 @@ package contract
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -32,33 +32,33 @@ const (
 // Contract is the fully-parsed representation of a .contract.yml file.
 // It is the source of truth for what can flow on a data_flow graph edge.
 type Contract struct {
-	Name      string               `yaml:"contract"`
-	Version   string               `yaml:"version"`
-	Transport Transport            `yaml:"transport"`
-	Endpoints []Endpoint           `yaml:"endpoints"`
-	Events    []EventDef           `yaml:"events"`
-	Types     map[string]TypeDef   `yaml:"types"`
+	Name      string             `yaml:"contract"`
+	Version   string             `yaml:"version"`
+	Transport Transport          `yaml:"transport"`
+	Endpoints []Endpoint         `yaml:"endpoints"`
+	Events    []EventDef         `yaml:"events"`
+	Types     map[string]TypeDef `yaml:"types"`
 
 	// Runtime fields
-	FilePath  string `yaml:"-"`
-	Checksum  string `yaml:"-"`
+	FilePath string `yaml:"-"`
+	Checksum string `yaml:"-"`
 }
 
 // Endpoint defines one operation exposed by the contract.
 type Endpoint struct {
-	ID          string            `yaml:"id"`
-	Method      string            `yaml:"method"`
-	Path        string            `yaml:"path"`
-	Auth        string            `yaml:"auth"`    // "required" | "optional" | "none"
-	Roles       []string          `yaml:"roles"`
-	RateLimit   RateLimitDef      `yaml:"rate_limit"`
-	Input       map[string]string `yaml:"input"`   // field: type(constraints)
-	Output      map[string]string `yaml:"output"`  // field: type
-	Errors      []ErrorDef        `yaml:"errors"`
-	Deprecated  bool              `yaml:"deprecated"`
-	DeprecatedAt string           `yaml:"deprecated_at"`
-	SunsetAt    string            `yaml:"sunset_at"`
-	Streaming   string            `yaml:"streaming"` // for gRPC: server|client|bidirectional
+	ID           string            `yaml:"id"`
+	Method       string            `yaml:"method"`
+	Path         string            `yaml:"path"`
+	Auth         string            `yaml:"auth"` // "required" | "optional" | "none"
+	Roles        []string          `yaml:"roles"`
+	RateLimit    RateLimitDef      `yaml:"rate_limit"`
+	Input        map[string]string `yaml:"input"`  // field: type(constraints)
+	Output       map[string]string `yaml:"output"` // field: type
+	Errors       []ErrorDef        `yaml:"errors"`
+	Deprecated   bool              `yaml:"deprecated"`
+	DeprecatedAt string            `yaml:"deprecated_at"`
+	SunsetAt     string            `yaml:"sunset_at"`
+	Streaming    string            `yaml:"streaming"` // for gRPC: server|client|bidirectional
 }
 
 // RateLimitDef defines rate limiting for an endpoint.
@@ -90,26 +90,31 @@ type TypeDef struct {
 // ---------------------------------------------------------------------------
 
 // ParseFile reads and parses a .contract.yml file.
-// It also accepts .proto, .openapi.yml, and .graphql files — those are
-// compiled to the Contract representation before being returned.
+//
+// Phase 4 loads native .contract.yml contracts only (PRD §11.1 lists .proto,
+// .openapi.yml, and .graphql as accepted formats, but their importers are
+// out of scope for this phase — see docs/prd/phase-4-contract-engine.md,
+// "Out of Scope"). Rather than silently returning an empty/stub Contract,
+// those extensions get an explicit, honest error.
 func ParseFile(path string) (*Contract, error) {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".openapi.yml"), strings.HasSuffix(lower, ".openapi.yaml"):
+		return nil, fmt.Errorf("contract import for openapi is not yet supported (Phase 4 loads native .contract.yml only)")
+	case strings.HasSuffix(lower, ".proto"):
+		return nil, fmt.Errorf("contract import for proto is not yet supported (Phase 4 loads native .contract.yml only)")
+	case strings.HasSuffix(lower, ".graphql"), strings.HasSuffix(lower, ".gql"):
+		return nil, fmt.Errorf("contract import for graphql is not yet supported (Phase 4 loads native .contract.yml only)")
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read contract file %q: %w", path, err)
 	}
 
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".yml", ".yaml":
-		return parseYAML(path, data)
-	case ".proto":
-		return parseProto(path, data)
-	case ".graphql", ".gql":
-		return parseGraphQL(path, data)
-	default:
-		// Try YAML by default (e.g. .contract files)
-		return parseYAML(path, data)
-	}
+	// Everything else (.yml, .yaml, or extensionless .contract files) is
+	// parsed as the native format.
+	return parseYAML(path, data)
 }
 
 func parseYAML(path string, data []byte) (*Contract, error) {
@@ -129,26 +134,6 @@ func parseYAML(path string, data []byte) (*Contract, error) {
 	c.FilePath = path
 	c.Checksum = checksum(data)
 	return &c, nil
-}
-
-// parseProto is a stub — full implementation reads protobuf descriptors.
-func parseProto(path string, _ []byte) (*Contract, error) {
-	return &Contract{
-		Name:      filepath.Base(strings.TrimSuffix(path, filepath.Ext(path))),
-		Version:   "1",
-		Transport: TransportGRPC,
-		FilePath:  path,
-	}, nil
-}
-
-// parseGraphQL is a stub — full implementation reads GraphQL SDL.
-func parseGraphQL(path string, _ []byte) (*Contract, error) {
-	return &Contract{
-		Name:      filepath.Base(strings.TrimSuffix(path, filepath.Ext(path))),
-		Version:   "1",
-		Transport: TransportGraphQL,
-		FilePath:  path,
-	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +346,39 @@ func Diff(old, next *Contract) *DiffResult {
 				)
 			}
 		}
+
+		// Constraint changes on input fields present in both versions
+		// (stricter → breaking, looser → non-breaking; §11.5).
+		for field, newTyp := range newEP.Input {
+			oldTyp, exists := oldEP.Input[field]
+			if !exists {
+				continue // handled by the "field added" case above
+			}
+			oldConstraints := parseConstraints(oldTyp)
+			newConstraints := parseConstraints(newTyp)
+			for _, kind := range []string{"max", "min"} {
+				oldVal, oldOK := oldConstraints[kind]
+				newVal, newOK := newConstraints[kind]
+				if !oldOK || !newOK || oldVal == newVal {
+					continue
+				}
+				stricter, changed := constraintTightened(kind, oldVal, newVal)
+				if !changed {
+					continue
+				}
+				if stricter {
+					result.addBreaking(
+						fmt.Sprintf("endpoint %q: input field %q constraint %s tightened from %s to %s", id, field, kind, oldVal, newVal),
+						fmt.Sprintf("endpoints.%s.input.%s.%s", id, field, kind),
+					)
+				} else {
+					result.addNonBreaking(
+						fmt.Sprintf("endpoint %q: input field %q constraint %s loosened from %s to %s", id, field, kind, oldVal, newVal),
+						fmt.Sprintf("endpoints.%s.input.%s.%s", id, field, kind),
+					)
+				}
+			}
+		}
 	}
 
 	// Check for removed types (breaking if used in endpoint output)
@@ -371,6 +389,61 @@ func Diff(old, next *Contract) *DiffResult {
 	}
 
 	return result
+}
+
+// parseConstraints extracts the constraint list from a field type string
+// such as "string(required,max:100)" into {"required": "", "max": "100"}.
+// Bare flags (no ":") map to an empty value. Types with no parens (e.g.
+// "string" or "url?") yield an empty, non-nil map.
+func parseConstraints(typ string) map[string]string {
+	m := make(map[string]string)
+	start := strings.Index(typ, "(")
+	end := strings.LastIndex(typ, ")")
+	if start == -1 || end == -1 || end < start {
+		return m
+	}
+	inner := typ[start+1 : end]
+	for _, part := range strings.Split(inner, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if idx := strings.Index(part, ":"); idx != -1 {
+			m[strings.TrimSpace(part[:idx])] = strings.TrimSpace(part[idx+1:])
+		} else {
+			m[part] = ""
+		}
+	}
+	return m
+}
+
+// constraintTightened reports whether a constraint's value became stricter
+// (more restrictive for callers) going from oldVal to newVal.
+//
+//   - "max" bounds an upper limit (e.g. string length): a smaller max is
+//     stricter, a larger max is looser.
+//   - "min" bounds a lower limit: a larger min is stricter (harder to
+//     satisfy), a smaller min is looser.
+//
+// changed reports whether the values differ numerically at all; non-numeric
+// values are treated as changed-but-not-classifiable (stricter=false).
+func constraintTightened(kind, oldVal, newVal string) (stricter, changed bool) {
+	oldN, errOld := strconv.Atoi(oldVal)
+	newN, errNew := strconv.Atoi(newVal)
+	if errOld != nil || errNew != nil {
+		return false, oldVal != newVal
+	}
+	if oldN == newN {
+		return false, false
+	}
+	switch kind {
+	case "max":
+		return newN < oldN, true
+	case "min":
+		return newN > oldN, true
+	default:
+		return false, true
+	}
 }
 
 func (r *DiffResult) addBreaking(desc, field string) {
