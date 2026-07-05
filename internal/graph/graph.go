@@ -58,9 +58,9 @@ func (n *Node) SetState(s NodeState) {
 	n.state = s
 }
 
-func (n *Node) IsService() bool  { return n.Type == config.NodeTypeService }
-func (n *Node) IsInfra() bool    { return n.Type == config.NodeTypeInfra }
-func (n *Node) IsPlugin() bool   { return n.Type == config.NodeTypePlugin }
+func (n *Node) IsService() bool { return n.Type == config.NodeTypeService }
+func (n *Node) IsInfra() bool   { return n.Type == config.NodeTypeInfra }
+func (n *Node) IsPlugin() bool  { return n.Type == config.NodeTypePlugin }
 
 // ---------------------------------------------------------------------------
 // Edge
@@ -90,10 +90,10 @@ type subscriber struct {
 // Graph is the live relational model of the entire application system.
 // Every decision the Acthur kernel makes is derived from this structure.
 type Graph struct {
-	nodes    map[string]*Node
-	edges    []*Edge
-	adjOut   map[string][]*Edge // from → edges
-	adjIn    map[string][]*Edge // to   → edges
+	nodes  map[string]*Node
+	edges  []*Edge
+	adjOut map[string][]*Edge // from → edges
+	adjIn  map[string][]*Edge // to   → edges
 
 	// sealed marks the end of the setup phase. Once true, structural mutations
 	// (AddNode, AddEdge) are programming errors and will panic.
@@ -520,7 +520,24 @@ type Resolver interface {
 type EmptyResolver struct{}
 
 func (EmptyResolver) Resolve(key string) (ResolvedAdapter, bool) { return ResolvedAdapter{}, false }
-func (EmptyResolver) Names() []string                             { return nil }
+func (EmptyResolver) Names() []string                            { return nil }
+
+// ---------------------------------------------------------------------------
+// ContractResolver — contract-loadability knowledge abstraction
+// (graph never imports internal/contract; ADR 0005)
+// ---------------------------------------------------------------------------
+
+// ContractResolver is the abstraction the graph engine uses to ask whether a
+// contract name referenced on a data_flow edge has a loadable file behind
+// it. The engine never imports internal/contract; the CLI entrypoint
+// assembles the real implementation and injects it here, the same way
+// adapter knowledge is injected via Resolver.
+type ContractResolver interface {
+	// Resolve reports whether the named contract can be loaded, and the
+	// file path it is expected to live at — used in error messages
+	// regardless of whether it resolved.
+	Resolve(name string) (path string, ok bool)
+}
 
 // serviceCategorySet is the set of adapter categories valid for service nodes.
 var serviceCategorySet = map[string]bool{
@@ -549,7 +566,12 @@ var infraCategorySet = map[string]bool{
 //
 // Called after Build() and also standalone by 'acthur graph validate'.
 // Pass graph.EmptyResolver{} to skip adapter checking (structural rules only).
-func (g *Graph) Validate(resolver Resolver) []ValidationError {
+//
+// contractResolver is optional (variadic so existing callers are
+// unaffected): when supplied, every data_flow edge's named contracts are
+// checked for loadability (rule "unloadable-contract"); when omitted, that
+// check is skipped entirely.
+func (g *Graph) Validate(resolver Resolver, contractResolver ...ContractResolver) []ValidationError {
 	var errs []ValidationError
 
 	// Rule: contract and plugin node types are materialized by the kernel;
@@ -604,6 +626,31 @@ func (g *Graph) Validate(resolver Resolver) []ValidationError {
 				DocsURL:  "https://acthur.dev/docs/contracts",
 				Severity: SeverityError,
 			})
+		}
+	}
+
+	// Rule: data_flow edges' named contracts must each be loadable — only
+	// runs when a ContractResolver is supplied.
+	if len(contractResolver) > 0 {
+		cr := contractResolver[0]
+		for _, e := range g.edges {
+			if e.Type != config.EdgeDataFlow {
+				continue
+			}
+			for _, name := range e.Contracts {
+				path, ok := cr.Resolve(name)
+				if ok {
+					continue
+				}
+				errs = append(errs, ValidationError{
+					Edge:     fmt.Sprintf("%s→%s", e.From, e.To),
+					Rule:     "unloadable-contract",
+					Message:  fmt.Sprintf("data_flow edge %s→%s names contract %q which has no loadable file at %q", e.From, e.To, name, path),
+					Fix:      fmt.Sprintf("create %s or fix its parse errors — run 'acthur contract validate' for details", path),
+					DocsURL:  "https://acthur.dev/docs/contracts",
+					Severity: SeverityError,
+				})
+			}
 		}
 	}
 
@@ -872,7 +919,6 @@ func (g *Graph) topoSort(edgeType config.EdgeType) []*Node {
 
 	return result
 }
-
 
 // nodeTypeTier maps node types to sort priority within a topological tier.
 // Lower value = started earlier. infra < service < everything else.

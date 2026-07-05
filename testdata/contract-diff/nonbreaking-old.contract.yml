@@ -1,0 +1,11 @@
+contract: gadgets
+version: "1"
+transport: http
+endpoints:
+  - id: get_gadget
+    method: GET
+    path: /api/v1/gadgets/:id
+    auth: none
+    output:
+      id: ulid
+      name: string
