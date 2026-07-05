@@ -6,6 +6,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`CONTEXT.md`** at the repo root — the project glossary (domain terms, what they mean in Acthur)
 - **`docs/adr/`** — architectural decision records; read any ADRs that touch the area you're about to work in
+- **`docs/implementation/active/`** — implementation notes for work currently in flight; if one overlaps your task, read it after the docs above (convention: `docs/implementation/README.md`)
 
 If either file doesn't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/grill-with-docs` skill creates them lazily when terms or decisions get resolved.
 
