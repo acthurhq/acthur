@@ -1,8 +1,8 @@
 # Where `data_flow` contracts are enforced (proxy interception vs. generated middleware)
 
-**Status:** proposed — open question, blocks Phase 4 (Contract Engine) implementation
+**Status:** accepted — Option A (proxy interception in dev); Option B deferred to Phase 7 as the production-path complement
 
-Phase 4's done-criterion is *"a contract violation shows in the proxy log."* Contracts are declared on `data_flow` edges (e.g. `web → api`, `contracts: [users]`). For the proxy to log a violation it must sit in the path of that traffic — but the Phase 3 dev runtime wires service-to-service discovery to go **direct**, bypassing the proxy. This ADR records the conflict and the options; it does **not** yet pick one.
+Phase 4's done-criterion is *"a contract violation shows in the proxy log."* Contracts are declared on `data_flow` edges (e.g. `web → api`, `contracts: [users]`). For the proxy to log a violation it must sit in the path of that traffic — but the Phase 3 dev runtime wires service-to-service discovery to go **direct**, bypassing the proxy.
 
 ## Why this is load-bearing
 
@@ -14,10 +14,21 @@ Phase 4's done-criterion is *"a contract violation shows in the proxy log."* Con
 - **B — Enforce in generated client/server middleware, not the proxy.** The Generator (Phase 7) emits contract-checking middleware into each service; the proxy stays a dumb inbound router. Keeps the hot path direct and per-language-honest. Cost: contradicts the Phase 4 done-criterion as literally written ("shows in **proxy** log"), pushes real enforcement to Phase 7, and spreads logic across N adapters instead of one kernel.
 - **C — Hybrid: proxy enforces, but only for edges explicitly opted through it.** Default direct; a `data_flow` edge may declare it routes via the proxy, and only those are contract-checked in dev. Cost: two discovery modes to reason about; partial coverage.
 
-## Consequences (once decided — recorded here so the choice is deliberate)
+## Decision
 
-- The choice fixes *where* `ContractFor(from, to)` is consulted at runtime and what `data_flow` discovery URLs look like — a public-ish convention consumers bake into their code.
-- It determines whether Phase 4 can satisfy its own done-criterion or whether that criterion must be reworded (proxy log → service log).
-- Resolve this **on paper before** the #33 dev-runtime witness closes; #33 verifies the Phase 3 loop (proxy carries inbound traffic, services boot, restart, hot reload), and implementation of the chosen option here waits until that witness is green.
+**Option A.** In the Local dev context, `data_flow` discovery URLs point at the proxy (`API_URL=http://localhost:4000/api`), making the proxy the single east-west interception point where `ContractFor(from, to)` is consulted. Rationale:
+
+- It is the only option that satisfies Phase 4's done-criterion as written ("violation shows in the **proxy** log") and PRD §11.3 ("traffic blocked at proxy layer" in strict mode).
+- Enforcement lives in one kernel-owned place instead of being re-implemented per adapter language; Phase 4 does not have to wait for the Phase 7 generator.
+- The extra hop is dev-only. Production traffic never crosses the dev proxy; §11.3's dev/strict modes are dev and pre-deploy concerns.
+- The proxy distinguishes route kinds: a `data_flow` route is contract-checked; a `proxied_through` route stays a plain inbound forward. The consumer's caller identity travels on the request (`X-Acthur-From`) so the proxy can pick the right edge contract.
+
+Option B (generated client/server middleware) is **deferred, not rejected** — it is the production-path complement the Phase 7 generator emits, honoring the same contract IR. Option C is rejected: two discovery modes with partial coverage.
+
+## Consequences
+
+- `resolveNodeEnv` changes the URL it injects for `data_flow` targets from the direct node port to the proxy path route. `depends_on`-only edges (infra connections) keep the direct/`Connectable` path — contracts apply to `data_flow` only.
+- The proxy gains contract-checked east-west routes derived from `data_flow` edges, consulting a contract registry loaded at graph build.
+- Dev mode logs violations and passes traffic; `--strict` returns 422 and blocks (§11.3). The violation line appears in the proxy's own log stream, satisfying the Phase 4 done-criterion.
 
 See [[0011-local-dev-projects-containerspec-zero-privilege]] (Local-only execution context) and [[0010-connectable-capability-for-cross-node-connection-env]] (the existing single discovery-env seam this would extend).
