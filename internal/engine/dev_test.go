@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
+	"github.com/acthur/acthur/internal/plugin"
 	"github.com/acthur/acthur/internal/process"
 )
 
@@ -474,27 +476,340 @@ func (fakeConnectableAdapter) ConnectionEnv(ctx adapter.ContainerContext) map[st
 }
 
 type fakeProcessManager struct {
-	bin  string
-	args []string
+	bin      string
+	args     []string
+	spawnErr error
+	stopped  []string
 }
 
 func (f *fakeProcessManager) Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*process.Process, error) {
+	if f.spawnErr != nil {
+		return nil, f.spawnErr
+	}
 	f.bin = bin
 	f.args = append([]string(nil), args...)
 	return nil, nil
 }
 
-func (f *fakeProcessManager) StopAll(nodeIDs []string) {}
+func (f *fakeProcessManager) StopAll(nodeIDs []string) {
+	f.stopped = append([]string(nil), nodeIDs...)
+}
 
 type fakeHealthChecker struct {
 	strategyName string
+	err          error
 }
 
 func (f *fakeHealthChecker) WaitFor(ctx context.Context, node *graph.Node, timeout time.Duration) error {
-	return nil
+	return f.err
 }
 
 func (f *fakeHealthChecker) WaitForStrategy(ctx context.Context, node *graph.Node, strategy health.Strategy, timeout time.Duration) error {
 	f.strategyName = strategy.Name()
-	return nil
+	return f.err
+}
+
+// ---------------------------------------------------------------------------
+// Plugin bus lifecycle event tests (#40)
+// ---------------------------------------------------------------------------
+
+// recordingBus subscribes to every node lifecycle event and records the
+// sequence of (event, nodeID) pairs observed, in order.
+func recordingBus() (*plugin.Bus, *[]string) {
+	bus := plugin.NewBus()
+	seq := []string{}
+	record := func(e plugin.Event) func(plugin.EventPayload) {
+		return func(p plugin.EventPayload) {
+			seq = append(seq, string(e)+":"+p.NodeID)
+		}
+	}
+	for _, e := range []plugin.Event{
+		plugin.EventBeforeNodeStart,
+		plugin.EventAfterNodeStart,
+		plugin.EventAfterNodeHealthy,
+		plugin.EventBeforeNodeStop,
+		plugin.EventAfterNodeStop,
+		plugin.EventOnNodeFailure,
+	} {
+		bus.On(e, record(e))
+	}
+	return bus, &seq
+}
+
+// TestStartInfraNode_HealthyEmitsBeforeStartAfterStartAfterHealthy asserts the
+// exact event sequence for a successful infra start: before_start (entry),
+// after_start (process spawned), after_healthy (health wait succeeded).
+func TestStartInfraNode_HealthyEmitsBeforeStartAfterStartAfterHealthy(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+		Config:  config.NodeConfig{Version: "14"},
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	bus, seq := recordingBus()
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"db:custom": fakeContainerAdapter{}},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startInfraNode(node); err != nil {
+		t.Fatalf("start infra node: %v", err)
+	}
+
+	want := []string{
+		"kernel:node:before_start:db",
+		"kernel:node:after_start:db",
+		"kernel:node:after_healthy:db",
+	}
+	if !reflect.DeepEqual(*seq, want) {
+		t.Fatalf("event sequence mismatch\nwant: %#v\n got: %#v", want, *seq)
+	}
+}
+
+// TestStartInfraNode_HealthFailureEmitsOnFailureNotAfterHealthy asserts a
+// failed health wait emits on_failure instead of after_healthy — after_start
+// still fires because the process really was spawned.
+func TestStartInfraNode_HealthFailureEmitsOnFailureNotAfterHealthy(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+		Config:  config.NodeConfig{Version: "14"},
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	bus, seq := recordingBus()
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"db:custom": fakeContainerAdapter{}},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{err: fmt.Errorf("health check timed out")}
+
+	if err := eng.startInfraNode(node); err == nil {
+		t.Fatal("expected health failure error")
+	}
+
+	want := []string{
+		"kernel:node:before_start:db",
+		"kernel:node:after_start:db",
+		"kernel:node:on_failure:db",
+	}
+	if !reflect.DeepEqual(*seq, want) {
+		t.Fatalf("event sequence mismatch\nwant: %#v\n got: %#v", want, *seq)
+	}
+}
+
+// TestStartInfraNode_SpawnFailureEmitsOnFailureOnly asserts a process spawn
+// failure emits on_failure without ever emitting after_start.
+func TestStartInfraNode_SpawnFailureEmitsOnFailureOnly(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+		Config:  config.NodeConfig{Version: "14"},
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	bus, seq := recordingBus()
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"db:custom": fakeContainerAdapter{}},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{spawnErr: fmt.Errorf("docker not found")}
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startInfraNode(node); err == nil {
+		t.Fatal("expected spawn failure error")
+	}
+
+	want := []string{
+		"kernel:node:before_start:db",
+		"kernel:node:on_failure:db",
+	}
+	if !reflect.DeepEqual(*seq, want) {
+		t.Fatalf("event sequence mismatch\nwant: %#v\n got: %#v", want, *seq)
+	}
+}
+
+// TestStartServiceNode_HealthyEmitsFullLifecycle mirrors the infra happy path
+// for a native service process using the real go:fiber adapter.
+func TestStartServiceNode_HealthyEmitsFullLifecycle(t *testing.T) {
+	node := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:fiber", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": node})
+	bus, seq := recordingBus()
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"go:fiber": &gofiber.Adapter{}},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startServiceNode(node); err != nil {
+		t.Fatalf("start service node: %v", err)
+	}
+
+	want := []string{
+		"kernel:node:before_start:api",
+		"kernel:node:after_start:api",
+		"kernel:node:after_healthy:api",
+	}
+	if !reflect.DeepEqual(*seq, want) {
+		t.Fatalf("event sequence mismatch\nwant: %#v\n got: %#v", want, *seq)
+	}
+}
+
+// TestStartServiceNode_HealthFailureEmitsOnFailure asserts a service that
+// spawns but never turns healthy emits on_failure, not after_healthy.
+func TestStartServiceNode_HealthFailureEmitsOnFailure(t *testing.T) {
+	node := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:fiber", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": node})
+	bus, seq := recordingBus()
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"go:fiber": &gofiber.Adapter{}},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{err: fmt.Errorf("timed out waiting for health")}
+
+	if err := eng.startServiceNode(node); err == nil {
+		t.Fatal("expected health failure error")
+	}
+
+	want := []string{
+		"kernel:node:before_start:api",
+		"kernel:node:after_start:api",
+		"kernel:node:on_failure:api",
+	}
+	if !reflect.DeepEqual(*seq, want) {
+		t.Fatalf("event sequence mismatch\nwant: %#v\n got: %#v", want, *seq)
+	}
+}
+
+// TestStartNode_KernelMaterializedNodeEmitsNoEvents: kernel:* nodes never
+// resolve through the adapter registry and must never emit lifecycle events
+// either — the engine doesn't "start" them, it runs them itself (the proxy).
+func TestStartNode_KernelMaterializedNodeEmitsNoEvents(t *testing.T) {
+	cfg := &config.Config{
+		Project: "test",
+		Dev:     config.DevConfig{Port: 4000},
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"api": {Type: config.NodeTypeService, Adapter: "go:fiber"},
+			},
+		},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("build graph: %v", err)
+	}
+	proxyNode := g.Node("proxy")
+	bus, seq := recordingBus()
+	eng := NewDevEngine(cfg, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"go:fiber": fakeAdapter{name: "go:fiber", category: adapter.CategoryBackend},
+		},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startNode(proxyNode); err != nil {
+		t.Fatalf("expected kernel proxy node to be skipped, got error: %v", err)
+	}
+	if len(*seq) != 0 {
+		t.Fatalf("expected no events for kernel-materialized node, got %#v", *seq)
+	}
+}
+
+// TestShutdown_EmitsBeforeAndAfterStopForRealNodesOnly asserts shutdown emits
+// before_stop/after_stop for infra/service nodes in reverse startup order,
+// and never for the kernel-materialized proxy node.
+func TestShutdown_EmitsBeforeAndAfterStopForRealNodesOnly(t *testing.T) {
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:fiber"}
+	db := &graph.Node{ID: "db", Type: config.NodeTypeInfra, Adapter: "db:custom"}
+	proxyNode := &graph.Node{ID: "proxy", Type: config.NodeTypeInfra, Adapter: "kernel:proxy"}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api, "db": db, "proxy": proxyNode})
+	bus, seq := recordingBus()
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+	eng.runDocker = func(args ...string) error { return nil }
+
+	order := []*graph.Node{db, api, proxyNode}
+	eng.shutdown(order)
+
+	want := []string{
+		"kernel:node:before_stop:proxy",
+		"kernel:node:before_stop:api",
+		"kernel:node:before_stop:db",
+		"kernel:node:after_stop:proxy",
+		"kernel:node:after_stop:api",
+		"kernel:node:after_stop:db",
+	}
+	// The kernel proxy node must never appear.
+	for _, s := range *seq {
+		if strings.Contains(s, ":proxy") {
+			t.Fatalf("expected no stop events for kernel-materialized proxy node, got %#v", *seq)
+		}
+	}
+	want = []string{
+		"kernel:node:before_stop:api",
+		"kernel:node:before_stop:db",
+		"kernel:node:after_stop:api",
+		"kernel:node:after_stop:db",
+	}
+	if !reflect.DeepEqual(*seq, want) {
+		t.Fatalf("event sequence mismatch\nwant: %#v\n got: %#v", want, *seq)
+	}
+}
+
+// TestStartInfraNode_PanickingHandlerDoesNotBreakStartup: a subscribed
+// handler that panics must not crash the engine or prevent the rest of the
+// lifecycle from proceeding normally.
+func TestStartInfraNode_PanickingHandlerDoesNotBreakStartup(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+		Config:  config.NodeConfig{Version: "14"},
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	bus := plugin.NewBus()
+	bus.On(plugin.EventBeforeNodeStart, func(p plugin.EventPayload) {
+		panic("plugin handler exploded")
+	})
+	healthyReached := false
+	bus.On(plugin.EventAfterNodeHealthy, func(p plugin.EventPayload) {
+		healthyReached = true
+	})
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"db:custom": fakeContainerAdapter{}},
+	}, WithBus(bus))
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startInfraNode(node); err != nil {
+		t.Fatalf("start infra node: %v", err)
+	}
+	if !healthyReached {
+		t.Fatal("expected after_healthy handler to still run despite an earlier handler panicking")
+	}
+}
+
+// TestNewDevEngine_NilBusEmitsNothingAndDoesNotPanic asserts the zero-value
+// case: no WithBus option means no *plugin.Bus, and node lifecycle emission
+// is simply a no-op rather than a nil-pointer panic.
+func TestNewDevEngine_NilBusEmitsNothingAndDoesNotPanic(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+		Config:  config.NodeConfig{Version: "14"},
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	eng := NewDevEngine(&config.Config{}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"db:custom": fakeContainerAdapter{}},
+	})
+	eng.pm = &fakeProcessManager{}
+	eng.checker = &fakeHealthChecker{}
+
+	if err := eng.startInfraNode(node); err != nil {
+		t.Fatalf("start infra node: %v", err)
+	}
 }

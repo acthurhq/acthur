@@ -1,9 +1,13 @@
 package plugin_test
 
 import (
+	"bytes"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
 )
 
@@ -107,6 +111,30 @@ func TestBus_PanicInHandlerDoesNotCrash(t *testing.T) {
 
 	if !after {
 		t.Error("second handler should still run after first panics")
+	}
+}
+
+// TestBus_PanicInHandlerLogsViaOutputWarn: the recovered panic must surface
+// through internal/output.Warn (not a raw fmt.Printf) so it carries the same
+// "[plugin] ⚠" formatting as every other kernel warning.
+func TestBus_PanicInHandlerLogsViaOutputWarn(t *testing.T) {
+	var buf bytes.Buffer
+	output.SetOutput(&buf, &buf)
+	defer output.SetOutput(os.Stdout, os.Stderr)
+
+	bus := plugin.NewBus()
+	bus.On(plugin.EventAfterDeploy, func(p plugin.EventPayload) {
+		panic("boom")
+	})
+
+	bus.Emit(plugin.EventAfterDeploy, plugin.EventPayload{})
+
+	got := buf.String()
+	if !strings.Contains(got, "plugin") {
+		t.Fatalf("expected panic warning scoped to plugin, got %q", got)
+	}
+	if !strings.Contains(got, "boom") {
+		t.Fatalf("expected panic message in warning output, got %q", got)
 	}
 }
 
