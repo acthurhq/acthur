@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthur/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------
@@ -254,7 +255,7 @@ func (b *Bus) Emit(event Event, payload EventPayload) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[kernel] event handler panic for %s: %v\n", event, r)
+					output.Warn(output.PrefixPlugin, "event handler panic for %s: %v", event, r)
 				}
 			}()
 			h(payload)

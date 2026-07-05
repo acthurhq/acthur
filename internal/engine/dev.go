@@ -21,6 +21,7 @@ import (
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
+	"github.com/acthur/acthur/internal/plugin"
 	"github.com/acthur/acthur/internal/process"
 	"github.com/acthur/acthur/internal/proxy"
 )
@@ -60,6 +61,11 @@ type DevEngine struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 
+	// bus is the optional kernel event bus. Nil means no emission — plugins
+	// are entirely absent from this phase's callers (cmd/acthur, tests that
+	// don't need it) and lifecycle emission must cost nothing when unused.
+	bus *plugin.Bus
+
 	// registry is the optional contract registry consulted by the proxy to
 	// enforce contracts on data_flow flow routes. Nil means no enforcement.
 	registry *contract.Registry
@@ -91,6 +97,15 @@ func WithStrict(strict bool) DevEngineOption {
 // proxy still serves flow routes, but never checks a contract.
 func WithContractRegistry(r *contract.Registry) DevEngineOption {
 	return func(e *DevEngine) { e.registry = r }
+}
+
+// WithBus attaches a kernel event bus. The engine emits node lifecycle
+// events (kernel:node:*) synchronously through it as nodes start, become
+// healthy, fail, and stop. Without this option (nil bus) emission is a
+// no-op — zero overhead, and every existing caller that doesn't know about
+// plugins keeps working unchanged.
+func WithBus(bus *plugin.Bus) DevEngineOption {
+	return func(e *DevEngine) { e.bus = bus }
 }
 
 // NewDevEngine creates a DevEngine. Call Start() to begin.
@@ -209,16 +224,21 @@ func (e *DevEngine) startNode(node *graph.Node) error {
 func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	e.graph.SetState(node.ID, graph.StateStarting)
 	output.Info(node.ID, "starting %s (%s)...", node.ID, node.Adapter)
+	e.emit(plugin.EventBeforeNodeStart, node, nil)
 
 	a, ok := e.resolver.Adapter(node.Adapter)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q not found", node.Adapter)
+		err := fmt.Errorf("adapter %q not found", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 	c, ok := a.(adapter.Containerized)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q does not support the Container capability", node.Adapter)
+		err := fmt.Errorf("adapter %q does not support the Container capability", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 	spec := c.Container(adapter.ContainerContext{
 		NodeID:  node.ID,
@@ -227,6 +247,8 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	if len(spec.Ports) == 0 {
 		// File-based infra (sqlite) — nothing to start
 		e.graph.SetState(node.ID, graph.StateHealthy)
+		e.emit(plugin.EventAfterNodeStart, node, nil)
+		e.emit(plugin.EventAfterNodeHealthy, node, nil)
 		return nil
 	}
 	args := container.ToRunArgs(spec, node.ID)
@@ -234,17 +256,21 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	_, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 	e.containers = append(e.containers, node.ID)
+	e.emit(plugin.EventAfterNodeStart, node, nil)
 
 	strategy := health.InfraStrategy("acthur-"+node.ID, spec.Healthcheck.Test, nil)
 	if err := e.checker.WaitForStrategy(e.ctx, node, strategy, 60*time.Second); err != nil {
 		e.graph.SetState(node.ID, graph.StateDegraded)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 
 	e.graph.SetState(node.ID, graph.StateHealthy)
+	e.emit(plugin.EventAfterNodeHealthy, node, nil)
 	return nil
 }
 
@@ -252,23 +278,29 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	e.graph.SetState(node.ID, graph.StateStarting)
 	output.Info(node.ID, "starting %s (%s)...", node.ID, node.Adapter)
+	e.emit(plugin.EventBeforeNodeStart, node, nil)
 
 	a, ok := e.resolver.Adapter(node.Adapter)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q not found", node.Adapter)
+		err := fmt.Errorf("adapter %q not found", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 
 	// Build env for this node
 	env, err := e.buildEnv(node)
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 	r, ok := a.(adapter.Runnable)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q does not support the Runnable capability", node.Adapter)
+		err := fmt.Errorf("adapter %q does not support the Runnable capability", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 	cmd := r.DevCommand(env)
 
@@ -276,18 +308,22 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	_, err = e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
+	e.emit(plugin.EventAfterNodeStart, node, nil)
 
 	// Wait for HTTP health
 	// Give the service time to start before health-checking
 	time.Sleep(500 * time.Millisecond)
 	if err := e.checker.WaitFor(e.ctx, node, 120*time.Second); err != nil {
 		e.graph.SetState(node.ID, graph.StateDegraded)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 
 	e.graph.SetState(node.ID, graph.StateHealthy)
+	e.emit(plugin.EventAfterNodeHealthy, node, nil)
 	return nil
 }
 
@@ -303,11 +339,45 @@ func (e *DevEngine) shutdown(order []*graph.Node) {
 		}
 	}
 	e.containers = nil
+
+	for i := len(order) - 1; i >= 0; i-- {
+		if n := order[i]; isLifecycleNode(n) {
+			e.emit(plugin.EventBeforeNodeStop, n, nil)
+		}
+	}
+
 	ids := make([]string, len(order))
 	for i, n := range order {
 		ids[i] = n.ID
 	}
 	e.pm.StopAll(ids)
+
+	for i := len(order) - 1; i >= 0; i-- {
+		if n := order[i]; isLifecycleNode(n) {
+			e.emit(plugin.EventAfterNodeStop, n, nil)
+		}
+	}
+}
+
+// isLifecycleNode reports whether node participates in kernel:node:* event
+// emission. kernel-materialized nodes (e.g. the proxy) are run by the engine
+// itself, never resolved through the adapter registry, and never emit —
+// mirroring the exemption already applied in startNode.
+func isLifecycleNode(node *graph.Node) bool {
+	return !strings.HasPrefix(node.Adapter, "kernel:")
+}
+
+// emit publishes a node lifecycle event on the engine's bus, if one is
+// configured. A nil bus makes this a no-op — plugins are entirely optional.
+func (e *DevEngine) emit(event plugin.Event, node *graph.Node, extra map[string]any) {
+	if e.bus == nil {
+		return
+	}
+	data := map[string]any{"node_type": string(node.Type)}
+	for k, v := range extra {
+		data[k] = v
+	}
+	e.bus.Emit(event, plugin.EventPayload{NodeID: node.ID, Data: data})
 }
 
 // buildEnv constructs the environment for a node.
