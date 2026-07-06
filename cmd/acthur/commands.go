@@ -412,9 +412,11 @@ existing files.`,
 // ---------------------------------------------------------------------------
 
 var (
-	devDocker bool
-	devEnv    string
-	devStrict bool
+	devDocker     bool
+	devEnv        string
+	devStrict     bool
+	devSkipDoctor bool
+	devWriteHosts bool
 )
 
 var devCmd = &cobra.Command{
@@ -423,11 +425,23 @@ var devCmd = &cobra.Command{
 	Long: `Starts all services defined in acthur.yml in the correct order,
 manages their processes, starts the unified dev proxy, and enables hot reload.
 
+Before starting anything, acthur dev runs the same checks as acthur doctor
+and aborts with a pointed message if a required tool is missing. Pass
+--skip-doctor to bypass this preflight.
+
 With --strict, the dev proxy blocks (422) any data_flow request that
 violates its edge's contract instead of logging the violation and
 forwarding it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, g := loadGraph()
+		cfg := loadConfig()
+
+		if !devSkipDoctor {
+			if err := runDevDoctorPreflight(cfg); err != nil {
+				return err
+			}
+		}
+
+		_, g := loadGraph()
 		reg, err := contract.LoadDir(cfg.RootDir)
 		if err != nil {
 			return fmt.Errorf("loading contracts: %w", err)
@@ -436,6 +450,7 @@ forwarding it.`,
 			engine.WithStrict(devStrict),
 			engine.WithContractRegistry(reg),
 			engine.WithBus(kernelBus),
+			engine.WithWriteHosts(devWriteHosts),
 		)
 		return eng.Start()
 	},
@@ -445,6 +460,29 @@ func init() {
 	devCmd.Flags().BoolVar(&devDocker, "docker", false, "run all services in Docker (full containerization)")
 	devCmd.Flags().StringVar(&devEnv, "env", "dev", "environment name from acthur.yml")
 	devCmd.Flags().BoolVar(&devStrict, "strict", false, "block (422) data_flow requests that violate their contract instead of logging and forwarding")
+	devCmd.Flags().BoolVar(&devSkipDoctor, "skip-doctor", false, "skip the doctor preflight check")
+	devCmd.Flags().BoolVar(&devWriteHosts, "write-hosts", false, "write missing dev domains to /etc/hosts (requires permission to write it)")
+}
+
+// runDevDoctorPreflight runs the same checks as `acthur doctor` against cfg
+// and aborts with a pointed message if any required tool is missing or
+// failed. Extracted from devCmd.RunE so it's directly testable without
+// spinning up the full dev engine.
+func runDevDoctorPreflight(cfg *config.Config) error {
+	return devDoctorPreflight(cfg, doctor.Run)
+}
+
+// devDoctorPreflight is runDevDoctorPreflight with the doctor.Run call
+// injected, so tests can assert the abort/pass decision against a canned
+// *doctor.Result without depending on which tools happen to be installed on
+// the machine running the test.
+func devDoctorPreflight(cfg *config.Config, run func(*config.Config) *doctor.Result) error {
+	r := run(cfg)
+	if !doctor.HasBlockingFailures(r) {
+		return nil
+	}
+	doctor.Print(r)
+	return fmt.Errorf("environment checks failed — fix the issues above (or run 'acthur doctor --fix'), or pass --skip-doctor to bypass")
 }
 
 // ---------------------------------------------------------------------------

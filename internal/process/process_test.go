@@ -238,6 +238,60 @@ func TestManager_All(t *testing.T) {
 	m.StopAll([]string{"node-a", "node-b", "node-c"})
 }
 
+// TestManager_LogSinkReceivesOutputLines asserts that a LogSink registered
+// via SetLogSink receives every output line from every process the manager
+// spawns afterward, alongside the default output.ServiceLog routing. This is
+// the seam `acthur service logs` depends on to persist per-node log files.
+func TestManager_LogSinkReceivesOutputLines(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping manager test in short mode")
+	}
+
+	m := process.NewManager()
+
+	type line struct{ nodeID, text string }
+	var mu sync.Mutex
+	var got []line
+	m.SetLogSink(func(nodeID, text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, line{nodeID, text})
+	})
+
+	_, err := m.Spawn("logged-node", echoCmd(), echoArgs("hello-from-sink"), nil, "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	m.Stop("logged-node")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("expected log sink to receive at least one line")
+	}
+	found := false
+	for _, l := range got {
+		if l.nodeID == "logged-node" && containsStr(l.text, "hello-from-sink") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a line containing the echoed text, got %#v", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OS-specific helpers
 // ---------------------------------------------------------------------------
