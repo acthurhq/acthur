@@ -19,6 +19,8 @@ import (
 	_ "github.com/acthur/acthur/internal/adapter/backend/gin"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
 	_ "github.com/acthur/acthur/internal/adapter/backend/rustaxum"
+	_ "github.com/acthur/acthur/internal/adapter/frontend/astro"
+	_ "github.com/acthur/acthur/internal/adapter/frontend/next"
 	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/contract"
