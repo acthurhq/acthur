@@ -1,6 +1,5 @@
 // Package cmd wires all cobra commands for the Acthur CLI.
-// Every command is defined here. Commands that are not yet implemented
-// return a clear "coming in Phase N" message rather than silently failing.
+// Every command is defined here.
 package main
 
 import (
@@ -383,13 +382,6 @@ func pluginLog(level plugin.LogLevel, format string, args ...any) {
 	default:
 		output.Info(output.PrefixPlugin, format, args...)
 	}
-}
-
-// notImplemented prints a "coming soon" message for Phase N commands.
-func notImplemented(phase int) error {
-	output.Warn("", "this command is coming in Phase %d", phase)
-	output.Info("", "track progress at: https://github.com/acthur/acthur")
-	return nil
 }
 
 // ---------------------------------------------------------------------------
