@@ -692,32 +692,51 @@ func init() {
 	generateModelCmd.Flags().StringVar(&generateNodeFlag, "node", "", "target a specific node instead of every go:fiber service node")
 }
 
+var generateAIContextTool string
+
 var generateAIContextCmd = &cobra.Command{
 	Use:   "ai-context",
 	Short: "Generate AI coding tool context files and skills",
-	Long: `Presents an interactive tool selector and generates context files
-and skill files for your chosen AI coding tool (Claude Code, Cursor, etc.).`,
+	Long: `Generates a context file describing the live project graph — nodes,
+adapters, edges, contracts, and plugins — for your chosen AI coding tool.
+Re-run after changing the graph; the file is derived, not hand-authored.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateAIContext(mustCwd(), generateAIContextTool)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
+
+var generateCITargetFlag string
 
 var generateCICmd = &cobra.Command{
 	Use:   "ci",
 	Short: "Generate CI/CD pipeline configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateCI(mustCwd(), generateCITargetFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
+
+var generateDocsTargetFlag string
 
 var generateDocsCmd = &cobra.Command{
 	Use:   "docs",
 	Short: "Generate living documentation from contracts and graph",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateDocs(mustCwd(), generateDocsTargetFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
 
@@ -726,15 +745,20 @@ var generateSkillCmd = &cobra.Command{
 	Short: "Generate a custom AI skill file",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateSkill(mustCwd(), args[0])
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
 
 func init() {
 	generateModelCmd.Flags().String("fields", "", "comma-separated field definitions e.g. \"name:string,age:int\"")
-	generateCICmd.Flags().String("target", "github-actions", "CI target: github-actions | gitlab-ci | circleci")
-	generateDocsCmd.Flags().String("target", "astro", "docs target: astro | nextra | readme | openapi")
+	generateAIContextCmd.Flags().StringVar(&generateAIContextTool, "tool", "claude", "AI tool to generate context for: claude | cursor")
+	generateCICmd.Flags().StringVar(&generateCITargetFlag, "target", "github-actions", "CI target: github-actions | gitlab-ci | circleci")
+	generateDocsCmd.Flags().StringVar(&generateDocsTargetFlag, "target", "markdown", "docs target (only markdown is implemented; nextra/readme/openapi are tracked but not yet supported)")
 
 	generateCmd.AddCommand(generateFromContractCmd)
 	generateCmd.AddCommand(generateModelCmd)
@@ -1179,16 +1203,38 @@ var graphShowCmd = &cobra.Command{
 	},
 }
 
+var (
+	graphVisualizeFormat string
+	graphVisualizeOutput string
+)
+
 var graphVisualizeCmd = &cobra.Command{
 	Use:   "visualize",
-	Short: "Open a Mermaid graph diagram in the browser",
+	Short: "Render the graph as a Mermaid or DOT diagram",
+	Long: `Renders the project graph as a Mermaid flowchart (default) or a
+Graphviz DOT digraph (--format dot). Prints to stdout, or writes to a file
+with --output.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		diagram, err := runGraphVisualize(mustCwd(), graphVisualizeFormat)
+		if err != nil {
+			return err
+		}
+		if graphVisualizeOutput == "" {
+			fmt.Print(diagram)
+			return nil
+		}
+		if err := os.WriteFile(graphVisualizeOutput, []byte(diagram), 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", graphVisualizeOutput, err)
+		}
+		output.Success(output.PrefixKernel, "wrote %s diagram to %s", graphVisualizeFormat, graphVisualizeOutput)
+		return nil
 	},
 }
 
 func init() {
+	graphVisualizeCmd.Flags().StringVar(&graphVisualizeFormat, "format", "mermaid", "diagram format: mermaid | dot")
+	graphVisualizeCmd.Flags().StringVar(&graphVisualizeOutput, "output", "", "write the diagram to this file instead of stdout")
+
 	graphCmd.AddCommand(graphValidateCmd)
 	graphCmd.AddCommand(graphShowCmd)
 	graphCmd.AddCommand(graphVisualizeCmd)
