@@ -77,6 +77,11 @@ type Proxy struct {
 	// strict blocks (422) contract violations on flow routes instead of
 	// logging and forwarding them.
 	strict bool
+
+	// certFile/keyFile, when both set, switch Start from plain HTTP to TLS
+	// (the https plugin's dev-cert seam — see internal/plugin/builtin/https).
+	// A zero value on either means "serve plain HTTP", the existing default.
+	certFile, keyFile string
 }
 
 // Option configures optional Proxy behavior at construction time.
@@ -93,6 +98,18 @@ func WithContractRegistry(r *contract.Registry) Option {
 // (log + forward) to strict mode (422 + block).
 func WithStrict(strict bool) Option {
 	return func(p *Proxy) { p.strict = strict }
+}
+
+// WithTLS switches Start from ListenAndServe to ListenAndServeTLS using the
+// given cert/key file pair. Empty strings for either revert to plain HTTP —
+// the zero value of Proxy already behaves this way, so this option only
+// needs to be applied when both paths are non-empty (e.g. the https plugin
+// has generated/found a dev certificate).
+func WithTLS(certFile, keyFile string) Option {
+	return func(p *Proxy) {
+		p.certFile = certFile
+		p.keyFile = keyFile
+	}
 }
 
 // New creates a proxy from the graph. It builds routes from all
@@ -126,6 +143,16 @@ func (p *Proxy) Start() error {
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
+	}
+
+	if p.certFile != "" && p.keyFile != "" {
+		go func() {
+			output.Info("proxy", "listening on https://localhost:%d", p.port)
+			if err := p.server.ListenAndServeTLS(p.certFile, p.keyFile); err != nil && err != http.ErrServerClosed {
+				output.Error("proxy", "server error: %v", err)
+			}
+		}()
+		return nil
 	}
 
 	go func() {

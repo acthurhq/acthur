@@ -148,10 +148,11 @@ func WriteFiles(root, nodeID string, files []plugin.GeneratedFile) ([]Result, er
 
 // lockKey resolves a GeneratedFile.Path to the repo-relative path it is
 // tracked under in generated.lock and written to on disk: paths under
-// "migrations/" or "deploy/" land at the project root, everything else
-// under nodeID/.
+// "migrations/", "deploy/", or ".acthur/" (project-scoped state — e.g. the
+// https plugin's generated dev-cert README) land at the project root,
+// everything else under nodeID/.
 func lockKey(nodeID, relPath string) string {
-	if strings.HasPrefix(relPath, "migrations/") || strings.HasPrefix(relPath, "deploy/") {
+	if strings.HasPrefix(relPath, "migrations/") || strings.HasPrefix(relPath, "deploy/") || strings.HasPrefix(relPath, ".acthur/") {
 		return relPath
 	}
 	return filepath.Join(nodeID, relPath)
