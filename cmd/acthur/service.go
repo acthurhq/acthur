@@ -261,7 +261,16 @@ func addInfraNodeToYAML(path, nodeID, adapterKey string) (alreadyPresent bool, e
 	newLines = append(newLines, entry...)
 	newLines = append(newLines, lines[insertAt:]...)
 
-	return false, os.WriteFile(path, []byte(strings.Join(newLines, "\n")), 0o644)
+	updated := strings.Join(newLines, "\n")
+	// insertAt can land past every existing line when the file's trailing
+	// "" split element (i.e. its final newline) is itself a continuation
+	// line — that would otherwise make the new entry swallow the file's
+	// trailing newline. Always leave the file newline-terminated.
+	if !strings.HasSuffix(updated, "\n") {
+		updated += "\n"
+	}
+
+	return false, os.WriteFile(path, []byte(updated), 0o644)
 }
 
 // isGraphNodesContinuationLine reports whether l is part of the graph.nodes

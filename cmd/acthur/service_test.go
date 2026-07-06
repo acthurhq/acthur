@@ -275,6 +275,28 @@ func TestRunServiceAdd_IdempotentWhenNodeAlreadyExists(t *testing.T) {
 	}
 }
 
+// TestRunServiceAdd_LeavesFileNewlineTerminated is a regression test: when
+// the node being added is the last thing in graph.nodes (the common single-
+// node-project case exercised by writeTestProject), the insertion point can
+// land past every real line (the file's trailing newline is itself a
+// "continuation" line) — earlier this silently ate the file's final newline.
+func TestRunServiceAdd_LeavesFileNewlineTerminated(t *testing.T) {
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	if _, err := runServiceAdd(dir, "db:postgres", ""); err != nil {
+		t.Fatalf("runServiceAdd: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "acthur.yml"))
+	if err != nil {
+		t.Fatalf("read acthur.yml: %v", err)
+	}
+	if !strings.HasSuffix(string(data), "\n") {
+		t.Fatalf("expected acthur.yml to remain newline-terminated, got:\n%s", data)
+	}
+}
+
 func TestRunServiceAdd_UnknownAdapterLeavesYAMLUntouched(t *testing.T) {
 	dir := t.TempDir()
 	writeTestProject(t, dir)
