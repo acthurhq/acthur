@@ -1,0 +1,25 @@
+package tenant
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// SchemaSwitch sets search_path on conn to the tenant's schema (falling
+// through to "public" for shared, unscoped tables) for the lifetime of a
+// request. Callers must invoke the returned reset func when done — defer
+// it immediately after a successful call.
+func SchemaSwitch(ctx context.Context, conn *pgx.Conn, schemaName string) (func(context.Context) error, error) {
+	stmt := fmt.Sprintf("SET search_path TO %s, public", pgx.Identifier{schemaName}.Sanitize())
+	if _, err := conn.Exec(ctx, stmt); err != nil {
+		return nil, fmt.Errorf("tenant: set search_path to %q: %w", schemaName, err)
+	}
+
+	reset := func(ctx context.Context) error {
+		_, err := conn.Exec(ctx, "SET search_path TO public")
+		return err
+	}
+	return reset, nil
+}

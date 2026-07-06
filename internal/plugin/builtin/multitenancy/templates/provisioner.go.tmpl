@@ -1,0 +1,58 @@
+package tenant
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"{{.ModulePath}}/internal/ids"
+)
+
+// Provisioner creates a new tenant: it creates the tenant's Postgres
+// schema, records the tenant in public.tenants, and runs migrations into
+// the new schema.
+type Provisioner struct {
+	Pool *pgxpool.Pool
+
+	// MigrateSchema runs the project's migrations against schemaName. Wired
+	// by the app at startup (e.g. golang-migrate against a connection whose
+	// search_path is schemaName) — the provisioner does not embed a
+	// migration runner so it stays agnostic to how migrations are packaged.
+	MigrateSchema func(ctx context.Context, schemaName string) error
+}
+
+// Provision creates schemaName for slug, records it in public.tenants, and
+// runs migrations into the new schema. Returns the created Tenant.
+func (p *Provisioner) Provision(ctx context.Context, slug string) (*Tenant, error) {
+	schemaName := SchemaFor(slug)
+
+	conn, err := p.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tenant: acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	createStmt := fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", pgx.Identifier{schemaName}.Sanitize())
+	if _, err := conn.Exec(ctx, createStmt); err != nil {
+		return nil, fmt.Errorf("tenant: create schema %q: %w", schemaName, err)
+	}
+
+	t := &Tenant{ID: ids.New(), Slug: slug, SchemaName: schemaName}
+	row := conn.QueryRow(ctx,
+		"INSERT INTO public.tenants (id, slug, schema_name) VALUES ($1, $2, $3) RETURNING created_at",
+		t.ID, t.Slug, t.SchemaName,
+	)
+	if err := row.Scan(&t.CreatedAt); err != nil {
+		return nil, fmt.Errorf("tenant: insert tenant row: %w", err)
+	}
+
+	if p.MigrateSchema != nil {
+		if err := p.MigrateSchema(ctx, schemaName); err != nil {
+			return nil, fmt.Errorf("tenant: migrate schema %q: %w", schemaName, err)
+		}
+	}
+
+	return t, nil
+}
