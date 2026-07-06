@@ -1,0 +1,37 @@
+package server
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"{{.ModulePath}}/internal/config"
+	"{{.ModulePath}}/internal/middleware"
+)
+
+// New creates and configures the chi router.
+// Middleware is registered here in a fixed order:
+//  1. Recoverer (panic -> 500, never crash the process)
+//  2. RequestID (trace correlation)
+//  3. Logger (structured request logging)
+//  4. CORS (generated from graph data_flow edges by security plugin)
+//  5. Compress
+//  6. Routes
+func New(cfg *config.Config) http.Handler {
+	r := chi.NewRouter()
+
+	r.Use(chimw.Recoverer)
+	r.Use(chimw.RequestID)
+	r.Use(middleware.Logger())
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins: []string{cfg.CORSOrigins},
+		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Origin", "Content-Type", "Authorization", "X-Request-ID"},
+	}))
+	r.Use(chimw.Compress(5))
+
+	registerRoutes(r, cfg)
+
+	return r
+}

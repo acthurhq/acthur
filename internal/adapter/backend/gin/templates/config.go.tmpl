@@ -1,0 +1,59 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"time"
+)
+
+// Config holds all application configuration.
+// Values are read from environment variables (set by Acthur at startup).
+type Config struct {
+	AppName      string
+	Port         string
+	AppEnv       string
+	Secret       string
+	DatabaseURL  string
+	RedisURL     string
+	CORSOrigins  string
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
+}
+
+// Load reads config from environment variables.
+// Missing required variables cause a clear, immediate failure.
+func Load() (*Config, error) {
+	cfg := &Config{
+		AppName:      getEnv("APP_NAME", "api"),
+		Port:         getEnv("APP_PORT", "8080"),
+		AppEnv:       getEnv("APP_ENV", "development"),
+		Secret:       mustGetEnv("APP_SECRET"),
+		DatabaseURL:  mustGetEnv("DATABASE_URL"),
+		RedisURL:     getEnv("REDIS_URL", "redis://localhost:6379"),
+		CORSOrigins:  getEnv("CORS_ORIGINS", "*"),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	return cfg, nil
+}
+
+func (c *Config) IsDevelopment() bool { return c.AppEnv == "development" }
+func (c *Config) IsProduction() bool  { return c.AppEnv == "production" }
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func mustGetEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		panic(fmt.Sprintf("required environment variable %q is not set\n"+
+			"  Check your .env file or secrets provider.", key))
+	}
+	return v
+}
