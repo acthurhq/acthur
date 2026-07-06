@@ -25,6 +25,7 @@ import (
 	"github.com/acthur/acthur/internal/deploy"
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/engine"
+	"github.com/acthur/acthur/internal/flags"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
@@ -35,6 +36,7 @@ import (
 	_ "github.com/acthur/acthur/internal/plugin/builtin/rbac"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
 	"github.com/acthur/acthur/internal/process"
+	"github.com/acthur/acthur/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -1506,20 +1508,102 @@ func init() {
 
 var secretsCmd = &cobra.Command{
 	Use:   "secrets",
-	Short: "Secret management commands",
+	Short: "Project secret management",
+	Long: `Manages project-scoped secrets persisted under .acthur/secrets/kv/
+as plaintext files with 0600 permissions — the local, dev-only model the
+PRD documents for Acthur's built-in secrets provider (production deploys
+should export real secrets into the deploy environment; this store is a
+convenient fallback for local dev-loop testing only, never a vault).
+
+Every stored secret is injected into every node's process environment by
+'acthur dev', and consulted as a fallback by the pre-deploy gate for any
+required env var not already exported into the deploying shell.`,
 }
 
 func init() {
 	secretsCmd.AddCommand(&cobra.Command{
+		Use:   "set <KEY> [value]",
+		Short: "Set a secret's value",
+		Long: `Sets KEY to value. If value is omitted (or passed as "-"), the
+value is read from stdin instead — keeping it out of shell history and
+process listings.`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			key := args[0]
+			value, err := resolveSecretValueArg(args, cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			if err := secrets.New(cfg.RootDir).Set(key, value); err != nil {
+				return err
+			}
+			output.Success(key, "secret set")
+			return nil
+		},
+	})
+
+	secretsCmd.AddCommand(&cobra.Command{
+		Use:   "get <KEY>",
+		Short: "Print a secret's value",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			value, err := secrets.New(cfg.RootDir).Get(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), value)
+			return nil
+		},
+	})
+
+	secretsCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List secret keys (not values)",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			keys, err := secrets.New(cfg.RootDir).List()
+			if err != nil {
+				return err
+			}
+			if len(keys) == 0 {
+				output.Info("secrets", "no secrets set — run 'acthur secrets set <KEY> <value>'")
+				return nil
+			}
+			for _, k := range keys {
+				fmt.Fprintln(cmd.OutOrStdout(), k)
+			}
+			return nil
+		},
 	})
+
 	secretsCmd.AddCommand(&cobra.Command{
-		Use:   "rotate <key>",
-		Short: "Rotate a secret and restart affected services",
+		Use:   "rm <KEY>",
+		Short: "Remove a secret",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := secrets.New(cfg.RootDir).Remove(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "secret removed")
+			return nil
+		},
+	})
+
+	secretsCmd.AddCommand(&cobra.Command{
+		Use:   "rotate <KEY>",
+		Short: "Rotate a secret to a new random value and note affected services",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if _, err := secrets.New(cfg.RootDir).Rotate(args[0], nil); err != nil {
+				return err
+			}
+			output.Success(args[0], "secret rotated — run 'acthur service restart <name>' for every service that consumes it")
+			return nil
+		},
 	})
 }
 
@@ -1527,28 +1611,118 @@ func init() {
 // acthur flag
 // ---------------------------------------------------------------------------
 
+var flagCreateDescription string
+
 var flagCmd = &cobra.Command{
 	Use:   "flag",
 	Short: "Feature flag management",
+	Long: `Manages project feature flags persisted at .acthur/flags.json — the
+PRD's local, hot-reloaded provider. Every flag is exposed to service
+processes started by 'acthur dev' as ACTHUR_FLAG_<NAME>=true|false.`,
 }
 
 func init() {
-	flagCmd.AddCommand(&cobra.Command{
+	createCmd := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create a new feature flag",
+		Short: "Create a new feature flag (disabled by default)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
-	})
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Create(args[0], flagCreateDescription); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag created (disabled) — env var %s", flags.EnvKey(args[0]))
+			return nil
+		},
+	}
+	createCmd.Flags().StringVar(&flagCreateDescription, "description", "", "human-readable description of the flag")
+	flagCmd.AddCommand(createCmd)
+
 	flagCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List all feature flags",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			list, err := flags.New(cfg.RootDir).List()
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				output.Info("flag", "no flags defined — run 'acthur flag create <name>'")
+				return nil
+			}
+			rows := make([][2]string, 0, len(list))
+			for _, f := range list {
+				state := "disabled"
+				if f.Enabled {
+					state = "enabled"
+				}
+				rows = append(rows, [2]string{f.Name, state})
+			}
+			output.Table(rows)
+			return nil
+		},
 	})
+
+	flagCmd.AddCommand(&cobra.Command{
+		Use:   "enable <name>",
+		Short: "Enable a feature flag",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Enable(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag enabled")
+			return nil
+		},
+	})
+
+	flagCmd.AddCommand(&cobra.Command{
+		Use:   "disable <name>",
+		Short: "Disable a feature flag",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Disable(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag disabled")
+			return nil
+		},
+	})
+
 	flagCmd.AddCommand(&cobra.Command{
 		Use:   "toggle <name>",
 		Short: "Toggle a feature flag on or off",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			enabled, err := flags.New(cfg.RootDir).Toggle(args[0])
+			if err != nil {
+				return err
+			}
+			state := "disabled"
+			if enabled {
+				state = "enabled"
+			}
+			output.Success(args[0], "flag %s", state)
+			return nil
+		},
+	})
+
+	flagCmd.AddCommand(&cobra.Command{
+		Use:   "retire <name>",
+		Short: "Remove a feature flag entirely",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Remove(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag retired")
+			return nil
+		},
 	})
 }
 
@@ -1556,12 +1730,40 @@ func init() {
 // acthur monitor
 // ---------------------------------------------------------------------------
 
+var monitorWatch bool
+
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
-	Short: "Open the monitoring dashboard",
+	Short: "Live status table of the running dev graph",
+	Long: `Prints a status table (node, type, adapter, health, PID) for every
+graph node by polling each node's own health check once, the same way
+'acthur service health' does, and reading its recorded PID from
+.acthur/run/<node>.pid. Use --watch to refresh continuously until
+interrupted (Ctrl+C).
+
+'acthur monitor' is a separate process from any running 'acthur dev' — it
+has no shared memory with it, so PID/health data is only meaningful while
+dev is actually running; without it, every node still gets a real
+(failing) health poll rather than a faked result.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return notImplemented(9)
+		cfg, g := loadGraph()
+		checker := health.New()
+
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+		stop := make(chan struct{})
+		go func() {
+			<-quit
+			close(stop)
+		}()
+
+		runMonitor(g, checker, cfg.RootDir, cmd.OutOrStdout(), monitorWatch, 2*time.Second, stop)
+		return nil
 	},
+}
+
+func init() {
+	monitorCmd.Flags().BoolVar(&monitorWatch, "watch", false, "continuously refresh the status table")
 }
 
 // ---------------------------------------------------------------------------
