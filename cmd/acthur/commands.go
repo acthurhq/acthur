@@ -543,24 +543,39 @@ var generateCmd = &cobra.Command{
 	Short: "Generate code, config, or context files",
 }
 
+var generateNodeFlag string
+
 var generateFromContractCmd = &cobra.Command{
 	Use:   "from-contract <file>",
 	Short: "Generate full stack code from a contract file",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(7)
+		results, err := runGenerateFromContract(mustCwd(), args[0], generateNodeFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
 
 var generateModelCmd = &cobra.Command{
-	Use:   "model <Name>",
-	Short: "Generate a model, migration, and basic CRUD",
-	Args:  cobra.ExactArgs(1),
+	Use:   "model <Name> [field:type ...]",
+	Short: "Generate a model, migration, and test",
+	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(7)
+		results, err := runGenerateModel(mustCwd(), args[0], args[1:], generateNodeFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
+}
+
+func init() {
+	generateFromContractCmd.Flags().StringVar(&generateNodeFlag, "node", "", "target a specific node instead of every go:fiber service node")
+	generateModelCmd.Flags().StringVar(&generateNodeFlag, "node", "", "target a specific node instead of every go:fiber service node")
 }
 
 var generateAIContextCmd = &cobra.Command{
