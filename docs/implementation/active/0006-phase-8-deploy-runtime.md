@@ -9,6 +9,7 @@
 ## Status
 In-flight
 - 2026-07-06 — main — PRD + this note created; slices 1 and 3 delegated to Sonnet worktree agents (fallback: inline if session limits kill them again, as happened in Phase 7); slice 2 (gate + deploy command + witness) stays with main.
+- 2026-07-06 — subagent slice 3 (#52, Sonnet worktree) — done: `internal/deploy/coolify/` (client.go + target.go), full TDD, `go test ./...` green repo-wide, `gofmt`/`go vet` clean. Client implements EnsureProject, EnsureComposeApp (create-or-update by name match), Deploy, WaitHealthy against Coolify v4's Bearer-auth REST API (`/api/v1/projects`, `/api/v1/applications`, `/api/v1/applications/dockercompose`, `/api/v1/deploy`); every operation tested against an httptest fake (auth header, create-vs-update, deploy trigger, poll-until-healthy, poll-until-failed, timeout, non-2xx body surfaced in error). Assumptions on the create-app body shape and deploy-response shape are pinned in the package doc comment — live-VPS verification still pending per the PRD witness scope. `Target`/`DeployContext` interface defined in `target.go` for slice 2 to wire up (`--target coolify`); did not touch cmd/acthur or internal/deploy root, per instructions.
 
 ## Current Decisions
 - Deploy artifacts flow through `[]plugin.GeneratedFile` + the Phase 7 write engine — generated.lock protects user-edited Dockerfiles.
