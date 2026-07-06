@@ -1457,7 +1457,13 @@ func init() {
 	mcpCmd.AddCommand(&cobra.Command{
 		Use:   "serve",
 		Short: "Start the Acthur MCP server for AI tools",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Starts a Model Context Protocol server over stdio (JSON-RPC 2.0,
+newline-delimited), exposing this project's live graph, contracts, and
+service health as read-only tools to any MCP-compatible AI tool (Claude
+Code, Cursor, and others). Runs until stdin is closed.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMCPServe(mustCwd(), os.Stdin, os.Stdout)
+		},
 	})
 }
 

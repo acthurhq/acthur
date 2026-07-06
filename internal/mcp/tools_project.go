@@ -11,6 +11,7 @@ import (
 )
 
 type projectInfoResult struct {
+	Project       string   `json:"project"`
 	NodeCount     int      `json:"node_count"`
 	ServiceCount  int      `json:"service_count"`
 	InfraCount    int      `json:"infra_count"`
@@ -51,6 +52,7 @@ func NewProjectInfoTool(cfg *config.Config, g *graph.Graph, reg *contract.Regist
 			sort.Strings(plugins)
 
 			result := projectInfoResult{
+				Project:       cfg.Project,
 				NodeCount:     len(g.Nodes()),
 				ServiceCount:  len(g.NodesByType(config.NodeTypeService)),
 				InfraCount:    len(g.NodesByType(config.NodeTypeInfra)),
