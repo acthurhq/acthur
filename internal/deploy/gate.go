@@ -6,8 +6,10 @@ package deploy
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -74,6 +76,29 @@ func goRun(root, node string, args ...string) error {
 			tail = lines[len(lines)-6:]
 		}
 		return fmt.Errorf("go %s failed in node %q:\n%s", strings.Join(args, " "), node, strings.Join(tail, "\n"))
+	}
+	return nil
+}
+
+// GoStream runs `go <args>` in root/node with combined stdout/stderr
+// streamed live to out as the command produces it — unlike goRun (which
+// buffers everything and only surfaces the tail on failure), this is for
+// callers that want to show progress as it happens: `acthur test` and
+// `acthur build` both drive per-node go invocations through this one seam
+// rather than re-implementing exec.Command plumbing.
+//
+// env, when non-empty, is appended to the current process's environment
+// (e.g. "CGO_ENABLED=0" for production builds); pass nil to inherit as-is.
+func GoStream(root, node string, out io.Writer, env []string, args ...string) error {
+	cmd := exec.Command("go", args...)
+	cmd.Dir = filepath.Join(root, node)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("go %s failed in node %q: %w", strings.Join(args, " "), node, err)
 	}
 	return nil
 }

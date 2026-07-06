@@ -1,6 +1,7 @@
 package deploy_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,5 +127,54 @@ func TestGate_CollectsAllFailures(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "build") || !strings.Contains(msg, "ACTHUR_GATE_TEST_MISSING_VAR") {
 		t.Errorf("expected both failures reported together, got: %v", err)
+	}
+}
+
+// TestGoStream_StreamsOutputAndSucceeds: a passing `go test` streams its
+// output live to the given writer and returns no error.
+func TestGoStream_StreamsOutputAndSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	writeGoNode(t, dir, "api", false, false)
+
+	var buf bytes.Buffer
+	if err := deploy.GoStream(dir, "api", &buf, nil, "test", "./..."); err != nil {
+		t.Fatalf("expected GoStream to succeed, got: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Error("expected go test output to be streamed to the writer")
+	}
+}
+
+// TestGoStream_FailingTest_ReturnsPointedError: a failing `go test` names
+// the node in the returned error.
+func TestGoStream_FailingTest_ReturnsPointedError(t *testing.T) {
+	dir := t.TempDir()
+	writeGoNode(t, dir, "api", false, true)
+
+	var buf bytes.Buffer
+	err := deploy.GoStream(dir, "api", &buf, nil, "test", "./...")
+	if err == nil {
+		t.Fatal("expected GoStream to fail for a failing test")
+	}
+	if !strings.Contains(err.Error(), "api") {
+		t.Errorf("expected node name in error, got: %v", err)
+	}
+}
+
+// TestGoStream_PassesEnv_CGODisabledForBuild: env vars passed through are
+// visible to the invoked go command (used by acthur build to force
+// CGO_ENABLED=0 for static production binaries).
+func TestGoStream_PassesEnv_CGODisabledForBuild(t *testing.T) {
+	dir := t.TempDir()
+	writeGoNode(t, dir, "api", false, false)
+	outPath := filepath.Join(dir, "api-bin")
+
+	var buf bytes.Buffer
+	err := deploy.GoStream(dir, "api", &buf, []string{"CGO_ENABLED=0"}, "build", "-o", outPath, ".")
+	if err != nil {
+		t.Fatalf("expected build to succeed, got: %v (output: %s)", err, buf.String())
+	}
+	if _, statErr := os.Stat(outPath); statErr != nil {
+		t.Errorf("expected built binary at %s: %v", outPath, statErr)
 	}
 }
