@@ -1,0 +1,59 @@
+package tenant
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+// localsKey is the fiber.Locals key the resolved tenant is stashed under.
+const localsKey = "tenant"
+
+// TenantHeader is the header a client may set to select a tenant directly,
+// bypassing subdomain resolution. Checked first.
+const TenantHeader = "X-Tenant-ID"
+
+// Resolver resolves the tenant for an incoming request: the X-Tenant-ID
+// header first, subdomain fallback (the first label of the request Host)
+// second. An unresolved tenant is a 400 — in a schema-per-tenant app there
+// is no valid "no tenant" request.
+func Resolver(store *Store) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		ctx := c.Context()
+
+		identifier := c.Get(TenantHeader)
+		if identifier == "" {
+			identifier = subdomain(c.Hostname())
+		}
+		if identifier == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "tenant: no X-Tenant-ID header or subdomain on request")
+		}
+
+		t, err := store.BySlug(ctx, identifier)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("tenant: unresolved tenant %q", identifier))
+		}
+
+		c.Locals(localsKey, t)
+		return c.Next()
+	}
+}
+
+// FromContext returns the tenant resolved by Resolver for this request, if
+// any.
+func FromContext(c *fiber.Ctx) (*Tenant, bool) {
+	t, ok := c.Locals(localsKey).(*Tenant)
+	return t, ok
+}
+
+// subdomain returns the first label of host, or "" if host has no
+// subdomain — "acme.example.com" -> "acme", "example.com" -> "".
+func subdomain(host string) string {
+	host, _, _ = strings.Cut(host, ":")
+	parts := strings.Split(host, ".")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[0]
+}

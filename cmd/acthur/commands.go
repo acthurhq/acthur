@@ -20,6 +20,7 @@ import (
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
+	_ "github.com/acthur/acthur/internal/plugin/builtin/multitenancy"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
 	"github.com/spf13/cobra"
 )

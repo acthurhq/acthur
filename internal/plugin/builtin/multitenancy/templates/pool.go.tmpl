@@ -1,0 +1,34 @@
+package tenant
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// NewPool builds a pgxpool tuned for schema-per-tenant workloads:
+//
+//   - BeforeAcquire pings the connection before handing it to a request —
+//     a dead connection can't be trusted to have survived with the
+//     search_path state a previous request may have left it in.
+//   - AfterRelease resets search_path to "public" before the connection
+//     returns to the pool, so a connection freed by one tenant's request
+//     never leaks its schema into the next tenant that acquires it.
+func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.BeforeAcquire = func(ctx context.Context, conn *pgx.Conn) bool {
+		return conn.Ping(ctx) == nil
+	}
+
+	cfg.AfterRelease = func(conn *pgx.Conn) bool {
+		_, err := conn.Exec(context.Background(), "SET search_path TO public")
+		return err == nil
+	}
+
+	return pgxpool.NewWithConfig(ctx, cfg)
+}
