@@ -1,0 +1,20 @@
+# Fixture for config plugin-list parsing (TestLoad_PluginCount).
+# Names here are parse-level only; they are never loaded through the
+# plugin registry, so they may reference not-yet-shipped plugins.
+project: plugin-parse
+version: "1"
+
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      port: 8080
+
+plugins:
+  - name: migrations
+  - name: auth
+    config:
+      strategy: jwt
+  - name: rbac
+  - name: multitenancy

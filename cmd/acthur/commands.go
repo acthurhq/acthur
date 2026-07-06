@@ -20,6 +20,7 @@ import (
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
+	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
 	"github.com/spf13/cobra"
 )
 
@@ -144,7 +145,42 @@ func init() {
 }
 
 // Execute runs the root command. Called from main().
+// bootstrapPlugins makes plugin-registered commands dispatchable: cobra
+// resolves the command word before any RunE runs, so when the working
+// directory holds a project with a plugins list, plugins are loaded (and
+// their commands attached to Root) before Execute. Failures are deliberately
+// silent here — commands that need the graph re-load it and surface pointed
+// errors themselves; a bare `acthur --help` outside a project must not fail.
+func bootstrapPlugins() {
+	cfg, err := config.Load(".")
+	if err != nil || len(cfg.Plugins) == 0 {
+		return
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		return
+	}
+	if err := loadPlugins(cfg, g); err != nil {
+		return
+	}
+	g.Freeze()
+	bootstrapped = bootstrapResult{cfg: cfg, g: g, ok: true}
+}
+
+// bootstrapResult caches the config+graph assembled by bootstrapPlugins so
+// loadGraph can reuse them: plugins register hooks/commands on process-global
+// state (kernelBus, Root), so loading them a second time in the same process
+// would double every registration.
+type bootstrapResult struct {
+	cfg *config.Config
+	g   *graph.Graph
+	ok  bool
+}
+
+var bootstrapped bootstrapResult
+
 func Execute() {
+	bootstrapPlugins()
 	if err := Root.Execute(); err != nil {
 		output.Error("", "%s", err)
 		os.Exit(1)
@@ -185,6 +221,13 @@ func loadConfig() *config.Config {
 // sealing the graph (ADR 0003 two-phase lifecycle). Plugins may mutate the
 // graph (AddNode/AddEdge) only during this window — Freeze() below ends it.
 func loadGraph() (*config.Config, *graph.Graph) {
+	// bootstrapPlugins already assembled and sealed this project's graph
+	// (plugins loaded exactly once); reuse it rather than re-registering
+	// every plugin hook/command on the process-global bus and Root.
+	if bootstrapped.ok {
+		return bootstrapped.cfg, bootstrapped.g
+	}
+
 	cfg := loadConfig()
 	g, err := graph.Build(cfg)
 	if err != nil {
@@ -218,6 +261,11 @@ func loadGraph() (*config.Config, *graph.Graph) {
 // during this process's lifetime. Constructed once at CLI assembly.
 var kernelBus = plugin.NewBus()
 
+// kernelAPI is the KernelAPI handed to plugins by the most recent
+// loadPlugins call; later phases (and `acthur generate`) consume its
+// generator/schema/middleware registries.
+var kernelAPI *plugin.KernelAPIImpl
+
 // loadedPlugins holds the result of the most recent loadPlugins call, used
 // by `acthur plugin list` to show which plugins are active for this project.
 var loadedPlugins []*plugin.LoadedPlugin
@@ -245,6 +293,7 @@ func loadPlugins(cfg *config.Config, g *graph.Graph) error {
 	}
 
 	k := plugin.NewKernelAPI(kernelBus, g, registerPluginCommand, pluginLog)
+	kernelAPI = k
 
 	loaded, err := plugin.Load(names, kernelBus, k)
 	if err != nil {
@@ -381,6 +430,7 @@ forwarding it.`,
 		eng := engine.NewDevEngine(cfg, g, registryResolver{},
 			engine.WithStrict(devStrict),
 			engine.WithContractRegistry(reg),
+			engine.WithBus(kernelBus),
 		)
 		return eng.Start()
 	},

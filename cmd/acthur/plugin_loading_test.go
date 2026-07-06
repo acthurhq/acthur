@@ -1,12 +1,14 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
 )
 
@@ -280,4 +282,140 @@ func removeRootCommand(t *testing.T, use string) {
 		}
 	}
 	t.Fatalf("expected to find command %q on Root to remove", use)
+}
+
+// TestBuiltinTestPlugin_RegistersHookCommandAndGenerator: Phase 5's done-when
+// — the built-in "test" plugin registers a hook, a command, and a generator,
+// and all are live after loading a project that declares plugins: [test].
+func TestBuiltinTestPlugin_RegistersHookCommandAndGenerator(t *testing.T) {
+	cfg := &config.Config{
+		Project: "p",
+		Graph: config.GraphConfig{
+			Nodes: map[string]config.NodeConfig{
+				"api": {Type: config.NodeTypeService, Adapter: "go:fiber", Port: 8080},
+			},
+		},
+		Plugins: []config.PluginEntry{{Name: "test"}},
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("build graph: %v", err)
+	}
+	if err := loadPlugins(cfg, g); err != nil {
+		t.Fatalf("load plugins: %v", err)
+	}
+
+	// Command registered on the root
+	found := false
+	for _, c := range Root.Commands() {
+		if c.Use == "test-plugin" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected test-plugin command on the root command")
+	}
+
+	// Generator registered
+	if kernelAPI == nil {
+		t.Fatal("expected kernelAPI captured by loadPlugins")
+	}
+	if _, ok := kernelAPI.Generator("test-plugin"); !ok {
+		t.Error("expected test-plugin generator registered")
+	}
+
+	// Hook fires on kernel:node:after_healthy through the kernel bus
+	var buf strings.Builder
+	output.SetOutput(&buf, &buf)
+	defer output.SetOutput(os.Stdout, os.Stderr)
+	kernelBus.Emit(plugin.EventAfterNodeHealthy, plugin.EventPayload{
+		NodeID: "api",
+		Data:   map[string]any{"node_type": "service"},
+	})
+	if !strings.Contains(buf.String(), "test-plugin") || !strings.Contains(buf.String(), "api") {
+		t.Errorf("expected test-plugin hook line mentioning the node, got %q", buf.String())
+	}
+}
+
+// TestLoadGraph_AfterBootstrap_DoesNotDoubleRegisterHooks: in the real binary
+// bootstrapPlugins loads plugins at Execute, then the dev command's loadGraph
+// runs — if loadGraph loads plugins a second time, every hook is registered
+// twice on the shared kernelBus and each lifecycle event logs twice (seen live
+// in the Phase 5 witness). One process, one plugin load.
+func TestLoadGraph_AfterBootstrap_DoesNotDoubleRegisterHooks(t *testing.T) {
+	dir := t.TempDir()
+	yml := `project: p
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      port: 8080
+plugins:
+  - name: test
+`
+	if err := os.WriteFile(filepath.Join(dir, "acthur.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	os.Chdir(dir)
+
+	oldBus := kernelBus
+	kernelBus = plugin.NewBus()
+	bootstrapped = bootstrapResult{}
+	defer func() {
+		kernelBus = oldBus
+		bootstrapped = bootstrapResult{}
+	}()
+
+	bootstrapPlugins()
+	_, g := loadGraph()
+	if g == nil {
+		t.Fatal("expected loadGraph to return a graph")
+	}
+
+	var buf strings.Builder
+	output.SetOutput(&buf, &buf)
+	defer output.SetOutput(os.Stdout, os.Stderr)
+	kernelBus.Emit(plugin.EventAfterNodeHealthy, plugin.EventPayload{NodeID: "api"})
+	if n := strings.Count(buf.String(), "is healthy"); n != 1 {
+		t.Fatalf("expected exactly 1 hook line per event, got %d: %q", n, buf.String())
+	}
+}
+
+// TestPluginCommands_AvailableBeforeCobraDispatch: cobra resolves the command
+// word before any RunE executes, so plugin commands must be registered during
+// CLI bootstrap (when the cwd holds an acthur.yml with plugins), not inside
+// per-command graph loading — otherwise `acthur test-plugin` is an unknown
+// command in the real binary even though the plugin registered it.
+func TestPluginCommands_AvailableBeforeCobraDispatch(t *testing.T) {
+	dir := t.TempDir()
+	yml := `project: p
+version: "1"
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+      port: 8080
+plugins:
+  - name: test
+`
+	if err := os.WriteFile(filepath.Join(dir, "acthur.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	os.Chdir(dir)
+
+	bootstrapPlugins()
+
+	for _, c := range Root.Commands() {
+		if c.Use == "test-plugin" {
+			return
+		}
+	}
+	t.Fatal("expected test-plugin command registered at bootstrap, before dispatch")
 }

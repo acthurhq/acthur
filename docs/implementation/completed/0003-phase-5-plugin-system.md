@@ -7,10 +7,12 @@ The dormant `internal/plugin` system becomes real: the engine emits kernel lifec
 - `docs/prd/phase-5-plugin-system.md` (spec) · ADRs 0003, 0005 · tracker issue #39
 
 ## Status
-In-flight
+Completed (2026-07-06)
 - 2026-07-05 — main — PRD + this note created; slices being filed and delegated to Sonnet worktree agents.
 - 2026-07-05 — subagent slice 1 (#40, Sonnet worktree) — DevEngine gains `WithBus(*plugin.Bus)`; startInfraNode/startServiceNode emit before_start/after_start/after_healthy/on_failure at the documented points, shutdown emits before_stop/after_stop in reverse order for real (non-`kernel:`) nodes only; kernel-materialized nodes (proxy) emit nothing on either path. Bus.Emit's panic recovery now logs via `output.Warn` (was a raw `fmt.Printf`) instead of adding a new recovery wrapper — recovery already existed. Nil bus is a no-op (zero overhead). 12 new behavior tests at the engine seam plus 1 in internal/plugin covering the output.Warn routing; full suite green.
 - 2026-07-05 — subagent slice 2 (#41, Sonnet worktree) — landed `internal/plugin/kernelapi.go` (`KernelAPIImpl`: OnEvent→bus, RegisterCommand→cobra adapter, RegisterGenerator/RegisterSchema/RegisterMiddleware→in-memory kernel registries with accessors, AddNode/AddEdge→graph, Graph()→`*graph.Graph` directly since it already satisfies `GraphReader`, Log→pluggable logFunc). Wired plugin loading into `cmd/acthur`'s `loadGraph()`: `cfg.Plugins` names are checked against the plugin registry up front (unknown name → pointed error naming the plugin + listing every registered plugin, `ExitPluginError`), then `plugin.Load` runs in DependsOn order against a shared package-level `kernelBus`, then `g.Freeze()` seals the graph. Added `acthur plugin list` (loaded vs. available, name+version). Seal-timing finding: `graph.Build` never sealed the graph in production — `Freeze()` was only ever called from `graph_test.go`; this is the first production call site, closing the ADR 0003 gap. Behavior tests in `internal/plugin/kernelapi_test.go` (every KernelAPI method, pre/post-seal AddNode panic) and `cmd/acthur/plugin_loading_test.go` (fixture plugin exercising all registrations end-to-end, unknown-plugin error, DependsOn load order). Full suite green. Deviation: manually ran `acthur plugin list` against `testdata/vetangle` (which declares `plugins: [migrations, auth]`) and confirmed it now fails cleanly with the unknown-plugin error, since no capability plugins are registered yet (Phase 6, out of scope) — expected, not a regression.
+
+- 2026-07-06 — main — Slice 3 (#39): built-in `test` plugin (`internal/plugin/builtin/testplugin`, blank-imported by the CLI, opt-in via `plugins: [test]`) registering the after_healthy hook, the `test-plugin` command, and a generator target. `acthur dev` now passes `engine.WithBus(kernelBus)` so loaded plugins observe engine lifecycle events. Added `bootstrapPlugins()` before cobra dispatch — cobra resolves the command word before any RunE, so plugin commands must attach to Root at Execute. Live witness (scaffolded go:fiber api + postgres db, `plugins: [test]`) caught a real bug: plugins loaded twice (bootstrap + loadGraph), double-registering every hook on the shared bus — each healthy node logged twice. Fixed via bootstrap result reuse in loadGraph (`TestLoadGraph_AfterBootstrap_DoesNotDoubleRegisterHooks` reproduces it). Witness after fix: exactly one `test-plugin: node "…" is healthy` line per node, `/api/health` 200 via proxy, `acthur test-plugin` runs, command visible in `acthur --help`, `acthur plugin list` shows test v0.1.0, clean teardown. vetangle's `plugins:` entries commented out until Phase 6 ships the capability plugins (new `testdata/plugin-parse` fixture keeps config parse coverage). Full suite green.
 
 ## Current Decisions
 - Event emission is synchronous with per-handler panic recovery; a broken plugin handler must never take down `acthur dev`.
@@ -24,11 +26,11 @@ In-flight
 `internal/engine` (bus emission), `internal/plugin` (KernelAPI impl, test plugin), `cmd/acthur` (loading, plugin list command).
 
 ## Acceptance Criteria
-- [ ] Test plugin's hook fires at `kernel:node:after_healthy` during a live `acthur dev` (line visible in output)
-- [ ] Test plugin's command appears in `acthur --help` and runs
-- [ ] Test plugin's generator target is registered and introspectable
-- [ ] Unknown plugin name in `acthur.yml` fails before startup with a pointed error
-- [ ] Full suite green; no plugin handler can panic the kernel
+- [x] Test plugin's hook fires at `kernel:node:after_healthy` during a live `acthur dev` (line visible in output)
+- [x] Test plugin's command appears in `acthur --help` and runs
+- [x] Test plugin's generator target is registered and introspectable
+- [x] Unknown plugin name in `acthur.yml` fails before startup with a pointed error
+- [x] Full suite green; no plugin handler can panic the kernel
 
 ## Risks
 The plugin package predates Phases 2–4 conventions (like the old engine did) — expect small honest-reconciliation fixes (e.g. global registry vs injected resolver) rather than drop-in wiring.
