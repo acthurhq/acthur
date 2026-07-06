@@ -39,6 +39,8 @@ In-flight
   real DNS resolution, real `acthur service restart` against a live pid)
   has been performed in this worktree.
 
+- 2026-07-06 — main — Wave 1 merged to dev (all three branches), full suite green. Live witness (scratchpad witness-w1, gofiber api + postgres db): `acthur build` → static binary at `.acthur/build/api`; `acthur test` green; doctor preflight correctly aborted dev on missing tools (and the witness caught a real bug: `cmdVersion` used `cmd.Output()` but air prints its version to stderr — doctor reported installed air as missing; fixed with `CombinedOutput` + regression test); DNS preflight printed copy-pastable /etc/hosts instructions; `.acthur/logs/<node>.log` + `.acthur/run/<node>.pid` written by the engine; `service health` ✓, `service logs` tails live air/request output, `service restart` bounced the app (uptime reset, healthy after); file-change hot reload proven both ways — broken file → air build failure + shutdown + supervisor recovery, fixed file → rebuild → healthy, with zero engine-driven restarts (SelfReloader honored). Wave 1 acceptance criteria met; Wave 2 (Phase 9, #57–#65) launching.
+
 ## Current Decisions
 - Waves: (1) Phase 3+4+6/8 leftovers — three agents; (2) Phase 9 split across parallel agents. Merge + full suite + witness between waves.
 - Conflict hotspot `cmd/acthur/commands.go`: each agent owns only its command block; orchestrator resolves import/status-note conflicts on merge.

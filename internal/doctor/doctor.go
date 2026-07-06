@@ -603,7 +603,9 @@ func checksForAdapters(adapters map[string]bool) []*Check {
 
 func cmdVersion(name string, args ...string) string {
 	cmd := exec.Command(name, args...)
-	out, err := cmd.Output()
+	// CombinedOutput, not Output: some tools (air) print their version
+	// banner to stderr with an empty stdout.
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}

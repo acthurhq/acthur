@@ -1,6 +1,9 @@
 package doctor
 
-import "testing"
+import (
+	"os/exec"
+	"testing"
+)
 
 // TestHasBlockingFailures_RequiredMissingBlocks asserts a required check that
 // is missing (auto-fixable or not) is treated as a blocking failure — the
@@ -58,5 +61,18 @@ func TestHasBlockingFailures_AllOKDoesNotBlock(t *testing.T) {
 	}}
 	if HasBlockingFailures(r) {
 		t.Fatal("expected all-OK result not to block")
+	}
+}
+
+// TestCmdVersion_StderrOnlyTool: some tools (air) print their version banner
+// to stderr with an empty stdout — cmdVersion must still see it, or doctor
+// reports an installed tool as missing.
+func TestCmdVersion_StderrOnlyTool(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	got := cmdVersion("sh", "-c", "echo 'v1.2.3' >&2")
+	if got != "v1.2.3" {
+		t.Fatalf("expected stderr version output captured, got %q", got)
 	}
 }
