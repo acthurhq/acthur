@@ -86,10 +86,16 @@ func backendScaffoldAdapters() []string {
 	return names
 }
 
-// defaultBackendAdapter returns the first (alphabetically) registered
-// backend adapter that can scaffold a project, or "" if none is registered.
+// defaultBackendAdapter returns go:fiber when it can scaffold (the canonical
+// default — stable as new adapters register), else the first (alphabetically)
+// registered backend adapter that can, or "" if none is registered.
 func defaultBackendAdapter() string {
 	names := backendScaffoldAdapters()
+	for _, n := range names {
+		if n == "go:fiber" {
+			return n
+		}
+	}
 	if len(names) == 0 {
 		return ""
 	}
