@@ -131,6 +131,12 @@ func runAdd(root, pluginName, nodeFlag string) (*addSummary, error) {
 			Config:      pluginCfg,
 			Extra: map[string]any{
 				"module_path": scaffold.ResolveScaffoldContext(*cfg, node.ID).ModulePath,
+				// graph gives generators read access to the live *graph.Graph
+				// (nodes/edges) so plugins like security can derive real data
+				// (e.g. a CORS allowlist from data_flow edges) instead of
+				// hand-configured lists. Optional — generators that don't
+				// need it (auth, rbac, multitenancy, migrations) ignore it.
+				"graph": g,
 			},
 		}
 
