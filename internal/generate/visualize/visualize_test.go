@@ -92,6 +92,24 @@ func TestRender_UnsupportedFormat_Errors(t *testing.T) {
 	}
 }
 
+// TestMermaid_NoStrayEscapes regresses a bug where labels were built with an
+// embedded `\n` line-break escape and then re-quoted with fmt's %q verb,
+// which escapes the literal backslash again — producing a broken `\\n` in
+// the rendered diagram instead of a real line break.
+func TestMermaid_NoStrayEscapes(t *testing.T) {
+	out := visualize.Mermaid(testGraph(t))
+	if strings.Contains(out, `\\`) {
+		t.Errorf("expected no double-escaped backslashes in mermaid output, got:\n%s", out)
+	}
+}
+
+func TestDot_NoStrayEscapes(t *testing.T) {
+	out := visualize.Dot(testGraph(t))
+	if strings.Contains(out, `\\`) {
+		t.Errorf("expected no double-escaped backslashes in dot output, got:\n%s", out)
+	}
+}
+
 func TestRender_Deterministic(t *testing.T) {
 	g := testGraph(t)
 	m1, _ := visualize.Render(g, "mermaid")

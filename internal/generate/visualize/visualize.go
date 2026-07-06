@@ -66,6 +66,15 @@ func sortedEdges(g *graph.Graph) []*graph.Edge {
 	return edges
 }
 
+// nodeLabel renders a node's ID and adapter as a single-line label. Both
+// Mermaid and DOT support a literal backslash-n escape for a line break
+// inside a quoted label, but %q (used to safely quote the label for both
+// formats) would re-escape that backslash into a broken double-backslash —
+// so the label stays single-line rather than fighting %q's escaping.
+func nodeLabel(n *graph.Node) string {
+	return fmt.Sprintf("%s (%s)", n.ID, n.Adapter)
+}
+
 // edgeLabel renders an edge's type plus its contract names, if any.
 func edgeLabel(e *graph.Edge) string {
 	label := string(e.Type)
@@ -88,7 +97,7 @@ func Mermaid(g *graph.Graph) string {
 
 	for _, n := range sortedNodes(g) {
 		id := mermaidID(n.ID)
-		label := fmt.Sprintf("%s\\n(%s)", n.ID, n.Adapter)
+		label := nodeLabel(n)
 		switch n.Type {
 		case config.NodeTypeService:
 			fmt.Fprintf(&b, "    %s[%q]\n", id, label)
@@ -141,8 +150,7 @@ func Dot(g *graph.Graph) string {
 		case config.NodeTypeInfra:
 			shape = "cylinder"
 		}
-		label := fmt.Sprintf("%s\\n(%s)", n.ID, n.Adapter)
-		fmt.Fprintf(&b, "    %q [shape=%s, label=%q];\n", n.ID, shape, label)
+		fmt.Fprintf(&b, "    %q [shape=%s, label=%q];\n", n.ID, shape, nodeLabel(n))
 	}
 
 	for _, e := range sortedEdges(g) {
