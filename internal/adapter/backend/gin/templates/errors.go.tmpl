@@ -1,0 +1,92 @@
+package errors
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+// Code is a machine-readable error code returned to API clients.
+type Code string
+
+const (
+	CodeNotFound     Code = "not_found"
+	CodeUnauthorized Code = "unauthorized"
+	CodeForbidden    Code = "forbidden"
+	CodeValidation   Code = "validation_failed"
+	CodeConflict     Code = "conflict"
+	CodeInternal     Code = "internal_error"
+	CodeBadRequest   Code = "bad_request"
+	CodeRateLimit    Code = "rate_limit_exceeded"
+)
+
+// AppError is the standard error type for this service.
+// All handler errors should return an AppError for consistent API responses.
+type AppError struct {
+	HTTPStatus int    `json:"-"`
+	Code       Code   `json:"code"`
+	Message    string `json:"message"`
+	Details    any    `json:"details,omitempty"`
+}
+
+func (e *AppError) Error() string {
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+}
+
+// Common constructors
+func NotFound(resource string) *AppError {
+	return &AppError{HTTPStatus: http.StatusNotFound,
+		Code: CodeNotFound, Message: resource + " not found"}
+}
+func Unauthorized(msg string) *AppError {
+	return &AppError{HTTPStatus: http.StatusUnauthorized,
+		Code: CodeUnauthorized, Message: msg}
+}
+func Forbidden(msg string) *AppError {
+	return &AppError{HTTPStatus: http.StatusForbidden,
+		Code: CodeForbidden, Message: msg}
+}
+func Validation(details any) *AppError {
+	return &AppError{HTTPStatus: http.StatusUnprocessableEntity,
+		Code: CodeValidation, Message: "validation failed", Details: details}
+}
+func Conflict(msg string) *AppError {
+	return &AppError{HTTPStatus: http.StatusConflict,
+		Code: CodeConflict, Message: msg}
+}
+func Internal(err error) *AppError {
+	_ = err
+	return &AppError{HTTPStatus: http.StatusInternalServerError,
+		Code: CodeInternal, Message: "an internal error occurred"}
+}
+
+// Abort records err on the gin context and aborts the chain. Handler() (the
+// gin ErrorHandler middleware registered in server.New) converts it into the
+// JSON error response once the chain unwinds.
+func Abort(c *gin.Context, err error) {
+	_ = c.Error(err)
+	c.Abort()
+}
+
+// Handler returns the gin ErrorHandler middleware. Gin has no centralized
+// error-handler hook like Fiber's fiber.Config.ErrorHandler — handlers call
+// Abort(c, err) instead, and this middleware (registered early, after
+// Recovery) converts the last recorded error into a consistent JSON body
+// once the handler chain returns.
+func Handler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+
+		if len(c.Errors) == 0 || c.Writer.Written() {
+			return
+		}
+
+		err := c.Errors.Last().Err
+		e, ok := err.(*AppError)
+		if !ok {
+			e = Internal(err)
+		}
+		c.JSON(e.HTTPStatus, gin.H{"error": e})
+	}
+}

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/acthur/acthur/internal/adapter"
+	_ "github.com/acthur/acthur/internal/adapter/backend/chi"
+	_ "github.com/acthur/acthur/internal/adapter/backend/gin"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
 	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
