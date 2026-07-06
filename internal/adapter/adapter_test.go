@@ -278,17 +278,121 @@ func TestGoFiber_Scaffold_FilesHaveContent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// go:fiber Dockerizable capability tests (Phase 8 slice 1, #51)
+// ---------------------------------------------------------------------------
+
+func TestGoFiber_SatisfiesDockerizable(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := a.(adapter.Dockerizable); !ok {
+		t.Error("go:fiber does not satisfy Dockerizable")
+	}
+}
+
+func TestGoFiber_DockerfileFor_MultiStageBuild(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	content := string(out)
+	if !strings.Contains(content, "FROM golang:1.22-alpine AS builder") {
+		t.Error("expected a golang:1.22-alpine builder stage matching go.mod's go 1.22")
+	}
+	if !strings.Contains(content, "FROM alpine:3.20") {
+		t.Error("expected an alpine runtime stage")
+	}
+	if strings.Count(content, "FROM ") < 2 {
+		t.Error("expected a multi-stage build (at least two FROM stages)")
+	}
+}
+
+func TestGoFiber_DockerfileFor_NonRootUser(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	if !strings.Contains(string(out), "USER acthur") {
+		t.Error("expected the runtime stage to drop to a non-root user")
+	}
+}
+
+func TestGoFiber_DockerfileFor_ExposesNodePort(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 9090})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	if !strings.Contains(string(out), "EXPOSE 9090") {
+		t.Errorf("expected EXPOSE 9090 derived from the node's port, got:\n%s", out)
+	}
+}
+
+func TestGoFiber_DockerfileFor_HealthcheckAgainstHealthPath(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	content := string(out)
+	if !strings.Contains(content, "HEALTHCHECK") {
+		t.Error("expected a HEALTHCHECK instruction")
+	}
+	if !strings.Contains(content, "http://localhost:8080/health") {
+		t.Error("expected the healthcheck to probe the adapter's /health path on the node's port")
+	}
+}
+
+// TestGoFiber_DockerfileFor_NoPort_OmitsExposeAndHealthcheck: a queue-worker
+// service node has no listening port. EXPOSE/HEALTHCHECK must be omitted
+// rather than guessed — a fabricated port would silently break the image.
+func TestGoFiber_DockerfileFor_NoPort_OmitsExposeAndHealthcheck(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "worker", Port: 0})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	content := string(out)
+	if strings.Contains(content, "EXPOSE") {
+		t.Error("expected no EXPOSE for a portless node")
+	}
+	if strings.Contains(content, "HEALTHCHECK") {
+		t.Error("expected no HEALTHCHECK for a portless node")
+	}
+}
+
+func TestGoFiber_DockerfileFor_Deterministic(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	ctx := adapter.DockerfileContext{NodeID: "api", Port: 8080}
+	out1, err := a.DockerfileFor(ctx)
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	out2, err := a.DockerfileFor(ctx)
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	if !bytes.Equal(out1, out2) {
+		t.Error("expected DockerfileFor to be deterministic across identical calls")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Capability model tests
 // ---------------------------------------------------------------------------
 
-// Behavior 1: CapabilitiesOf(go:fiber) returns exactly {Scaffold, Run}.
-func TestCapabilitiesOf_GoFiber_ExactlyScaffoldAndRun(t *testing.T) {
+// Behavior 1: CapabilitiesOf(go:fiber) returns exactly {Scaffold, Run, Dockerize}.
+// Phase 8 slice 1 (#51) added the Dockerizable capability to go:fiber for
+// production Dockerfile generation — distinct from the scaffold-time
+// Dockerfile the Scaffolder already writes into the project.
+func TestCapabilitiesOf_GoFiber_ExactlyScaffoldRunAndDockerize(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
 	caps := adapter.CapabilitiesOf(a)
 
 	want := map[adapter.Capability]bool{
-		adapter.CapabilityScaffold: true,
-		adapter.CapabilityRun:      true,
+		adapter.CapabilityScaffold:  true,
+		adapter.CapabilityRun:       true,
+		adapter.CapabilityDockerize: true,
 	}
 	notWant := []adapter.Capability{
 		adapter.CapabilityContainer,
@@ -296,8 +400,8 @@ func TestCapabilitiesOf_GoFiber_ExactlyScaffoldAndRun(t *testing.T) {
 		adapter.CapabilityDeploy,
 	}
 
-	if len(caps) != 2 {
-		t.Errorf("expected exactly 2 capabilities, got %d: %v", len(caps), caps)
+	if len(caps) != 3 {
+		t.Errorf("expected exactly 3 capabilities, got %d: %v", len(caps), caps)
 	}
 	for _, c := range caps {
 		if !want[c] {
@@ -339,11 +443,14 @@ func TestGoFiber_DoesNotExposeGeneratorTargets(t *testing.T) {
 	}
 }
 
-// Behavior 5: go:fiber leaves Dockerfile ownership to scaffolded files.
+// Behavior 5: go:fiber does not expose a bare "Dockerfile" method — the
+// scaffold-time Dockerfile stays owned by Scaffolder, and the Phase 8
+// production-Dockerfile capability is named DockerfileFor (Dockerizable) so
+// the two concerns never collide under the same method name.
 func TestGoFiber_DoesNotExposeDockerfileMethod(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
 	if _, ok := reflect.TypeOf(a).MethodByName("Dockerfile"); ok {
-		t.Error("go:fiber should not expose a Dockerfile method")
+		t.Error("go:fiber should not expose a bare Dockerfile method")
 	}
 }
 
