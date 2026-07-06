@@ -338,8 +338,10 @@ func TestGoFiber_DockerfileFor_HealthcheckAgainstHealthPath(t *testing.T) {
 	if !strings.Contains(content, "HEALTHCHECK") {
 		t.Error("expected a HEALTHCHECK instruction")
 	}
-	if !strings.Contains(content, "http://localhost:8080/health") {
-		t.Error("expected the healthcheck to probe the adapter's /health path on the node's port")
+	// 127.0.0.1, not localhost: alpine resolves localhost to ::1 while the
+	// app listens on IPv4 only (caught live by the Phase 8 witness).
+	if !strings.Contains(content, "http://127.0.0.1:8080/health") {
+		t.Error("expected the healthcheck to probe the adapter's /health path on the node's port via 127.0.0.1")
 	}
 }
 

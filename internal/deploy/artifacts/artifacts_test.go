@@ -108,6 +108,50 @@ func TestProject_EmitsDockerfilePerDockerizableServiceNode(t *testing.T) {
 	fileByPath(t, files, "deploy/Dockerfile.worker")
 }
 
+// TestProject_DockerfileBuildsTheRootMainPackage: the scaffold's main
+// package lives at the module root; `go build -o <file> ./...` fails with
+// "cannot write multiple packages to non-directory" the moment the module
+// has more than one package (caught live by the Phase 8 witness).
+func TestProject_DockerfileBuildsTheRootMainPackage(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	df := fileByPath(t, files, "deploy/Dockerfile.api")
+	content := string(df.Content)
+	if strings.Contains(content, "./...") {
+		t.Error("Dockerfile must build the root main package (.), not ./... — multiple packages cannot share one -o output")
+	}
+	if !strings.Contains(content, "go build") {
+		t.Error("expected a go build line")
+	}
+}
+
+// TestProject_HealthcheckUsesIPv4Loopback: inside alpine, `localhost`
+// resolves to ::1 first while the scaffolded app listens on IPv4 only —
+// the healthcheck must probe 127.0.0.1 (caught live by the Phase 8
+// witness: running app, permanently unhealthy container).
+func TestProject_HealthcheckUsesIPv4Loopback(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	df := fileByPath(t, files, "deploy/Dockerfile.api")
+	content := string(df.Content)
+	if strings.Contains(content, "://localhost") {
+		t.Error("healthcheck must use 127.0.0.1, not localhost (alpine resolves localhost to ::1)")
+	}
+	if !strings.Contains(content, "127.0.0.1") {
+		t.Error("expected healthcheck against 127.0.0.1")
+	}
+	compose := fileByPath(t, files, "deploy/docker-compose.prod.yml")
+	if strings.Contains(string(compose.Content), "://localhost") {
+		t.Error("compose healthchecks must use 127.0.0.1, not localhost")
+	}
+}
+
 func TestProject_NoDockerfileForInfraNodes(t *testing.T) {
 	cfg, g := loadVetangle(t)
 	files, err := artifacts.Project(cfg, g)
@@ -231,8 +275,11 @@ func TestProject_Compose_ServiceUsesBuildDirective(t *testing.T) {
 	if api.Build == nil {
 		t.Fatal("expected api service to use a build directive")
 	}
-	if api.Build.Context != "./api" {
-		t.Errorf("expected build.context=./api, got %q", api.Build.Context)
+	// The compose file lives at deploy/docker-compose.prod.yml and compose
+	// resolves build.context relative to the file's directory — ../api, not
+	// ./api (caught live by the Phase 8 witness: "path deploy/api not found").
+	if api.Build.Context != "../api" {
+		t.Errorf("expected build.context=../api (relative to deploy/), got %q", api.Build.Context)
 	}
 	if api.Build.Dockerfile != "../deploy/Dockerfile.api" {
 		t.Errorf("expected build.dockerfile=../deploy/Dockerfile.api, got %q", api.Build.Dockerfile)

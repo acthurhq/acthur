@@ -176,7 +176,10 @@ func projectService(a adapter.Adapter, n *graph.Node, isProxied bool) (composeSe
 
 	svc := composeService{
 		Build: &composeBuild{
-			Context:    "./" + n.ID,
+			// Relative to the compose file's own directory (deploy/):
+			// context is the node's source dir one level up; dockerfile is
+			// then resolved relative to that context.
+			Context:    "../" + n.ID,
 			Dockerfile: "../deploy/Dockerfile." + n.ID,
 		},
 		Environment: envRefs(envVarKeys(a.EnvVars())),
@@ -186,7 +189,7 @@ func projectService(a adapter.Adapter, n *graph.Node, isProxied bool) (composeSe
 
 	if n.Port != 0 {
 		svc.Healthcheck = &composeHealthcheck{
-			Test:     []string{"CMD-SHELL", fmt.Sprintf("wget -qO- http://localhost:%d/health || exit 1", n.Port)},
+			Test:     []string{"CMD-SHELL", fmt.Sprintf("wget -qO- http://127.0.0.1:%d/health || exit 1", n.Port)},
 			Interval: "10s",
 			Timeout:  "3s",
 			Retries:  5,
