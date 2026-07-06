@@ -16,14 +16,14 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakePlugin struct {
-	name      string
-	version   string
-	dependsOn []string
+	name       string
+	version    string
+	dependsOn  []string
 	registered bool
 }
 
-func (p *fakePlugin) Name() string       { return p.name }
-func (p *fakePlugin) Version() string    { return p.version }
+func (p *fakePlugin) Name() string        { return p.name }
+func (p *fakePlugin) Version() string     { return p.version }
 func (p *fakePlugin) DependsOn() []string { return p.dependsOn }
 func (p *fakePlugin) Register(k plugin.KernelAPI) error {
 	p.registered = true
@@ -193,6 +193,27 @@ func TestResolveOrder_MissingDependency(t *testing.T) {
 	}
 }
 
+func TestLoadDelta_SatisfiedDependency_LoadsWithoutReloadingIt(t *testing.T) {
+	auth := &fakePlugin{name: "auth", version: "1.0.0"}
+	rbac := &fakePlugin{name: "rbac", version: "1.0.0", dependsOn: []string{"auth"}}
+	cleanup := registerFakePlugins(t, auth, rbac)
+	defer cleanup()
+
+	bus := plugin.NewBus()
+	k := &nullKernelAPI{}
+	// auth is already loaded in this process; only rbac is in the delta.
+	loaded, err := plugin.LoadDelta([]string{"rbac"}, []string{"auth"}, bus, k)
+	if err != nil {
+		t.Fatalf("expected satisfied dependency to load, got: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].Plugin.Name() != "rbac" {
+		t.Fatalf("expected only rbac loaded, got %+v", loaded)
+	}
+	if auth.registered {
+		t.Error("expected auth NOT to be re-registered by the delta load")
+	}
+}
+
 func TestResolveOrder_AllRegistered(t *testing.T) {
 	plugins := []*fakePlugin{
 		{name: "migrations", version: "1.0.0"},
@@ -279,12 +300,12 @@ func registerFakePlugins(t *testing.T, plugins ...*fakePlugin) func() {
 // nullKernelAPI is a no-op KernelAPI for testing plugin loading.
 type nullKernelAPI struct{}
 
-func (k *nullKernelAPI) OnEvent(_ plugin.Event, _ func(plugin.EventPayload))        {}
-func (k *nullKernelAPI) RegisterCommand(_ plugin.CLICommand)                         {}
-func (k *nullKernelAPI) RegisterGenerator(_ string, _ plugin.Generator)              {}
-func (k *nullKernelAPI) RegisterSchema(_ string, _ plugin.SchemaDefinition)          {}
-func (k *nullKernelAPI) RegisterMiddleware(_ plugin.Middleware)                       {}
-func (k *nullKernelAPI) AddNode(_ *graph.Node)                                        {}
-func (k *nullKernelAPI) AddEdge(_ *graph.Edge)                                        {}
-func (k *nullKernelAPI) Graph() plugin.GraphReader                                    { return nil }
-func (k *nullKernelAPI) Log(_ plugin.LogLevel, _ string, _ ...any)                   {}
+func (k *nullKernelAPI) OnEvent(_ plugin.Event, _ func(plugin.EventPayload)) {}
+func (k *nullKernelAPI) RegisterCommand(_ plugin.CLICommand)                 {}
+func (k *nullKernelAPI) RegisterGenerator(_ string, _ plugin.Generator)      {}
+func (k *nullKernelAPI) RegisterSchema(_ string, _ plugin.SchemaDefinition)  {}
+func (k *nullKernelAPI) RegisterMiddleware(_ plugin.Middleware)              {}
+func (k *nullKernelAPI) AddNode(_ *graph.Node)                               {}
+func (k *nullKernelAPI) AddEdge(_ *graph.Edge)                               {}
+func (k *nullKernelAPI) Graph() plugin.GraphReader                           { return nil }
+func (k *nullKernelAPI) Log(_ plugin.LogLevel, _ string, _ ...any)           {}

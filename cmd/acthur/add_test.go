@@ -262,3 +262,47 @@ func TestEnsurePluginLoaded_ReusesKernelAPIWhenAlreadyLoadedThisProcess(t *testi
 		t.Errorf("expected exactly one loaded plugin entry, got %d", len(loadedPlugins))
 	}
 }
+
+// TestRunAdd_DependencySatisfiedByAlreadyLoadedPlugin: the Phase 6 witness
+// caught this — with auth already in acthur.yml and loaded at bootstrap,
+// `acthur add rbac` failed with "requires plugin auth but it is not
+// installed" because the delta load only considered the delta names when
+// checking DependsOn. Already-loaded plugins satisfy dependencies.
+func TestRunAdd_DependencySatisfiedByAlreadyLoadedPlugin(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	if _, err := runAdd(dir, "auth", ""); err != nil {
+		t.Fatalf("add auth: %v", err)
+	}
+	if _, err := runAdd(dir, "rbac", ""); err != nil {
+		t.Fatalf("add rbac with auth already loaded: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "migrations", "0200_roles.up.sql"))
+	if err != nil || len(data) == 0 {
+		t.Fatalf("expected rbac migration written, err=%v", err)
+	}
+}
+
+// TestRunAdd_LoadFailure_RollsBackYAMLEdit: a failed add must not leave the
+// plugin behind in acthur.yml (the witness left `- name: rbac` in the list
+// after the dependency error, wedging every later command).
+func TestRunAdd_LoadFailure_RollsBackYAMLEdit(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	// rbac depends on auth; auth is neither in the list nor loaded.
+	if _, err := runAdd(dir, "rbac", ""); err == nil {
+		t.Fatal("expected dependency error adding rbac without auth")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "acthur.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "rbac") {
+		t.Fatalf("expected failed add to roll back the acthur.yml edit, got:\n%s", data)
+	}
+}

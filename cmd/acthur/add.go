@@ -67,28 +67,44 @@ func runAdd(root, pluginName, nodeFlag string) (*addSummary, error) {
 		return nil, err
 	}
 
+	original, err := os.ReadFile(ymlPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", ymlPath, err)
+	}
+
 	alreadyHad, err := addPluginToYAML(ymlPath, pluginName)
 	if err != nil {
 		return nil, fmt.Errorf("updating %s: %w", ymlPath, err)
 	}
+	// A failed add must not leave the plugin behind in acthur.yml — a
+	// half-added entry wedges every later command at plugin load.
+	rollback := func() {
+		if !alreadyHad {
+			_ = os.WriteFile(ymlPath, original, 0o644)
+		}
+	}
 
 	cfg, err := config.LoadFile(ymlPath)
 	if err != nil {
+		rollback()
 		return nil, fmt.Errorf("reloading %s: %w", ymlPath, err)
 	}
 
 	g, err := graph.Build(cfg)
 	if err != nil {
+		rollback()
 		return nil, fmt.Errorf("building graph: %w", err)
 	}
 
 	k, err := ensurePluginLoaded(cfg, g)
 	if err != nil {
+		rollback()
 		return nil, err
 	}
 
 	gen, ok := k.Generator(pluginName)
 	if !ok {
+		rollback()
 		return nil, fmt.Errorf(
 			"plugin %q registered no generator named %q — nothing to generate",
 			pluginName, pluginName,
@@ -97,6 +113,7 @@ func runAdd(root, pluginName, nodeFlag string) (*addSummary, error) {
 
 	targets, err := resolveTargetNodes(g, nodeFlag)
 	if err != nil {
+		rollback()
 		return nil, err
 	}
 
@@ -116,6 +133,7 @@ func runAdd(root, pluginName, nodeFlag string) (*addSummary, error) {
 
 		files, err := gen.Generate(node.Adapter, ctx)
 		if err != nil {
+			rollback()
 			return nil, fmt.Errorf("generating %q for node %q: %w", pluginName, node.ID, err)
 		}
 
@@ -165,8 +183,13 @@ func ensurePluginLoaded(cfg *config.Config, g *graph.Graph) (*plugin.KernelAPIIm
 		return nil, err
 	}
 
+	satisfied := make([]string, 0, len(loadedPlugins))
+	for _, lp := range loadedPlugins {
+		satisfied = append(satisfied, lp.Plugin.Name())
+	}
+
 	k := plugin.NewKernelAPI(kernelBus, g, registerPluginCommand, pluginLog)
-	loaded, err := plugin.Load(delta, kernelBus, k)
+	loaded, err := plugin.LoadDelta(delta, satisfied, kernelBus, k)
 	if err != nil {
 		return nil, err
 	}

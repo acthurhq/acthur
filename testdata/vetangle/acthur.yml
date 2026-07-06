@@ -151,41 +151,38 @@ graph:
       to: storage
       type: migrates
 
-# Capability plugins land in Phase 6; until they are registered in the
-# binary, declaring them would fail plugin loading (the kernel rejects
-# unknown plugin names before startup). Restore entries as Phase 6 ships.
-# plugins:
-#   - name: migrations
+plugins:
+  - name: migrations
 
-#   - name: auth
-#     config:
-#       strategy: jwt
-#       algorithm: RS256
-#       access_token_ttl: 15m
-#       refresh_token_ttl: 7d
-#       refresh_rotation: true
-#       revocation: redis
-#       oauth2:
-#         providers:
-#           - google
-#           - github
-#       mfa:
-#         factors:
-#           - totp
+  - name: auth
+    config:
+      strategy: jwt
+      algorithm: RS256
+      access_token_ttl: 15m
+      refresh_token_ttl: 7d
+      refresh_rotation: true
+      revocation: redis
+      oauth2:
+        providers:
+          - google
+          - github
+      mfa:
+        factors:
+          - totp
 
-#   - name: rbac
-#     config:
-#       roles:
-#         - admin
-#         - vet
-#         - agent
-#         - support
-#         - user
+  - name: rbac
+    config:
+      roles:
+        - admin
+        - vet
+        - agent
+        - support
+        - user
 
-#   - name: multitenancy
-#     config:
-#       strategy: schema
-#       identification: subdomain
+  - name: multitenancy
+    config:
+      strategy: schema
+      identification: subdomain
 
 ai:
   provider: claude
