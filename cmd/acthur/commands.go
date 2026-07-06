@@ -1480,31 +1480,56 @@ func init() {
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "explain <question>",
 		Short: "Explain part of the system",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Answers a question about the project using its full live graph and
+contract context. Requires an 'ai:' block in acthur.yml (see docs/acthur-prd.md
+§17.7) with a working API key — only the "claude" provider is implemented today.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentExplain(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "generate <feature>",
-		Short: "Generate a feature with full graph context",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Short: "Propose an implementation plan for a feature, with full graph context",
+		Long: `Proposes an implementation plan for a feature or endpoint using the
+project's real adapters/contracts/graph as context. Prints the plan — it does
+not write files itself. Requires an 'ai:' block in acthur.yml.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentGenerate(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "diagnose <problem>",
 		Short: "Diagnose a runtime problem",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Diagnoses a described runtime problem using the project's live graph and
+contract context. Requires an 'ai:' block in acthur.yml.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentDiagnose(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "review",
 		Short: "Review the current git diff",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Reviews the working tree's current 'git diff' for bugs, risks, and
+contract consistency, using the project's graph/contract context. Requires an
+'ai:' block in acthur.yml. Prints a message and does nothing else if the diff
+is empty.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentReview(agentDeps{root: mustCwd(), out: os.Stdout})
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "document <path>",
 		Short: "Generate documentation for a path",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Generates documentation for a file (its contents, truncated to 64KB) or
+directory (a listing of its immediate entries), using the project's graph/
+contract context. Requires an 'ai:' block in acthur.yml.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentDocument(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 }
 
