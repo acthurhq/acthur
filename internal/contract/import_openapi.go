@@ -60,7 +60,7 @@ func importOpenAPI(path string, data []byte) (*Contract, error) {
 		schemas, _ := components["schemas"].(map[string]any)
 		for typeName, raw := range schemas {
 			schema, _ := raw.(map[string]any)
-			fields, err := openapiObjectFields(schema)
+			fields, err := openapiObjectFields(schema, true)
 			if err != nil {
 				return nil, fmt.Errorf("openapi contract %q: type %q: %w", path, typeName, err)
 			}
@@ -149,7 +149,7 @@ func importOpenAPIOperation(method, nativePath string, op map[string]any, global
 			}
 			required, _ := p["required"].(bool)
 			schema, _ := p["schema"].(map[string]any)
-			typ, err := openapiScalarType(schema, required)
+			typ, err := openapiScalarType(schema, required, false)
 			if err != nil {
 				return nil, fmt.Errorf("parameter %q: %w", pname, err)
 			}
@@ -163,7 +163,7 @@ func importOpenAPIOperation(method, nativePath string, op map[string]any, global
 			return nil, err
 		}
 		if schema != nil {
-			fields, err := flattenSchemaFields(schema, types)
+			fields, err := flattenSchemaFields(schema, types, false)
 			if err != nil {
 				return nil, fmt.Errorf("requestBody: %w", err)
 			}
@@ -191,7 +191,7 @@ func importOpenAPIOperation(method, nativePath string, op map[string]any, global
 				return nil, fmt.Errorf("response %s: %w", status, err)
 			}
 			if schema != nil {
-				fields, err := flattenSchemaFields(schema, types)
+				fields, err := flattenSchemaFields(schema, types, true)
 				if err != nil {
 					return nil, fmt.Errorf("response %s: %w", status, err)
 				}

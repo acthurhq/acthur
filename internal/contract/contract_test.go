@@ -3,6 +3,7 @@ package contract_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/acthur/acthur/internal/contract"
@@ -784,46 +785,141 @@ func TestDiff_MinConstraint_StricterAndLooser(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Importer honesty tests — .proto / .graphql / .openapi.yml are Phase 4
-// out-of-scope formats (docs/prd/phase-4-contract-engine.md); ParseFile must
-// error explicitly rather than returning a silently-empty Contract.
+// Importer tests — .proto / .graphql / .openapi.yml import to an equivalent
+// native Contract (docs/audit.md Phase 4 gap; issue #55). Fixtures live under
+// testdata/contract-import/<format>/.
 // ---------------------------------------------------------------------------
 
-func TestParseFile_ProtoNotSupported(t *testing.T) {
-	path := writeFileWithExt(t, "users.proto", `syntax = "proto3"; message User { string id = 1; }`)
-	c, err := contract.ParseFile(path)
-	if err == nil {
-		t.Fatalf("expected explicit error for .proto import, got contract: %+v", c)
+func TestParseFile_OpenAPIImport(t *testing.T) {
+	c, err := contract.ParseFile("../../testdata/contract-import/openapi/users.openapi.yml")
+	if err != nil {
+		t.Fatalf("ParseFile(openapi): %v", err)
 	}
-	if !containsStr(err.Error(), "not yet supported") {
-		t.Errorf("expected an explicit 'not yet supported' error, got: %v", err)
+	if c.Name != "users" {
+		t.Errorf("Name = %q, want %q", c.Name, "users")
+	}
+	if c.Transport != contract.TransportHTTP {
+		t.Errorf("Transport = %q, want http", c.Transport)
+	}
+	if _, ok := c.Types["User"]; !ok {
+		t.Fatalf("expected type %q to be imported, got types: %+v", "User", c.Types)
+	}
+
+	var createUser, listUsers *contract.Endpoint
+	for i := range c.Endpoints {
+		switch c.Endpoints[i].ID {
+		case "create_user":
+			createUser = &c.Endpoints[i]
+		case "list_users":
+			listUsers = &c.Endpoints[i]
+		}
+	}
+	if createUser == nil {
+		t.Fatalf("expected endpoint %q, got: %+v", "create_user", c.Endpoints)
+	}
+	if createUser.Method != "POST" || createUser.Path != "/api/v1/users" {
+		t.Errorf("create_user method/path = %s %s, want POST /api/v1/users", createUser.Method, createUser.Path)
+	}
+	if createUser.Auth != "required" {
+		t.Errorf("create_user.Auth = %q, want required", createUser.Auth)
+	}
+	if !strings.Contains(createUser.Input["name"], "required") {
+		t.Errorf("create_user.Input[name] = %q, want it to contain required", createUser.Input["name"])
+	}
+	if len(createUser.Errors) == 0 {
+		t.Errorf("expected create_user to carry imported error responses")
+	}
+
+	if listUsers == nil {
+		t.Fatalf("expected endpoint %q, got: %+v", "list_users", c.Endpoints)
+	}
+	if listUsers.Method != "GET" {
+		t.Errorf("list_users.Method = %q, want GET", listUsers.Method)
 	}
 }
 
-func TestParseFile_GraphQLNotSupported(t *testing.T) {
-	path := writeFileWithExt(t, "users.graphql", `type User { id: ID! }`)
-	c, err := contract.ParseFile(path)
-	if err == nil {
-		t.Fatalf("expected explicit error for .graphql import, got contract: %+v", c)
+func TestParseFile_ProtoImport(t *testing.T) {
+	c, err := contract.ParseFile("../../testdata/contract-import/proto/users.proto")
+	if err != nil {
+		t.Fatalf("ParseFile(proto): %v", err)
 	}
-	if !containsStr(err.Error(), "not yet supported") {
-		t.Errorf("expected an explicit 'not yet supported' error, got: %v", err)
+	if c.Name != "users" {
+		t.Errorf("Name = %q, want %q", c.Name, "users")
+	}
+	if c.Transport != contract.TransportGRPC {
+		t.Errorf("Transport = %q, want grpc", c.Transport)
+	}
+	if _, ok := c.Types["User"]; !ok {
+		t.Fatalf("expected message %q to import as a type, got types: %+v", "User", c.Types)
+	}
+
+	var createUser, listUsers *contract.Endpoint
+	for i := range c.Endpoints {
+		switch c.Endpoints[i].ID {
+		case "CreateUser":
+			createUser = &c.Endpoints[i]
+		case "ListUsers":
+			listUsers = &c.Endpoints[i]
+		}
+	}
+	if createUser == nil {
+		t.Fatalf("expected rpc %q, got: %+v", "CreateUser", c.Endpoints)
+	}
+	if createUser.Input["name"] == "" {
+		t.Errorf("expected CreateUser.Input to include request message fields, got: %+v", createUser.Input)
+	}
+	if createUser.Output["user"] == "" {
+		t.Errorf("expected CreateUser.Output to include response message fields, got: %+v", createUser.Output)
+	}
+	if listUsers == nil {
+		t.Fatalf("expected rpc %q, got: %+v", "ListUsers", c.Endpoints)
 	}
 }
 
-func TestParseFile_OpenAPINotSupported(t *testing.T) {
-	path := writeFileWithExt(t, "users.openapi.yml", `openapi: "3.0.0"
-info:
-  title: users
-  version: "1"
-paths: {}
-`)
-	c, err := contract.ParseFile(path)
-	if err == nil {
-		t.Fatalf("expected explicit error for .openapi.yml import, got contract: %+v", c)
+func TestParseFile_GraphQLImport(t *testing.T) {
+	c, err := contract.ParseFile("../../testdata/contract-import/graphql/users.graphql")
+	if err != nil {
+		t.Fatalf("ParseFile(graphql): %v", err)
 	}
-	if !containsStr(err.Error(), "not yet supported") {
-		t.Errorf("expected an explicit 'not yet supported' error, got: %v", err)
+	if c.Transport != contract.TransportGraphQL {
+		t.Errorf("Transport = %q, want graphql", c.Transport)
+	}
+	if _, ok := c.Types["User"]; !ok {
+		t.Fatalf("expected type %q to be imported, got types: %+v", "User", c.Types)
+	}
+	// Types render plain shape only (bare = required, "?" suffix = optional),
+	// matching the OpenAPI importer's Types convention — not the
+	// "(required)" constraint syntax used for Input fields.
+	if got := c.Types["User"].Fields["name"]; got != "string" {
+		t.Errorf("User.name should be a required (non-optional) string, got: %q", got)
+	}
+	if got := c.Types["User"].Fields["role"]; got != "enum(Role)?" {
+		t.Errorf("User.role should be an optional enum reference, got: %q", got)
+	}
+
+	var getUser, createUser *contract.Endpoint
+	for i := range c.Endpoints {
+		switch c.Endpoints[i].ID {
+		case "getUser":
+			getUser = &c.Endpoints[i]
+		case "createUser":
+			createUser = &c.Endpoints[i]
+		}
+	}
+	if getUser == nil {
+		t.Fatalf("expected query %q to import as an endpoint, got: %+v", "getUser", c.Endpoints)
+	}
+	if getUser.Method != "QUERY" {
+		t.Errorf("getUser.Method = %q, want QUERY", getUser.Method)
+	}
+	if createUser == nil {
+		t.Fatalf("expected mutation %q to import as an endpoint, got: %+v", "createUser", c.Endpoints)
+	}
+	if createUser.Method != "MUTATION" {
+		t.Errorf("createUser.Method = %q, want MUTATION", createUser.Method)
+	}
+	if !strings.Contains(createUser.Input["name"], "required") {
+		t.Errorf("createUser.Input[name] = %q, want it to contain required", createUser.Input["name"])
 	}
 }
 
