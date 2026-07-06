@@ -11,6 +11,9 @@ import (
 	"github.com/acthur/acthur/internal/deploy"
 	"github.com/acthur/acthur/internal/deploy/artifacts"
 	"github.com/acthur/acthur/internal/deploy/coolify"
+	"github.com/acthur/acthur/internal/deploy/fly"
+	"github.com/acthur/acthur/internal/deploy/railway"
+	"github.com/acthur/acthur/internal/deploy/render"
 	"github.com/acthur/acthur/internal/generate"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
@@ -130,9 +133,126 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 		}
 		ctx := &coolifyContext{env: env, compose: compose, project: cfg.Project, host: host}
 		return plan, coolify.NewTarget(os.Getenv("COOLIFY_TOKEN")).Deploy(ctx)
+	case "fly":
+		svcs := serviceArtifacts(files, g)
+		ctx := &flyContext{env: env, project: cfg.Project, root: root, services: svcs}
+		return plan, fly.NewTarget(os.Getenv("FLY_API_TOKEN"), run).Deploy(ctx)
+	case "railway":
+		svcs := serviceArtifacts(files, g)
+		ctx := &railwayContext{env: env, project: cfg.Project, root: root, services: svcs}
+		return plan, railway.NewTarget(os.Getenv("RAILWAY_TOKEN"), os.Getenv("RAILWAY_IMAGE_REGISTRY"), run).Deploy(ctx)
+	case "render":
+		svcs := serviceArtifacts(files, g)
+		ctx := &renderContext{env: env, project: cfg.Project, root: root, services: svcs}
+		return plan, render.NewTarget(os.Getenv("RENDER_API_KEY"), os.Getenv("RENDER_IMAGE_REGISTRY"), run).Deploy(ctx)
 	default:
-		return plan, fmt.Errorf("unknown deploy target %q (supported: compose, coolify)", target)
+		return plan, fmt.Errorf("unknown deploy target %q (supported: compose, coolify, fly, railway, render)", target)
 	}
+}
+
+// serviceArtifact is the generic (provider-agnostic) shape every remote
+// target's DeployContext.Services() adapts into its own ServiceArtifact
+// type — computed once here from the projected Dockerfile artifacts and the
+// graph's node ports.
+type serviceArtifact struct {
+	NodeID         string
+	DockerfilePath string
+	ContextDir     string
+	Port           int
+}
+
+// serviceArtifacts extracts one entry per projected deploy/Dockerfile.<node>
+// artifact, matched against the graph for that node's port.
+func serviceArtifacts(files []plugin.GeneratedFile, g *graph.Graph) []serviceArtifact {
+	ports := map[string]int{}
+	for _, n := range g.Nodes() {
+		ports[n.ID] = n.Port
+	}
+
+	const prefix = "deploy/Dockerfile."
+	var out []serviceArtifact
+	for _, f := range files {
+		if !strings.HasPrefix(f.Path, prefix) {
+			continue
+		}
+		nodeID := strings.TrimPrefix(f.Path, prefix)
+		out = append(out, serviceArtifact{
+			NodeID:         nodeID,
+			DockerfilePath: f.Path,
+			ContextDir:     nodeID,
+			Port:           ports[nodeID],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
+}
+
+// flyContext, railwayContext, and renderContext each adapt the deploy
+// command's resolved state to that package's own DeployContext interface —
+// every provider package is self-contained (no shared type), so each gets
+// its own small adapter, same as coolifyContext.
+
+type flyContext struct {
+	env      string
+	project  string
+	root     string
+	services []serviceArtifact
+}
+
+func (c *flyContext) EnvName() string     { return c.env }
+func (c *flyContext) ProjectName() string { return c.project }
+func (c *flyContext) Root() string        { return c.root }
+func (c *flyContext) Log(format string, args ...any) {
+	output.Info("deploy", format, args...)
+}
+func (c *flyContext) Services() []fly.ServiceArtifact {
+	out := make([]fly.ServiceArtifact, len(c.services))
+	for i, s := range c.services {
+		out[i] = fly.ServiceArtifact{NodeID: s.NodeID, DockerfilePath: s.DockerfilePath, ContextDir: s.ContextDir, Port: s.Port}
+	}
+	return out
+}
+
+type railwayContext struct {
+	env      string
+	project  string
+	root     string
+	services []serviceArtifact
+}
+
+func (c *railwayContext) EnvName() string     { return c.env }
+func (c *railwayContext) ProjectName() string { return c.project }
+func (c *railwayContext) Root() string        { return c.root }
+func (c *railwayContext) Log(format string, args ...any) {
+	output.Info("deploy", format, args...)
+}
+func (c *railwayContext) Services() []railway.ServiceArtifact {
+	out := make([]railway.ServiceArtifact, len(c.services))
+	for i, s := range c.services {
+		out[i] = railway.ServiceArtifact{NodeID: s.NodeID, DockerfilePath: s.DockerfilePath, ContextDir: s.ContextDir}
+	}
+	return out
+}
+
+type renderContext struct {
+	env      string
+	project  string
+	root     string
+	services []serviceArtifact
+}
+
+func (c *renderContext) EnvName() string     { return c.env }
+func (c *renderContext) ProjectName() string { return c.project }
+func (c *renderContext) Root() string        { return c.root }
+func (c *renderContext) Log(format string, args ...any) {
+	output.Info("deploy", format, args...)
+}
+func (c *renderContext) Services() []render.ServiceArtifact {
+	out := make([]render.ServiceArtifact, len(c.services))
+	for i, s := range c.services {
+		out[i] = render.ServiceArtifact{NodeID: s.NodeID, DockerfilePath: s.DockerfilePath, ContextDir: s.ContextDir}
+	}
+	return out
 }
 
 // buildableServiceNodes returns service node IDs that have a Go module
@@ -165,8 +285,23 @@ func requiredEnvVars(files []plugin.GeneratedFile, target string) []string {
 			}
 		}
 	}
-	if target == "coolify" && !seen["COOLIFY_TOKEN"] {
-		vars = append(vars, "COOLIFY_TOKEN")
+	addVar := func(v string) {
+		if !seen[v] {
+			seen[v] = true
+			vars = append(vars, v)
+		}
+	}
+	switch target {
+	case "coolify":
+		addVar("COOLIFY_TOKEN")
+	case "fly":
+		addVar("FLY_API_TOKEN")
+	case "railway":
+		addVar("RAILWAY_TOKEN")
+		addVar("RAILWAY_IMAGE_REGISTRY")
+	case "render":
+		addVar("RENDER_API_KEY")
+		addVar("RENDER_IMAGE_REGISTRY")
 	}
 	sort.Strings(vars)
 	return vars
