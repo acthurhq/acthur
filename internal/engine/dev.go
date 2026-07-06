@@ -18,6 +18,7 @@ import (
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/container"
 	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthur/acthur/internal/dns"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
@@ -80,6 +81,18 @@ type DevEngine struct {
 	// containers records node IDs whose containers the engine started,
 	// so shutdown stops exactly what it created.
 	containers []string
+
+	// writeHosts, when true, makes checkDNS attempt to append missing dev
+	// hostnames directly to hostsPath instead of only printing instructions.
+	// Wired from `acthur dev --write-hosts`.
+	writeHosts bool
+	// hostsPath is the hosts file checkDNS writes to when writeHosts is set.
+	// Defaults to /etc/hosts; overridable in tests.
+	hostsPath string
+	// dnsLookup resolves a hostname for checkDNS. Defaults to dns.DefaultLookup;
+	// overridable in tests so DNS behavior never depends on the test machine's
+	// real resolver or /etc/hosts contents.
+	dnsLookup dns.LookupFunc
 }
 
 // DevEngineOption configures optional DevEngine behavior at construction time.
@@ -108,6 +121,15 @@ func WithBus(bus *plugin.Bus) DevEngineOption {
 	return func(e *DevEngine) { e.bus = bus }
 }
 
+// WithWriteHosts makes the DNS preflight attempt to append missing dev
+// hostnames straight to /etc/hosts instead of only printing copy-pastable
+// instructions. Wired from `acthur dev --write-hosts`. The engine still
+// never escalates privileges — if the process lacks permission to write
+// /etc/hosts, it falls back to printing the same instructions.
+func WithWriteHosts(writeHosts bool) DevEngineOption {
+	return func(e *DevEngine) { e.writeHosts = writeHosts }
+}
+
 // NewDevEngine creates a DevEngine. Call Start() to begin.
 func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver, opts ...DevEngineOption) *DevEngine {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,6 +145,8 @@ func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver, 
 		runDocker: func(args ...string) error {
 			return exec.Command("docker", args...).Run()
 		},
+		hostsPath: "/etc/hosts",
+		dnsLookup: dns.DefaultLookup,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -170,6 +194,11 @@ func (e *DevEngine) Start() error {
 			return fmt.Errorf("failed to start %q: %w", node.ID, err)
 		}
 	}
+
+	// DNS preflight — check whether the dev domain and each service's
+	// subdomain resolve to 127.0.0.1. Never blocks startup: localhost:<port>
+	// URLs still work even if the friendly hostnames don't resolve yet.
+	e.checkDNS()
 
 	// Start proxy
 	p, err := proxy.New(e.graph, e.cfg.Dev.Port,
@@ -481,6 +510,37 @@ func (e *DevEngine) printReady() {
 		}
 	}
 	output.Ready(e.cfg.Project, urls)
+}
+
+// checkDNS reports whether the project's dev domain and each service node's
+// subdomain resolve to 127.0.0.1. It never blocks or aborts startup — it
+// only prints copy-pastable /etc/hosts instructions (or, with --write-hosts,
+// attempts to append them itself, still without ever running sudo).
+func (e *DevEngine) checkDNS() {
+	if e.cfg.Dev.Domain == "" {
+		return
+	}
+	var nodeIDs []string
+	for _, node := range e.graph.NodesByType(config.NodeTypeService) {
+		nodeIDs = append(nodeIDs, node.ID)
+	}
+	hosts := dns.Hostnames(e.cfg.Dev.Domain, nodeIDs)
+	missing := dns.Missing(e.dnsLookup, hosts)
+	if len(missing) == 0 {
+		return
+	}
+
+	if e.writeHosts {
+		if err := dns.WriteHostsEntries(e.hostsPath, missing); err == nil {
+			output.Success("dns", "wrote %d hostname(s) to %s", len(missing), e.hostsPath)
+			return
+		} else {
+			output.Warn("dns", "could not write %s: %v", e.hostsPath, err)
+		}
+	}
+
+	output.Warn("dns", "%d dev hostname(s) don't resolve to 127.0.0.1 yet", len(missing))
+	fmt.Print(dns.Instructions(missing))
 }
 
 // waitForShutdown blocks until SIGINT or SIGTERM is received.
