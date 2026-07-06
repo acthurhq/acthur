@@ -1,0 +1,445 @@
+package artifacts_test
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/acthur/acthur/internal/config"
+	"github.com/acthur/acthur/internal/deploy/artifacts"
+	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthur/acthur/internal/plugin"
+
+	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber" // register go:fiber
+	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"  // register db:postgres
+
+	"gopkg.in/yaml.v3"
+)
+
+// loadVetangle builds the sealed vetangle fixture graph. cache:redis,
+// storage:minio, queue:nats and ui:astro/ui:next are referenced in the
+// fixture but have no adapter package in this repo yet — graph.Build does
+// not resolve adapters (only graph.Validate does), so the graph still
+// builds; Project() must skip nodes whose adapter can't be resolved rather
+// than error.
+func loadVetangle(t *testing.T) (*config.Config, *graph.Graph) {
+	t.Helper()
+	cfg, err := config.LoadFile(filepath.Join("..", "..", "..", "testdata", "vetangle", "acthur.yml"))
+	if err != nil {
+		t.Fatalf("config.LoadFile: %v", err)
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	return cfg, g
+}
+
+func fileByPath(t *testing.T, files []plugin.GeneratedFile, path string) plugin.GeneratedFile {
+	t.Helper()
+	for _, f := range files {
+		if f.Path == path {
+			return f
+		}
+	}
+	t.Fatalf("expected generated file %q, got paths: %v", path, paths(files))
+	return plugin.GeneratedFile{}
+}
+
+func paths(files []plugin.GeneratedFile) []string {
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = f.Path
+	}
+	return out
+}
+
+// composeService mirrors the subset of docker-compose fields Project emits,
+// used to unmarshal and assert structurally rather than string-match.
+type composeService struct {
+	Build *struct {
+		Context    string `yaml:"context"`
+		Dockerfile string `yaml:"dockerfile"`
+	} `yaml:"build"`
+	Image       string            `yaml:"image"`
+	Volumes     []string          `yaml:"volumes"`
+	Environment map[string]string `yaml:"environment"`
+	Ports       []string          `yaml:"ports"`
+	DependsOn   map[string]struct {
+		Condition string `yaml:"condition"`
+	} `yaml:"depends_on"`
+	Healthcheck *struct {
+		Test     []string `yaml:"test"`
+		Interval string   `yaml:"interval"`
+		Timeout  string   `yaml:"timeout"`
+		Retries  int      `yaml:"retries"`
+	} `yaml:"healthcheck"`
+	Restart  string   `yaml:"restart"`
+	Networks []string `yaml:"networks"`
+}
+
+type composeFile struct {
+	Services map[string]composeService `yaml:"services"`
+	Volumes  map[string]any            `yaml:"volumes"`
+	Networks map[string]any            `yaml:"networks"`
+}
+
+func parseCompose(t *testing.T, content []byte) composeFile {
+	t.Helper()
+	var cf composeFile
+	if err := yaml.Unmarshal(content, &cf); err != nil {
+		t.Fatalf("compose file did not parse as YAML: %v\n%s", err, content)
+	}
+	return cf
+}
+
+// ---------------------------------------------------------------------------
+// Dockerfile generation
+// ---------------------------------------------------------------------------
+
+func TestProject_EmitsDockerfilePerDockerizableServiceNode(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	// api and worker both use go:fiber (Dockerizable).
+	fileByPath(t, files, "deploy/Dockerfile.api")
+	fileByPath(t, files, "deploy/Dockerfile.worker")
+}
+
+func TestProject_NoDockerfileForInfraNodes(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	for _, f := range files {
+		if f.Path == "deploy/Dockerfile.db" {
+			t.Error("db:postgres is an infra node using an official image — it must not get a Dockerfile")
+		}
+	}
+}
+
+func TestProject_NoDockerfileForUnresolvableAdapters(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	// web (ui:astro) and backoffice (ui:next) have no adapter package
+	// registered in this repo yet.
+	for _, path := range []string{"deploy/Dockerfile.web", "deploy/Dockerfile.backoffice"} {
+		for _, f := range files {
+			if f.Path == path {
+				t.Errorf("did not expect %q — its adapter isn't implemented", path)
+			}
+		}
+	}
+}
+
+func TestProject_DockerfileContent_MatchesDockerizableCapability(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	f := fileByPath(t, files, "deploy/Dockerfile.api")
+	content := string(f.Content)
+	if !strings.Contains(content, "FROM golang:1.22-alpine AS builder") {
+		t.Error("expected multi-stage build matching go.mod's go 1.22")
+	}
+	if !strings.Contains(content, "EXPOSE 8080") {
+		t.Error("expected EXPOSE derived from the api node's port (8080)")
+	}
+	if !strings.Contains(content, "HEALTHCHECK") {
+		t.Error("expected a HEALTHCHECK instruction")
+	}
+	if !f.Overwrite {
+		t.Error("expected Overwrite=true — deploy artifacts are regenerated fresh every deploy")
+	}
+}
+
+func TestProject_WorkerDockerfile_NoExposeOrHealthcheck(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	f := fileByPath(t, files, "deploy/Dockerfile.worker")
+	content := string(f.Content)
+	if strings.Contains(content, "EXPOSE") {
+		t.Error("worker is a queue-worker with no port — expected no EXPOSE")
+	}
+	if strings.Contains(content, "HEALTHCHECK") {
+		t.Error("worker is a queue-worker with no port — expected no HEALTHCHECK")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// docker-compose.prod.yml structure
+// ---------------------------------------------------------------------------
+
+func TestProject_EmitsComposeFile(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	f := fileByPath(t, files, "deploy/docker-compose.prod.yml")
+	if !f.Overwrite {
+		t.Error("expected Overwrite=true for the compose file")
+	}
+}
+
+func TestProject_Compose_ContainsExpectedServices(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+
+	for _, want := range []string{"api", "worker", "db"} {
+		if _, ok := cf.Services[want]; !ok {
+			t.Errorf("expected service %q in compose file, got: %v", want, serviceNames(cf))
+		}
+	}
+	for _, notWant := range []string{"web", "backoffice", "cache", "storage", "queue", "proxy"} {
+		if _, ok := cf.Services[notWant]; ok {
+			t.Errorf("did not expect service %q (unresolvable adapter or kernel-materialized node)", notWant)
+		}
+	}
+}
+
+func serviceNames(cf composeFile) []string {
+	names := make([]string, 0, len(cf.Services))
+	for k := range cf.Services {
+		names = append(names, k)
+	}
+	return names
+}
+
+func TestProject_Compose_ServiceUsesBuildDirective(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+	api := cf.Services["api"]
+	if api.Build == nil {
+		t.Fatal("expected api service to use a build directive")
+	}
+	if api.Build.Context != "./api" {
+		t.Errorf("expected build.context=./api, got %q", api.Build.Context)
+	}
+	if api.Build.Dockerfile != "../deploy/Dockerfile.api" {
+		t.Errorf("expected build.dockerfile=../deploy/Dockerfile.api, got %q", api.Build.Dockerfile)
+	}
+}
+
+func TestProject_Compose_PostgresUsesOfficialImage(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+	db := cf.Services["db"]
+	if db.Build != nil {
+		t.Error("db:postgres must use an official image, not a build directive")
+	}
+	if db.Image != "postgres:16" {
+		t.Errorf("expected image postgres:16 (vetangle fixture pins version 16), got %q", db.Image)
+	}
+}
+
+func TestProject_Compose_PostgresHasNamedVolume(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+	db := cf.Services["db"]
+	if len(db.Volumes) != 1 {
+		t.Fatalf("expected exactly one volume mount on db, got %v", db.Volumes)
+	}
+	if !strings.Contains(db.Volumes[0], "/var/lib/postgresql/data") {
+		t.Errorf("expected volume mounted at postgres data dir, got %q", db.Volumes[0])
+	}
+	if len(cf.Volumes) == 0 {
+		t.Error("expected the named volume declared at the top-level volumes: key")
+	}
+}
+
+func TestProject_Compose_PostgresHealthcheckUsesPgIsready(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+	db := cf.Services["db"]
+	if db.Healthcheck == nil {
+		t.Fatal("expected db healthcheck")
+	}
+	found := false
+	for _, s := range db.Healthcheck.Test {
+		if strings.Contains(s, "pg_isready") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected pg_isready in db healthcheck test, got %v", db.Healthcheck.Test)
+	}
+}
+
+func TestProject_Compose_DependsOnServiceHealthyFromGraphEdges(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+
+	api := cf.Services["api"]
+	dep, ok := api.DependsOn["db"]
+	if !ok {
+		t.Fatal("expected api to depend_on db (graph has an api->db depends_on edge)")
+	}
+	if dep.Condition != "service_healthy" {
+		t.Errorf("expected condition service_healthy, got %q", dep.Condition)
+	}
+
+	worker := cf.Services["worker"]
+	if _, ok := worker.DependsOn["db"]; !ok {
+		t.Error("expected worker to depend_on db (graph has a worker->db depends_on edge)")
+	}
+
+	// api also depends_on cache in the fixture, but cache:redis has no
+	// adapter implemented yet — must not reference an undefined service.
+	if _, ok := api.DependsOn["cache"]; ok {
+		t.Error("must not emit depends_on for a service that was skipped (undefined in compose)")
+	}
+}
+
+func TestProject_Compose_PortsPublishedOnlyForProxiedNodes(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+
+	api := cf.Services["api"]
+	if len(api.Ports) != 1 || api.Ports[0] != "8080:8080" {
+		t.Errorf("expected api to publish 8080:8080 (it has a proxied_through edge), got %v", api.Ports)
+	}
+
+	worker := cf.Services["worker"]
+	if len(worker.Ports) != 0 {
+		t.Errorf("worker has no proxied_through edge and no port — expected no published ports, got %v", worker.Ports)
+	}
+
+	db := cf.Services["db"]
+	if len(db.Ports) != 0 {
+		t.Errorf("infra nodes are not proxied — expected no published ports for db, got %v", db.Ports)
+	}
+}
+
+func TestProject_Compose_RestartUnlessStopped(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+	for name, svc := range cf.Services {
+		if svc.Restart != "unless-stopped" {
+			t.Errorf("service %q: expected restart=unless-stopped, got %q", name, svc.Restart)
+		}
+	}
+}
+
+func TestProject_Compose_OneInternalNetworkSharedByAllServices(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	cf := parseCompose(t, fileByPath(t, files, "deploy/docker-compose.prod.yml").Content)
+	if len(cf.Networks) != 1 {
+		t.Fatalf("expected exactly one top-level network, got %v", cf.Networks)
+	}
+	var networkName string
+	for name := range cf.Networks {
+		networkName = name
+	}
+	for name, svc := range cf.Services {
+		if len(svc.Networks) != 1 || svc.Networks[0] != networkName {
+			t.Errorf("service %q: expected networks=[%s], got %v", name, networkName, svc.Networks)
+		}
+	}
+}
+
+func TestProject_Compose_EnvUsesVarRefsNeverLiteralSecrets(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	compose := fileByPath(t, files, "deploy/docker-compose.prod.yml")
+	cf := parseCompose(t, compose.Content)
+
+	api := cf.Services["api"]
+	dbURL, ok := api.Environment["DATABASE_URL"]
+	if !ok {
+		t.Fatal("expected api environment to declare DATABASE_URL")
+	}
+	if dbURL != "${DATABASE_URL}" {
+		t.Errorf("expected DATABASE_URL to be a ${VAR} reference, got %q", dbURL)
+	}
+
+	db := cf.Services["db"]
+	for key, val := range db.Environment {
+		if val != "${"+key+"}" {
+			t.Errorf("expected db env %q to be a ${VAR} reference, got %q", key, val)
+		}
+	}
+
+	// No file emitted by Project may contain a literal secret value the
+	// dev-time postgres adapter uses (its hardcoded default password).
+	for _, f := range files {
+		if strings.Contains(string(f.Content), "POSTGRES_PASSWORD=postgres") ||
+			strings.Contains(string(f.Content), "POSTGRES_PASSWORD: postgres\n") {
+			t.Errorf("file %q contains a literal secret value", f.Path)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Determinism
+// ---------------------------------------------------------------------------
+
+func TestProject_DeterministicAcrossRuns(t *testing.T) {
+	cfg, g := loadVetangle(t)
+	files1, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project (run 1): %v", err)
+	}
+	files2, err := artifacts.Project(cfg, g)
+	if err != nil {
+		t.Fatalf("Project (run 2): %v", err)
+	}
+	if len(files1) != len(files2) {
+		t.Fatalf("expected same file count across runs, got %d vs %d", len(files1), len(files2))
+	}
+	for _, f1 := range files1 {
+		f2 := fileByPath(t, files2, f1.Path)
+		if string(f1.Content) != string(f2.Content) {
+			t.Errorf("file %q is not byte-identical across two runs", f1.Path)
+		}
+	}
+}
