@@ -1,0 +1,88 @@
+package rbac
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// PolicySource answers role/permission questions for a user id. Contract-
+// derived enforcement (deriving policy from contract auth annotations) is a
+// later phase — StaticTablePolicySource below is the only shipped
+// implementation for now, backed directly by the roles/permissions tables.
+type PolicySource interface {
+	// HasRole reports whether userID holds at least one of roles.
+	HasRole(ctx context.Context, userID string, roles ...string) (bool, error)
+	// HasPermission reports whether userID's roles grant at least one of
+	// permissions.
+	HasPermission(ctx context.Context, userID string, permissions ...string) (bool, error)
+}
+
+// DBPool is the subset of *pgxpool.Pool that StaticTablePolicySource needs.
+// Modeled as an interface so callers (and tests) can supply a fake without a
+// live database; *pgxpool.Pool satisfies this interface as-is.
+type DBPool interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// StaticTablePolicySource implements PolicySource against the roles,
+// permissions, role_permissions, and user_roles tables (migrations
+// 0200-0202). "Static table" distinguishes it from the contract-derived
+// policy source planned for a later phase.
+type StaticTablePolicySource struct {
+	DB DBPool
+}
+
+// NewStaticTablePolicySource constructs a StaticTablePolicySource backed by db.
+func NewStaticTablePolicySource(db DBPool) *StaticTablePolicySource {
+	return &StaticTablePolicySource{DB: db}
+}
+
+func (s *StaticTablePolicySource) HasRole(ctx context.Context, userID string, roles ...string) (bool, error) {
+	if len(roles) == 0 {
+		return false, nil
+	}
+	const q = `
+		SELECT 1
+		FROM user_roles ur
+		JOIN roles r ON r.id = ur.role_id
+		WHERE ur.user_id = $1 AND r.name = ANY($2)
+		LIMIT 1`
+	var exists int
+	err := s.DB.QueryRow(ctx, q, userID, roles).Scan(&exists)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("rbac: has role: %w", err)
+	}
+	return true, nil
+}
+
+func (s *StaticTablePolicySource) HasPermission(ctx context.Context, userID string, permissions ...string) (bool, error) {
+	if len(permissions) == 0 {
+		return false, nil
+	}
+	const q = `
+		SELECT 1
+		FROM user_roles ur
+		JOIN role_permissions rp ON rp.role_id = ur.role_id
+		JOIN permissions p ON p.id = rp.permission_id
+		WHERE ur.user_id = $1 AND p.name = ANY($2)
+		LIMIT 1`
+	var exists int
+	err := s.DB.QueryRow(ctx, q, userID, permissions).Scan(&exists)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("rbac: has permission: %w", err)
+	}
+	return true, nil
+}
+
+var _ PolicySource = (*StaticTablePolicySource)(nil)

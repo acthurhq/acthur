@@ -1,0 +1,68 @@
+package rbac
+
+import (
+	"context"
+
+	"{{.ModulePath}}/internal/ids"
+)
+
+// SeedRoles inserts each of names as a role (skipping ones that already
+// exist by name) and returns the resulting id for every name. Call once
+// during project bootstrap — see `acthur db seed`.
+func SeedRoles(ctx context.Context, db DBPool, names ...string) (map[string]string, error) {
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		const q = `
+			INSERT INTO roles (id, name)
+			VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE SET name = roles.name
+			RETURNING id`
+		var gotID string
+		if err := db.QueryRow(ctx, q, ids.New(), name).Scan(&gotID); err != nil {
+			return nil, err
+		}
+		out[name] = gotID
+	}
+	return out, nil
+}
+
+// SeedPermissions inserts each of names as a permission (skipping ones that
+// already exist by name) and returns the resulting id for every name.
+func SeedPermissions(ctx context.Context, db DBPool, names ...string) (map[string]string, error) {
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		const q = `
+			INSERT INTO permissions (id, name)
+			VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE SET name = permissions.name
+			RETURNING id`
+		var gotID string
+		if err := db.QueryRow(ctx, q, ids.New(), name).Scan(&gotID); err != nil {
+			return nil, err
+		}
+		out[name] = gotID
+	}
+	return out, nil
+}
+
+// GrantPermissionToRole links roleID to permissionID in role_permissions,
+// idempotently.
+func GrantPermissionToRole(ctx context.Context, db DBPool, roleID, permissionID string) error {
+	const q = `
+		INSERT INTO role_permissions (role_id, permission_id)
+		VALUES ($1, $2)
+		ON CONFLICT DO NOTHING`
+	_, err := db.Exec(ctx, q, roleID, permissionID)
+	return err
+}
+
+// AssignRoleToUser links userID (owned by the auth layer) to roleID in
+// user_roles, idempotently.
+func AssignRoleToUser(ctx context.Context, db DBPool, userID, roleID string) error {
+	const q = `
+		INSERT INTO user_roles (user_id, role_id)
+		VALUES ($1, $2)
+		ON CONFLICT DO NOTHING`
+	_, err := db.Exec(ctx, q, userID, roleID)
+	return err
+}
