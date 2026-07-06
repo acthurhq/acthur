@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/acthur/acthur/internal/generate"
 )
 
 // copyUsersContract copies the vetangle users contract into dir/contracts/.
@@ -146,5 +148,152 @@ func TestRunGenerateModel_WritesModelMigrationAndTest(t *testing.T) {
 	}
 	if !strings.Contains(string(up), "CREATE TABLE IF NOT EXISTS pets") {
 		t.Errorf("migration should create pets table, got:\n%s", up)
+	}
+}
+
+// TestRunGenerateAIContext_WritesClaudeMDAtRoot: `acthur generate ai-context`
+// writes CLAUDE.md at the project root (not under a node directory) via the
+// write engine, describing the real graph.
+func TestRunGenerateAIContext_WritesClaudeMDAtRoot(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	results, err := runGenerateAIContext(dir, "")
+	if err != nil {
+		t.Fatalf("runGenerateAIContext: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != generate.StatusWritten {
+		t.Fatalf("expected one written result, got %+v", results)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("expected CLAUDE.md at project root: %v", err)
+	}
+	if !strings.Contains(string(content), "go:fiber") {
+		t.Errorf("expected CLAUDE.md to describe the api node's adapter, got:\n%s", content)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "generated.lock")); err != nil {
+		t.Errorf("expected generated.lock to be written: %v", err)
+	}
+}
+
+// TestRunGenerateAIContext_Cursor_WritesCursorrules: --tool cursor routes to
+// .cursorrules instead of CLAUDE.md.
+func TestRunGenerateAIContext_Cursor_WritesCursorrules(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	if _, err := runGenerateAIContext(dir, "cursor"); err != nil {
+		t.Fatalf("runGenerateAIContext: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".cursorrules")); err != nil {
+		t.Errorf("expected .cursorrules to exist: %v", err)
+	}
+}
+
+// TestRunGenerateCI_WritesGitHubActionsWorkflow: `acthur generate ci` writes
+// a real workflow file at the conventional GitHub Actions path.
+func TestRunGenerateCI_WritesGitHubActionsWorkflow(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	results, err := runGenerateCI(dir, "")
+	if err != nil {
+		t.Fatalf("runGenerateCI: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != generate.StatusWritten {
+		t.Fatalf("expected one written result, got %+v", results)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "acthur.yml"))
+	if err != nil {
+		t.Fatalf("expected .github/workflows/acthur.yml: %v", err)
+	}
+	if !strings.Contains(string(content), "acthur build") {
+		t.Errorf("expected workflow to run acthur build, got:\n%s", content)
+	}
+}
+
+// TestRunGenerateCI_UnsupportedTarget_Errors: unsupported CI targets fail
+// clearly instead of silently emitting something wrong.
+func TestRunGenerateCI_UnsupportedTarget_Errors(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	if _, err := runGenerateCI(dir, "circleci"); err == nil {
+		t.Fatal("expected error for unsupported ci target")
+	}
+}
+
+// TestRunGenerateDocs_WritesPerContractPages: `acthur generate docs` writes
+// one page per contract plus an index, all under docs/api/.
+func TestRunGenerateDocs_WritesPerContractPages(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	copyUsersContract(t, dir)
+	writeTestProject(t, dir)
+
+	results, err := runGenerateDocs(dir, "")
+	if err != nil {
+		t.Fatalf("runGenerateDocs: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected index + users page, got %+v", results)
+	}
+	for _, p := range []string{
+		filepath.Join(dir, "docs", "api", "README.md"),
+		filepath.Join(dir, "docs", "api", "users.md"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("expected %s to exist: %v", p, err)
+		}
+	}
+}
+
+// TestRunGenerateDocs_UnsupportedTarget_Errors: only "markdown" (or empty,
+// its default) is implemented today.
+func TestRunGenerateDocs_UnsupportedTarget_Errors(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	if _, err := runGenerateDocs(dir, "openapi"); err == nil {
+		t.Fatal("expected error for unsupported docs target")
+	}
+}
+
+// TestRunGenerateSkill_WritesSkillFile: `acthur generate skill <name>` writes
+// .claude/skills/<name>/SKILL.md.
+func TestRunGenerateSkill_WritesSkillFile(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	results, err := runGenerateSkill(dir, "create-endpoint")
+	if err != nil {
+		t.Fatalf("runGenerateSkill: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != generate.StatusWritten {
+		t.Fatalf("expected one written result, got %+v", results)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude", "skills", "create-endpoint", "SKILL.md")); err != nil {
+		t.Errorf("expected SKILL.md to exist: %v", err)
+	}
+}
+
+// TestRunGenerateSkill_InvalidName_Errors: propagates skillgen's kebab-case
+// validation as a command-level error.
+func TestRunGenerateSkill_InvalidName_Errors(t *testing.T) {
+	resetPluginProcessState(t)
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+
+	if _, err := runGenerateSkill(dir, "Not Valid"); err == nil {
+		t.Fatal("expected error for invalid skill name")
 	}
 }
