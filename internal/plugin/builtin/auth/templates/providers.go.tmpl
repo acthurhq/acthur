@@ -1,0 +1,45 @@
+package auth
+
+// OAuthProvider describes an OAuth2 identity provider available to this
+// app. Fill in ClientID/ClientSecret/RedirectURL from the environment at
+// startup — Acthur never generates secrets into source.
+type OAuthProvider struct {
+	Name         string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	AuthURL      string
+	TokenURL     string
+	Scopes       []string
+}
+
+var providerRegistry = map[string]OAuthProvider{}
+
+// RegisterProvider adds or replaces a provider in the registry.
+func RegisterProvider(p OAuthProvider) {
+	providerRegistry[p.Name] = p
+}
+
+// Provider looks up a registered provider by name.
+func Provider(name string) (OAuthProvider, bool) {
+	p, ok := providerRegistry[name]
+	return p, ok
+}
+
+// Providers returns every registered provider name.
+func Providers() []string {
+	names := make([]string, 0, len(providerRegistry))
+	for name := range providerRegistry {
+		names = append(names, name)
+	}
+	return names
+}
+
+// init seeds the registry with the providers configured under this node's
+// plugins.auth.providers in acthur.yml. Client credentials are intentionally
+// left blank here; wire them from the environment before use.
+func init() {
+{{- range .Providers}}
+	RegisterProvider(OAuthProvider{Name: "{{.}}"})
+{{- end}}
+}

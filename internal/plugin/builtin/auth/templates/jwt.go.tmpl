@@ -1,0 +1,61 @@
+package auth
+
+import (
+	"errors"
+	"os"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// defaultJWTTTL is how long an issued access token stays valid.
+const defaultJWTTTL = 24 * time.Hour
+
+// ErrInvalidToken is returned by VerifyJWT for any malformed, unsigned, or
+// expired token.
+var ErrInvalidToken = errors.New("auth: invalid or expired token")
+
+// Claims is the JWT payload issued by IssueJWT and checked by VerifyJWT.
+type Claims struct {
+	UserID string `json:"user_id"`
+	jwt.RegisteredClaims
+}
+
+// jwtSecret reads the HS256 signing secret from AUTH_JWT_SECRET. Panics if
+// unset — a missing secret must fail loudly, not sign with an empty key.
+func jwtSecret() []byte {
+	secret := os.Getenv("AUTH_JWT_SECRET")
+	if secret == "" {
+		panic("AUTH_JWT_SECRET environment variable is not set")
+	}
+	return []byte(secret)
+}
+
+// IssueJWT signs a new HS256 access token for userID.
+func IssueJWT(userID string) (string, error) {
+	now := time.Now()
+	claims := Claims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(defaultJWTTTL)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret())
+}
+
+// VerifyJWT parses and validates tokenString, returning its claims.
+func VerifyJWT(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, ErrInvalidToken
+		}
+		return jwtSecret(), nil
+	})
+	if err != nil || !token.Valid {
+		return nil, ErrInvalidToken
+	}
+	return claims, nil
+}

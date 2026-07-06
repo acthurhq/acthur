@@ -1,0 +1,33 @@
+package auth
+
+import (
+	"strings"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+// contextUserIDKey is the fiber.Ctx Locals key RequireAuth stashes the
+// authenticated user ID under.
+const contextUserIDKey = "auth_user_id"
+
+// RequireAuth enforces a valid bearer JWT on the request and stores the
+// authenticated user ID under contextUserIDKey for downstream handlers.
+func RequireAuth(c *fiber.Ctx) error {
+	header := c.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return fiber.NewError(fiber.StatusUnauthorized, "missing bearer token")
+	}
+	tokenString := strings.TrimPrefix(header, "Bearer ")
+	claims, err := VerifyJWT(tokenString)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired token")
+	}
+	c.Locals(contextUserIDKey, claims.UserID)
+	return c.Next()
+}
+
+// UserID extracts the authenticated user ID stashed by RequireAuth.
+func UserID(c *fiber.Ctx) (string, bool) {
+	v, ok := c.Locals(contextUserIDKey).(string)
+	return v, ok
+}
