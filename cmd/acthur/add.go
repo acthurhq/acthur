@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/acthur/acthur/internal/config"
+	"github.com/acthur/acthur/internal/generate"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/plugin"
 	"github.com/acthur/acthur/internal/scaffold"
@@ -29,12 +29,15 @@ import (
 // ---------------------------------------------------------------------------
 
 // addFileStatus classifies what happened to one generated file on disk.
-type addFileStatus string
+// It is an alias of generate.Status — the write engine (internal/generate)
+// now owns writing and generated.lock bookkeeping; acthur add just reports
+// the same statuses it always has.
+type addFileStatus = generate.Status
 
 const (
-	addFileWritten addFileStatus = "written"
-	addFileSkipped addFileStatus = "skipped"
-	addFileMerged  addFileStatus = "merged"
+	addFileWritten = generate.StatusWritten
+	addFileSkipped = generate.StatusSkipped
+	addFileMerged  = generate.StatusMerged
 )
 
 // addResult is one file outcome, reported back for the command's summary.
@@ -137,12 +140,12 @@ func runAdd(root, pluginName, nodeFlag string) (*addSummary, error) {
 			return nil, fmt.Errorf("generating %q for node %q: %w", pluginName, node.ID, err)
 		}
 
-		for _, f := range files {
-			status, err := writeGeneratedFile(root, node.ID, f)
-			if err != nil {
-				return nil, fmt.Errorf("writing %s: %w", f.Path, err)
-			}
-			summary.record(node.ID, f.Path, status)
+		results, err := generate.WriteFiles(root, node.ID, files)
+		if err != nil {
+			return nil, fmt.Errorf("writing generated files for node %q: %w", node.ID, err)
+		}
+		for _, r := range results {
+			summary.record(r.NodeID, r.Path, r.Status)
 		}
 	}
 
@@ -315,76 +318,6 @@ func isYAMLListItemLine(l string) bool {
 	return strings.HasPrefix(l, "  -") || strings.HasPrefix(l, "    ")
 }
 
-// ---------------------------------------------------------------------------
-// Generated-file writer — honors GeneratedFile.Overwrite / MergeMarker.
-// ---------------------------------------------------------------------------
-
-// writeGeneratedFile writes one plugin.GeneratedFile to disk under root,
-// applying the shared path convention: paths starting with "migrations/"
-// land at the project root, everything else under <root>/<nodeID>/.
-func writeGeneratedFile(root, nodeID string, f plugin.GeneratedFile) (addFileStatus, error) {
-	target := targetPathFor(root, nodeID, f.Path)
-
-	_, statErr := os.Stat(target)
-	exists := statErr == nil
-	if statErr != nil && !os.IsNotExist(statErr) {
-		return "", statErr
-	}
-
-	if exists && f.MergeMarker != "" {
-		if err := mergeGeneratedFile(target, f); err != nil {
-			return "", err
-		}
-		return addFileMerged, nil
-	}
-
-	if exists && !f.Overwrite {
-		return addFileSkipped, nil
-	}
-
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return "", err
-	}
-	mode := os.FileMode(0o644)
-	if f.Mode != 0 {
-		mode = os.FileMode(f.Mode)
-	}
-	if err := os.WriteFile(target, f.Content, mode); err != nil {
-		return "", err
-	}
-	return addFileWritten, nil
-}
-
-// targetPathFor resolves a GeneratedFile.Path to its on-disk location.
-func targetPathFor(root, nodeID, relPath string) string {
-	if strings.HasPrefix(relPath, "migrations/") {
-		return filepath.Join(root, relPath)
-	}
-	return filepath.Join(root, nodeID, relPath)
-}
-
-// mergeGeneratedFile inserts f.Content immediately after the first
-// occurrence of f.MergeMarker in the existing file at target. If the
-// marker is not found, f.Content is appended at the end of the file (a
-// safe fallback — never silently drops generated content).
-func mergeGeneratedFile(target string, f plugin.GeneratedFile) error {
-	existing, err := os.ReadFile(target)
-	if err != nil {
-		return err
-	}
-	text := string(existing)
-
-	idx := strings.Index(text, f.MergeMarker)
-	var merged string
-	if idx == -1 {
-		merged = text
-		if !strings.HasSuffix(merged, "\n") {
-			merged += "\n"
-		}
-		merged += string(f.Content)
-	} else {
-		insertAt := idx + len(f.MergeMarker)
-		merged = text[:insertAt] + "\n" + string(f.Content) + text[insertAt:]
-	}
-	return os.WriteFile(target, []byte(merged), 0o644)
-}
+// Generated-file writing (honoring GeneratedFile.Overwrite/MergeMarker) and
+// generated.lock bookkeeping now live in internal/generate — see
+// generate.WriteFiles, called from runAdd above.

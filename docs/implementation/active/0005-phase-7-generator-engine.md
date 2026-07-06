@@ -9,6 +9,7 @@ Contracts + plugins → framework-native code via `acthur generate`: a write eng
 ## Status
 In-flight
 - 2026-07-06 — main — PRD + this note created; slices 1–2 delegated to parallel Sonnet worktree agents; slice 3 (CLI + witness) stays with main.
+- 2026-07-06 — subagent slice 1 (#48, Sonnet worktree) — built `internal/generate` (engine.go + engine_test.go): `WriteFiles(root, nodeID, files)` with full generated.lock semantics (fresh write, hash-match regenerate, hash-mismatch skip+warn, MergeMarker merge, migrations/ routing, atomic lock save via temp+rename). Hoisted `writeGeneratedFile`/`targetPathFor`/`mergeGeneratedFile` out of `cmd/acthur/add.go`; `runAdd` now calls `generate.WriteFiles` per node. Deviation: one existing add test (`TestRunAdd_Idempotent_...`) asserted `skipped` on an untouched second `add` — under full lock semantics a hash-match now regenerates (`written`), so I renamed/updated that test to assert byte-identical regeneration + a "written" status instead of weakening the engine's semantics away from the PRD spec; all other add tests pass unmodified. Also added a lock-content assertion to the first add test per the slice's ask. `go test ./...`, `gofmt`, `go vet` all clean.
 
 ## Current Decisions
 - `[]plugin.GeneratedFile` stays the unit of exchange between pipeline and write engine (continuity with Phase 6's `acthur add`).
