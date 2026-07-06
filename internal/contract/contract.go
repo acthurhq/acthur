@@ -89,27 +89,25 @@ type TypeDef struct {
 // Parser
 // ---------------------------------------------------------------------------
 
-// ParseFile reads and parses a .contract.yml file.
-//
-// Phase 4 loads native .contract.yml contracts only (PRD §11.1 lists .proto,
-// .openapi.yml, and .graphql as accepted formats, but their importers are
-// out of scope for this phase — see docs/prd/phase-4-contract-engine.md,
-// "Out of Scope"). Rather than silently returning an empty/stub Contract,
-// those extensions get an explicit, honest error.
+// ParseFile reads and parses a contract file. PRD §11.1 lists four accepted
+// formats — native .contract.yml, OpenAPI 3.x (.openapi.yml/.openapi.yaml),
+// Protocol Buffers (.proto), and GraphQL SDL (.graphql/.gql) — all compiled
+// to this package's internal Contract representation.
 func ParseFile(path string) (*Contract, error) {
 	lower := strings.ToLower(path)
-	switch {
-	case strings.HasSuffix(lower, ".openapi.yml"), strings.HasSuffix(lower, ".openapi.yaml"):
-		return nil, fmt.Errorf("contract import for openapi is not yet supported (Phase 4 loads native .contract.yml only)")
-	case strings.HasSuffix(lower, ".proto"):
-		return nil, fmt.Errorf("contract import for proto is not yet supported (Phase 4 loads native .contract.yml only)")
-	case strings.HasSuffix(lower, ".graphql"), strings.HasSuffix(lower, ".gql"):
-		return nil, fmt.Errorf("contract import for graphql is not yet supported (Phase 4 loads native .contract.yml only)")
-	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read contract file %q: %w", path, err)
+	}
+
+	switch {
+	case strings.HasSuffix(lower, ".openapi.yml"), strings.HasSuffix(lower, ".openapi.yaml"):
+		return importOpenAPI(path, data)
+	case strings.HasSuffix(lower, ".proto"):
+		return importProto(path, data)
+	case strings.HasSuffix(lower, ".graphql"), strings.HasSuffix(lower, ".gql"):
+		return importGraphQL(path, data)
 	}
 
 	// Everything else (.yml, .yaml, or extensionless .contract files) is
@@ -681,6 +679,70 @@ func (v *Validator) ValidateRequest(
 				})
 				result.Valid = false
 			}
+		}
+	}
+
+	return result
+}
+
+// ValidateResponse checks an outgoing response body against the contract's
+// Output schema for the given endpoint. Only 2xx responses carry a
+// meaningful Output contract — callers should not call this for non-2xx
+// status codes, but ValidateResponse itself only checks field presence, so
+// calling it is harmless either way.
+//
+// A response field is considered required unless its declared type ends in
+// "?" (matching the native format's optional-field convention). Extra
+// fields present in the body but not declared in Output are not flagged —
+// this is a minimal, honest check for missing/renamed fields, not full
+// schema validation.
+func (v *Validator) ValidateResponse(
+	contractName, version, endpointID string,
+	body map[string]any,
+) ValidationResult {
+	result := ValidationResult{
+		Valid:      true,
+		Contract:   contractName,
+		EndpointID: endpointID,
+	}
+
+	c, err := v.registry.Get(contractName, version)
+	if err != nil {
+		result.Violations = append(result.Violations, Violation{
+			Message:   fmt.Sprintf("contract %q@%s not found in registry", contractName, version),
+			Direction: "response",
+		})
+		result.Valid = false
+		return result
+	}
+
+	var ep *Endpoint
+	for i := range c.Endpoints {
+		if c.Endpoints[i].ID == endpointID {
+			ep = &c.Endpoints[i]
+			break
+		}
+	}
+	if ep == nil {
+		result.Violations = append(result.Violations, Violation{
+			Message:   fmt.Sprintf("endpoint %q not defined in contract %q", endpointID, contractName),
+			Direction: "response",
+		})
+		result.Valid = false
+		return result
+	}
+
+	for field, typeDef := range ep.Output {
+		if strings.HasSuffix(strings.Split(typeDef, "(")[0], "?") {
+			continue // optional output field — absence is not a violation
+		}
+		if _, exists := body[field]; !exists {
+			result.Violations = append(result.Violations, Violation{
+				Field:     field,
+				Message:   fmt.Sprintf("required field %q is missing from response body", field),
+				Direction: "response",
+			})
+			result.Valid = false
 		}
 	}
 

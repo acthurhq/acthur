@@ -1,0 +1,21 @@
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  role: Role
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+type Query {
+  getUser(id: ID!): User
+  listUsers: [User!]!
+}
+
+type Mutation {
+  createUser(name: String!, email: String!, role: Role): User!
+}
