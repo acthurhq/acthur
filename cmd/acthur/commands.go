@@ -383,33 +383,89 @@ func notImplemented(phase int) error {
 // acthur new
 // ---------------------------------------------------------------------------
 
+var (
+	newAdapter string
+	newDB      bool
+	newModule  string
+)
+
 var newCmd = &cobra.Command{
 	Use:   "new <project-name>",
 	Short: "Create a new Acthur project with the interactive wizard",
-	Long: `Launches the interactive project wizard to select your stack,
-plugins, and deployment target, then scaffolds a complete project.`,
-	Args: cobra.MaximumNArgs(1),
+	Long: `Launches the interactive project wizard to select your backend
+adapter, whether to include a database, and your Go module prefix, then
+scaffolds a complete project into a new <project-name>/ directory.
+
+Pass --adapter, --db, and --module to skip the wizard entirely — required
+when stdin is not a terminal (CI, scripts, tests).`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.Banner()
-		// Phase 9 — wizard implementation
-		return notImplemented(9)
+		wi := wizardInput{
+			Adapter:    newAdapter,
+			AdapterSet: cmd.Flags().Changed("adapter"),
+			DB:         newDB,
+			DBSet:      cmd.Flags().Changed("db"),
+			Module:     newModule,
+			ModuleSet:  cmd.Flags().Changed("module"),
+		}
+		result, err := runNew(mustCwd(), args[0], wi, cmd.InOrStdin(), cmd.OutOrStdout(), isInteractive())
+		if err != nil {
+			return err
+		}
+		printScaffoldResult(result)
+		return nil
 	},
+}
+
+func init() {
+	newCmd.Flags().StringVar(&newAdapter, "adapter", "", "backend adapter to scaffold (e.g. go:fiber)")
+	newCmd.Flags().BoolVar(&newDB, "db", false, "include a db:postgres infra node")
+	newCmd.Flags().StringVar(&newModule, "module", "", "Go module prefix for scaffolded code (defaults to the project name)")
 }
 
 // ---------------------------------------------------------------------------
 // acthur init
 // ---------------------------------------------------------------------------
 
+var (
+	initAdapter string
+	initDB      bool
+	initModule  string
+)
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Adopt an existing project into Acthur (non-destructive)",
-	Long: `Scans the current directory to detect your stack, confirms the
-detected configuration, and writes acthur.yml without modifying any
-existing files.`,
+	Long: `Scaffolds an Acthur project into the current directory — the same
+wizard as 'acthur new', targeting cwd instead of a new subdirectory. Refuses
+to run if acthur.yml already exists here.
+
+Pass --adapter, --db, and --module to skip the wizard entirely — required
+when stdin is not a terminal (CI, scripts, tests).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.Banner()
-		return notImplemented(9)
+		wi := wizardInput{
+			Adapter:    initAdapter,
+			AdapterSet: cmd.Flags().Changed("adapter"),
+			DB:         initDB,
+			DBSet:      cmd.Flags().Changed("db"),
+			Module:     initModule,
+			ModuleSet:  cmd.Flags().Changed("module"),
+		}
+		result, err := runInit(mustCwd(), wi, cmd.InOrStdin(), cmd.OutOrStdout(), isInteractive())
+		if err != nil {
+			return err
+		}
+		printScaffoldResult(result)
+		return nil
 	},
+}
+
+func init() {
+	initCmd.Flags().StringVar(&initAdapter, "adapter", "", "backend adapter to scaffold (e.g. go:fiber)")
+	initCmd.Flags().BoolVar(&initDB, "db", false, "include a db:postgres infra node")
+	initCmd.Flags().StringVar(&initModule, "module", "", "Go module prefix for scaffolded code (defaults to the directory name)")
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,7 +1233,12 @@ var pluginRemoveCmd = &cobra.Command{
 	Short: "Remove an installed plugin",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return notImplemented(5)
+		summary, err := runPluginRemove(mustCwd(), args[0])
+		if err != nil {
+			return err
+		}
+		output.Success(output.PrefixPlugin, "removed %q from acthur.yml's plugins list", summary.Plugin)
+		return nil
 	},
 }
 
