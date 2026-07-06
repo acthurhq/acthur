@@ -12,10 +12,12 @@ import (
 	"github.com/acthur/acthur/internal/adapter/backend/gofiber"
 	"github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
+	"github.com/acthur/acthur/internal/flags"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/plugin"
 	"github.com/acthur/acthur/internal/process"
+	"github.com/acthur/acthur/internal/secrets"
 )
 
 type fakeDevResolver struct {
@@ -354,6 +356,121 @@ func TestResolveNodeEnv_AppliesAdapterDefaultsAndSynthesizesSecrets(t *testing.T
 	}
 	if _, ok := env["DATABASE_URL"]; ok {
 		t.Fatalf("expected DATABASE_URL unset (no default, not generated), got %q", env["DATABASE_URL"])
+	}
+}
+
+// fakeProjectSecretStore is an in-memory projectSecretStore for tests that
+// don't want to touch disk.
+type fakeProjectSecretStore map[string]string
+
+func (f fakeProjectSecretStore) All() (map[string]string, error) { return map[string]string(f), nil }
+
+// fakeProjectFlagStore is an in-memory projectFlagStore for tests.
+type fakeProjectFlagStore []flags.Flag
+
+func (f fakeProjectFlagStore) List() ([]flags.Flag, error) { return []flags.Flag(f), nil }
+
+func TestBuildEnv_MergesProjectSecretsWithoutClobberingEngineKeys(t *testing.T) {
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:env", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api})
+	resolver := fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"go:env": fakeEnvAdapter{vars: []adapter.EnvVar{
+				{Key: "APP_ENV", Default: "development"},
+			}},
+		},
+	}
+
+	eng := NewDevEngine(&config.Config{Dev: config.DevConfig{Port: 4000}}, g, resolver)
+	eng.projectSecrets = fakeProjectSecretStore{
+		"STRIPE_KEY": "sk_test_123",
+		// A project secret sharing a name with an engine-owned key must never
+		// win — PORT/APP_PORT are set by the engine, not the secret store.
+		"PORT": "9999",
+	}
+
+	env, err := eng.buildEnv(api)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if env["STRIPE_KEY"] != "sk_test_123" {
+		t.Fatalf("expected project secret injected, got %q", env["STRIPE_KEY"])
+	}
+	if env["PORT"] != "8080" {
+		t.Fatalf("expected engine-owned PORT to win over project secret, got %q", env["PORT"])
+	}
+}
+
+func TestBuildEnv_InjectsFeatureFlagsAsEnv(t *testing.T) {
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:env", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api})
+	resolver := fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"go:env": fakeEnvAdapter{}},
+	}
+
+	eng := NewDevEngine(&config.Config{Dev: config.DevConfig{Port: 4000}}, g, resolver)
+	eng.projectFlags = fakeProjectFlagStore{
+		{Name: "new-booking-flow", Enabled: true},
+		{Name: "old-flow", Enabled: false},
+	}
+
+	env, err := eng.buildEnv(api)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if env["ACTHUR_FLAG_NEW_BOOKING_FLOW"] != "true" {
+		t.Fatalf("expected enabled flag env = true, got %q", env["ACTHUR_FLAG_NEW_BOOKING_FLOW"])
+	}
+	if env["ACTHUR_FLAG_OLD_FLOW"] != "false" {
+		t.Fatalf("expected disabled flag env = false, got %q", env["ACTHUR_FLAG_OLD_FLOW"])
+	}
+}
+
+func TestBuildEnv_NilProjectStoresAreNoOp(t *testing.T) {
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:env", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api})
+	resolver := fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"go:env": fakeEnvAdapter{}},
+	}
+
+	// cfg.RootDir == "" (the common unit-test shape) leaves projectSecrets and
+	// projectFlags nil — buildEnv must not panic or error.
+	eng := NewDevEngine(&config.Config{Dev: config.DevConfig{Port: 4000}}, g, resolver)
+	if _, err := eng.buildEnv(api); err != nil {
+		t.Fatalf("buildEnv with nil project stores: %v", err)
+	}
+}
+
+func TestNewDevEngine_WiresRealProjectStoresFromRootDir(t *testing.T) {
+	root := t.TempDir()
+	api := &graph.Node{ID: "api", Type: config.NodeTypeService, Adapter: "go:env", Port: 8080}
+	g := graph.NewTestGraph(map[string]*graph.Node{"api": api})
+	resolver := fakeDevResolver{
+		adapters: map[string]adapter.Adapter{"go:env": fakeEnvAdapter{}},
+	}
+
+	realSecrets := secrets.New(root)
+	if err := realSecrets.Set("STRIPE_KEY", "sk_live_xyz"); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+	realFlags := flags.New(root)
+	if err := realFlags.Create("new-booking-flow", ""); err != nil {
+		t.Fatalf("seed flag: %v", err)
+	}
+	if err := realFlags.Enable("new-booking-flow"); err != nil {
+		t.Fatalf("enable flag: %v", err)
+	}
+
+	eng := NewDevEngine(&config.Config{RootDir: root, Dev: config.DevConfig{Port: 4000}}, g, resolver)
+	env, err := eng.buildEnv(api)
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	if env["STRIPE_KEY"] != "sk_live_xyz" {
+		t.Fatalf("expected real secrets.Store wired from RootDir, got %q", env["STRIPE_KEY"])
+	}
+	if env["ACTHUR_FLAG_NEW_BOOKING_FLOW"] != "true" {
+		t.Fatalf("expected real flags.Store wired from RootDir, got %q", env["ACTHUR_FLAG_NEW_BOOKING_FLOW"])
 	}
 }
 
