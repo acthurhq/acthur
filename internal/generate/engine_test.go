@@ -197,6 +197,34 @@ func TestWriteFiles_MigrationsRoute_ToProjectRoot(t *testing.T) {
 	}
 }
 
+// TestWriteFiles_DeployRoute_ToProjectRoot: deploy artifacts (Phase 8, #51)
+// span the whole graph, not one node — a "deploy/" path must land at the
+// project root exactly like "migrations/" does, regardless of the nodeID
+// the caller passes to WriteFiles.
+func TestWriteFiles_DeployRoute_ToProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("services: {}\n")
+	files := []plugin.GeneratedFile{
+		{Path: "deploy/docker-compose.prod.yml", Content: content, Overwrite: true},
+	}
+
+	if _, err := generate.WriteFiles(root, "api", files); err != nil {
+		t.Fatalf("WriteFiles: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "deploy", "docker-compose.prod.yml")); err != nil {
+		t.Errorf("expected compose file at project root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "api", "deploy")); err == nil {
+		t.Error("deploy artifacts must not be written under the node directory")
+	}
+
+	lock := readLock(t, root)
+	if lock["deploy/docker-compose.prod.yml"] != sha256Hex(content) {
+		t.Errorf("expected lock keyed by the deploy/ path itself, got %+v", lock)
+	}
+}
+
 func TestWriteFiles_PresentButNotInLock_RespectsOverwriteFlag(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {

@@ -9,9 +9,10 @@
 //
 // Every adapter implements the core Adapter interface (Name, Category, Detect,
 // EnvVars). Optional capabilities are expressed as separate interfaces
-// (Scaffolder, Runnable, Containerized, Connectable, Migratable, Deployable). The kernel
-// type-asserts against these at call sites. CapabilitiesOf is the single source
-// of truth for what a concrete adapter supports.
+// (Scaffolder, Runnable, Containerized, Connectable, Migratable, Deployable,
+// Dockerizable). The kernel type-asserts against these at call sites.
+// CapabilitiesOf is the single source of truth for what a concrete adapter
+// supports.
 package adapter
 
 import (
@@ -146,6 +147,7 @@ const (
 	CapabilityConnectable Capability = "Connectable"
 	CapabilityMigrate     Capability = "Migrate"
 	CapabilityDeploy      Capability = "Deploy"
+	CapabilityDockerize   Capability = "Dockerize"
 )
 
 // ---------------------------------------------------------------------------
@@ -211,6 +213,27 @@ type Deployable interface {
 	DeployCommand(env map[string]string) Command
 }
 
+// DockerfileContext carries the node-level facts a Dockerizable adapter
+// needs to render a production Dockerfile. It is deliberately narrower than
+// ScaffoldContext (project scaffolding, run once at `acthur add`) and
+// ContainerContext (declarative container spec for infra resources) — a
+// production Dockerfile only ever needs the node's identity and the port
+// it serves on.
+type DockerfileContext struct {
+	NodeID string
+	// Port is the node's configured port. Zero means the node has no
+	// listening port (e.g. a queue-worker service) — the adapter must omit
+	// EXPOSE and HEALTHCHECK in that case rather than guess one.
+	Port int
+}
+
+// Dockerizable can render a production-ready, multi-stage Dockerfile for a
+// service node. Infra adapters (e.g. db:postgres) do not implement this —
+// they run from official upstream images, not a project-owned build.
+type Dockerizable interface {
+	DockerfileFor(ctx DockerfileContext) ([]byte, error)
+}
+
 // ---------------------------------------------------------------------------
 // CapabilitiesOf — single source of truth
 // ---------------------------------------------------------------------------
@@ -237,6 +260,9 @@ func CapabilitiesOf(a Adapter) []Capability {
 	}
 	if _, ok := a.(Deployable); ok {
 		caps = append(caps, CapabilityDeploy)
+	}
+	if _, ok := a.(Dockerizable); ok {
+		caps = append(caps, CapabilityDockerize)
 	}
 	return caps
 }

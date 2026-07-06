@@ -56,6 +56,9 @@ var tmplGitignore []byte
 //go:embed templates/dockerfile.tmpl
 var tmplDockerfile []byte
 
+//go:embed templates/dockerfile.prod.tmpl
+var tmplDockerfileProd []byte
+
 // Adapter implements adapter.Adapter for Go Fiber.
 type Adapter struct{}
 
@@ -184,6 +187,16 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 		{Path: "internal/middleware/logger.go", Content: loggerGo},
 		{Path: "Dockerfile", Content: dockerfile},
 	}, nil
+}
+
+// DockerfileFor renders a production-ready, multi-stage Dockerfile for a
+// go:fiber service node (Dockerizable capability). It is distinct from the
+// scaffold-time Dockerfile Scaffold() writes once into the project: this one
+// is (re)rendered by internal/deploy/artifacts on every `acthur deploy`, so
+// EXPOSE/HEALTHCHECK always reflect the node's current graph facts —
+// omitted entirely when the node has no port (e.g. a queue-worker service).
+func (a *Adapter) DockerfileFor(ctx adapter.DockerfileContext) ([]byte, error) {
+	return renderTemplate("dockerfile.prod.tmpl", tmplDockerfileProd, ctx)
 }
 
 // ---------------------------------------------------------------------------

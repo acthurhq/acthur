@@ -46,7 +46,8 @@ type lock map[string]string
 
 // WriteFiles persists files to disk under root, following the same routing
 // convention `acthur add` established: a path starting with "migrations/"
-// lands at the project root, everything else under <root>/<nodeID>/.
+// or "deploy/" lands at the project root (deploy artifacts span the whole
+// graph, not one node), everything else under <root>/<nodeID>/.
 //
 // It consults and updates generated.lock at the project root to decide,
 // per file, whether writing is safe:
@@ -147,9 +148,10 @@ func WriteFiles(root, nodeID string, files []plugin.GeneratedFile) ([]Result, er
 
 // lockKey resolves a GeneratedFile.Path to the repo-relative path it is
 // tracked under in generated.lock and written to on disk: paths under
-// "migrations/" land at the project root, everything else under nodeID/.
+// "migrations/" or "deploy/" land at the project root, everything else
+// under nodeID/.
 func lockKey(nodeID, relPath string) string {
-	if strings.HasPrefix(relPath, "migrations/") {
+	if strings.HasPrefix(relPath, "migrations/") || strings.HasPrefix(relPath, "deploy/") {
 		return relPath
 	}
 	return filepath.Join(nodeID, relPath)
