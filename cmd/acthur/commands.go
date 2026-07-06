@@ -32,10 +32,15 @@ import (
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
+	_ "github.com/acthur/acthur/internal/plugin/builtin/admin"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/auth"
+	_ "github.com/acthur/acthur/internal/plugin/builtin/featureflags"
+	devhttps "github.com/acthur/acthur/internal/plugin/builtin/https"
 	"github.com/acthur/acthur/internal/plugin/builtin/migrations"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/multitenancy"
+	_ "github.com/acthur/acthur/internal/plugin/builtin/observability"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/rbac"
+	_ "github.com/acthur/acthur/internal/plugin/builtin/security"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
 	"github.com/acthur/acthur/internal/process"
 	"github.com/acthur/acthur/internal/secrets"
@@ -516,12 +521,21 @@ and forwarding it.`,
 		if err != nil {
 			return fmt.Errorf("loading contracts: %w", err)
 		}
-		eng := engine.NewDevEngine(cfg, g, registryResolver{},
+		opts := []engine.DevEngineOption{
 			engine.WithStrict(devStrict),
 			engine.WithContractRegistry(reg),
 			engine.WithBus(kernelBus),
 			engine.WithWriteHosts(devWriteHosts),
-		)
+		}
+		if cfg.Dev.HTTPS {
+			paths, err := devhttps.EnsureDevCert(cfg.RootDir, cfg.Dev.Domain)
+			if err != nil {
+				return fmt.Errorf("https: %w", err)
+			}
+			output.Info("dev", "TLS enabled — serving on https://localhost:%d (cert: %s)", cfg.Dev.Port, paths.CertFile)
+			opts = append(opts, engine.WithTLS(paths.CertFile, paths.KeyFile))
+		}
+		eng := engine.NewDevEngine(cfg, g, registryResolver{}, opts...)
 		return eng.Start()
 	},
 }
