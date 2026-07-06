@@ -115,6 +115,27 @@ func Fix(r *Result) map[string]error {
 	return results
 }
 
+// HasBlockingFailures reports whether r contains any required check that is
+// missing or failed. Used by `acthur dev` as a preflight gate: a project
+// whose environment cannot possibly run (git/docker missing, wrong Go
+// version, etc.) must not proceed to start processes and print a confusing
+// mid-startup failure instead of a pointed doctor report.
+//
+// StatusWarning (e.g. "port already in use") is deliberately not blocking —
+// it is not required tooling, it's a runtime condition the engine's own
+// startup will surface with a clearer, node-scoped error if it matters.
+func HasBlockingFailures(r *Result) bool {
+	for _, c := range r.Checks {
+		if !c.Required {
+			continue
+		}
+		if c.Status == StatusMissing || c.Status == StatusFailed {
+			return true
+		}
+	}
+	return false
+}
+
 // Print renders the doctor result to the terminal.
 func Print(r *Result) {
 	output.Header("Environment Check")

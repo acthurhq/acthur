@@ -381,6 +381,13 @@ func (s *Supervisor) backoff(restarts int) time.Duration {
 // Manager
 // ---------------------------------------------------------------------------
 
+// LogSink receives every line of output from every process this Manager
+// spawns, in addition to the standard output.ServiceLog routing. The dev
+// engine uses it to persist per-node log files under .acthur/logs/<node>.log
+// so `acthur service logs <name>` has something real to read even after the
+// line has scrolled off the terminal.
+type LogSink func(nodeID, line string)
+
 // Manager tracks all managed processes in the system.
 // It is the single place the dev engine creates and monitors processes.
 type Manager struct {
@@ -389,6 +396,7 @@ type Manager struct {
 	mu          sync.RWMutex
 	ctx         context.Context
 	cancel      context.CancelFunc
+	logSink     LogSink
 }
 
 // NewManager creates a process manager.
@@ -402,6 +410,14 @@ func NewManager() *Manager {
 	}
 }
 
+// SetLogSink registers sink to additionally receive every output line from
+// every process this Manager spawns from now on. Nil disables it.
+func (m *Manager) SetLogSink(sink LogSink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logSink = sink
+}
+
 // Spawn creates and starts a new supervised process for a graph node.
 func (m *Manager) Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*Process, error) {
 	m.mu.Lock()
@@ -413,9 +429,14 @@ func (m *Manager) Spawn(nodeID, bin string, args []string, env map[string]string
 
 	p := NewProcess(nodeID, bin, args, env, dir)
 
-	// Default line handler: route to output package
+	// Default line handler: route to output package, and to the log sink
+	// (if configured) for durable per-node log files.
+	sink := m.logSink
 	p.OnLine(func(id, line string) {
 		output.ServiceLog(id, line)
+		if sink != nil {
+			sink(id, line)
+		}
 	})
 
 	if err := p.Start(m.ctx); err != nil {

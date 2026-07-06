@@ -16,6 +16,28 @@ In-flight
   - Also fixed an unrelated but critical bug found mid-task per parent-session heads-up: `.gitignore`'s unanchored `acthur` line was silently excluding all new files under `cmd/acthur/` from `git add -A` (this is how the prior agent on this issue lost work) — anchored to `/acthur`.
   - Full suite (`go build ./... && go vet ./... && go test ./...`) green at handoff.
   - Deferred/out of scope: nothing from issue #55's stated scope. Not addressed here (belongs to other phases per audit): Phase 3 doctor/DNS/watcher integration, Phase 6/8/9 gaps.
+- 2026-07-06 — worktree agent-aaad08f6a74ac851d (#54) — Phase 3 gaps closed:
+  doctor preflight in `acthur dev` + `--skip-doctor` (salvaged from prior WIP,
+  verified green); `internal/dns` DNS preflight for `*.acthur.local`-style dev
+  domains (`--write-hosts` opt-in, never runs sudo); watcher wired into
+  `DevEngine` via a new `adapter.SelfReloader` capability so file changes
+  restart a node's process unless its adapter (e.g. go:fiber's air)
+  self-reloads; and `acthur service add/logs/restart/health` implemented —
+  logs/pidfiles persisted under `.acthur/` by the dev engine
+  (`internal/process/control.go`), `restart` signals the recorded pid
+  (SIGTERM, relying on the existing Supervisor auto-restart-on-crash path —
+  no new daemon/RPC), `health` probes directly, `add` mirrors `add.go`'s
+  YAML-edit-with-rollback pattern. All four gaps are unit-tested (fake
+  process manager / fake DNS lookup / fake health poller — no real
+  processes or network); `go build ./... && go vet ./... && go test ./...`
+  green. Also fixed an unrelated repo-wide bug found while resuming: an
+  unanchored `acthur` line in `.gitignore` was silently excluding new files
+  under `cmd/acthur/` from `git add -A` (root-caused the prior agent's lost
+  `dev_preflight_test.go`) — anchored to `/acthur` and recovered the file.
+  Needs a live witness: this closes the gaps at the unit-test level only —
+  no run against a real `acthur dev` process (real file-change restart,
+  real DNS resolution, real `acthur service restart` against a live pid)
+  has been performed in this worktree.
 
 ## Current Decisions
 - Waves: (1) Phase 3+4+6/8 leftovers — three agents; (2) Phase 9 split across parallel agents. Merge + full suite + witness between waves.

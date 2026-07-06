@@ -88,6 +88,12 @@ func (a *Adapter) DevCommand(env map[string]string) adapter.Command {
 	}
 }
 
+// SelfReloads reports true: air watches this node's own source directory,
+// rebuilds, and restarts the compiled binary itself. The dev engine's file
+// watcher must not also restart this node's process — that would just race
+// air's own rebuild for the same port.
+func (a *Adapter) SelfReloads() bool { return true }
+
 // BuildCommand returns the go build command for production.
 func (a *Adapter) BuildCommand(env map[string]string) adapter.Command {
 	return adapter.Command{

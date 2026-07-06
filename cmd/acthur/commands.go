@@ -6,9 +6,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/acthur/acthur/internal/adapter"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
@@ -19,6 +22,7 @@ import (
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/engine"
 	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/auth"
@@ -26,6 +30,7 @@ import (
 	_ "github.com/acthur/acthur/internal/plugin/builtin/multitenancy"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/rbac"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
+	"github.com/acthur/acthur/internal/process"
 	"github.com/spf13/cobra"
 )
 
@@ -412,9 +417,11 @@ existing files.`,
 // ---------------------------------------------------------------------------
 
 var (
-	devDocker bool
-	devEnv    string
-	devStrict bool
+	devDocker     bool
+	devEnv        string
+	devStrict     bool
+	devSkipDoctor bool
+	devWriteHosts bool
 )
 
 var devCmd = &cobra.Command{
@@ -423,12 +430,24 @@ var devCmd = &cobra.Command{
 	Long: `Starts all services defined in acthur.yml in the correct order,
 manages their processes, starts the unified dev proxy, and enables hot reload.
 
+Before starting anything, acthur dev runs the same checks as acthur doctor
+and aborts with a pointed message if a required tool is missing. Pass
+--skip-doctor to bypass this preflight.
+
 With --strict, the dev proxy blocks (422) any data_flow request that
 violates its edge's contract, and blocks (502) any backend response that
 violates the contract's Output schema, instead of logging the violation
 and forwarding it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, g := loadGraph()
+		cfg := loadConfig()
+
+		if !devSkipDoctor {
+			if err := runDevDoctorPreflight(cfg); err != nil {
+				return err
+			}
+		}
+
+		_, g := loadGraph()
 		reg, err := contract.LoadDir(cfg.RootDir)
 		if err != nil {
 			return fmt.Errorf("loading contracts: %w", err)
@@ -437,6 +456,7 @@ and forwarding it.`,
 			engine.WithStrict(devStrict),
 			engine.WithContractRegistry(reg),
 			engine.WithBus(kernelBus),
+			engine.WithWriteHosts(devWriteHosts),
 		)
 		return eng.Start()
 	},
@@ -446,6 +466,29 @@ func init() {
 	devCmd.Flags().BoolVar(&devDocker, "docker", false, "run all services in Docker (full containerization)")
 	devCmd.Flags().StringVar(&devEnv, "env", "dev", "environment name from acthur.yml")
 	devCmd.Flags().BoolVar(&devStrict, "strict", false, "block (422 requests / 502 responses) data_flow traffic that violates its contract instead of logging and forwarding")
+	devCmd.Flags().BoolVar(&devSkipDoctor, "skip-doctor", false, "skip the doctor preflight check")
+	devCmd.Flags().BoolVar(&devWriteHosts, "write-hosts", false, "write missing dev domains to /etc/hosts (requires permission to write it)")
+}
+
+// runDevDoctorPreflight runs the same checks as `acthur doctor` against cfg
+// and aborts with a pointed message if any required tool is missing or
+// failed. Extracted from devCmd.RunE so it's directly testable without
+// spinning up the full dev engine.
+func runDevDoctorPreflight(cfg *config.Config) error {
+	return devDoctorPreflight(cfg, doctor.Run)
+}
+
+// devDoctorPreflight is runDevDoctorPreflight with the doctor.Run call
+// injected, so tests can assert the abort/pass decision against a canned
+// *doctor.Result without depending on which tools happen to be installed on
+// the machine running the test.
+func devDoctorPreflight(cfg *config.Config, run func(*config.Config) *doctor.Result) error {
+	r := run(cfg)
+	if !doctor.HasBlockingFailures(r) {
+		return nil
+	}
+	doctor.Print(r)
+	return fmt.Errorf("environment checks failed — fix the issues above (or run 'acthur doctor --fix'), or pass --skip-doctor to bypass")
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,29 +1195,91 @@ var serviceCmd = &cobra.Command{
 	Short: "Manage individual services in the graph",
 }
 
+var serviceAddName string
+
+var serviceAddCmd = &cobra.Command{
+	Use:   "add <infra>",
+	Short: "Add an infra node to the graph",
+	Long: `Adds an infra node to acthur.yml's graph.nodes (e.g. "acthur service add
+cache:redis" adds a "redis" node using the cache:redis adapter) and rebuilds
+the graph to confirm the result is still valid. Use --name to pick a
+different node ID than the adapter's default.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfig()
+		summary, err := runServiceAdd(cfg.RootDir, args[0], serviceAddName)
+		if err != nil {
+			return err
+		}
+		if summary.AlreadyHad {
+			output.Info(summary.NodeID, "already present in the graph — nothing to do")
+			return nil
+		}
+		output.Success(summary.NodeID, "added (%s) to the graph", summary.Adapter)
+		return nil
+	},
+}
+
 func init() {
-	serviceCmd.AddCommand(&cobra.Command{
-		Use:   "add <infra>",
-		Short: "Add an infra node to the graph",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
-	})
+	serviceAddCmd.Flags().StringVar(&serviceAddName, "name", "", "node ID to use instead of the adapter's default")
+	serviceCmd.AddCommand(serviceAddCmd)
+
 	serviceCmd.AddCommand(&cobra.Command{
 		Use:   "logs <name>",
 		Short: "Stream logs from a service",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			path := process.LogPath(cfg.RootDir, args[0])
+
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+			stop := make(chan struct{})
+			go func() {
+				<-quit
+				close(stop)
+			}()
+
+			return runServiceLogs(path, cmd.OutOrStdout(), stop, 300*time.Millisecond)
+		},
 	})
+
 	serviceCmd.AddCommand(&cobra.Command{
 		Use:   "restart <name>",
 		Short: "Restart a specific service",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			return runServiceRestart(cfg.RootDir, args[0], nil)
+		},
 	})
+
 	serviceCmd.AddCommand(&cobra.Command{
-		Use:   "health",
-		Short: "Show health status of all graph nodes",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		Use:   "health [name]",
+		Short: "Show health status of one node, or all graph nodes",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, g := loadGraph()
+			checker := health.New()
+
+			if len(args) == 1 {
+				return runServiceHealth(g, checker, args[0])
+			}
+
+			var failed int
+			for _, node := range g.Nodes() {
+				if strings.HasPrefix(node.Adapter, "kernel:") {
+					continue
+				}
+				if err := runServiceHealth(g, checker, node.ID); err != nil {
+					failed++
+				}
+			}
+			if failed > 0 {
+				return fmt.Errorf("%d node(s) unhealthy", failed)
+			}
+			return nil
+		},
 	})
 }
 
