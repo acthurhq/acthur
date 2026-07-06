@@ -125,6 +125,10 @@ type DevEngine struct {
 	// handleFileChange. Nil until Start() constructs it (no rootDir to watch
 	// in unit tests that call startNode/startInfraNode directly).
 	watcher *watcher.Watcher
+
+	// tlsCertFile/tlsKeyFile, when both set, make the dev proxy serve HTTPS
+	// (see WithTLS). Empty means plain HTTP, the pre-existing default.
+	tlsCertFile, tlsKeyFile string
 }
 
 // DevEngineOption configures optional DevEngine behavior at construction time.
@@ -160,6 +164,19 @@ func WithBus(bus *plugin.Bus) DevEngineOption {
 // /etc/hosts, it falls back to printing the same instructions.
 func WithWriteHosts(writeHosts bool) DevEngineOption {
 	return func(e *DevEngine) { e.writeHosts = writeHosts }
+}
+
+// WithTLS makes the dev proxy serve HTTPS using the given cert/key file
+// pair instead of plain HTTP. Wired from `acthur dev` when dev.https is set
+// in acthur.yml — the https plugin (internal/plugin/builtin/https) owns
+// generating that cert pair; the engine only ever consumes file paths, so
+// it has no dependency on the plugin package itself (keeping the
+// Graph→Adapters→Contracts→Plugins layering intact).
+func WithTLS(certFile, keyFile string) DevEngineOption {
+	return func(e *DevEngine) {
+		e.tlsCertFile = certFile
+		e.tlsKeyFile = keyFile
+	}
 }
 
 // NewDevEngine creates a DevEngine. Call Start() to begin.
@@ -254,6 +271,7 @@ func (e *DevEngine) Start() error {
 	p, err := proxy.New(e.graph, e.cfg.Dev.Port,
 		proxy.WithContractRegistry(e.registry),
 		proxy.WithStrict(e.strict),
+		proxy.WithTLS(e.tlsCertFile, e.tlsKeyFile),
 	)
 	if err != nil {
 		e.shutdown(order)
@@ -489,6 +507,12 @@ func (e *DevEngine) emit(event plugin.Event, node *graph.Node, extra map[string]
 		return
 	}
 	data := map[string]any{"node_type": string(node.Type)}
+	if e.cfg != nil && e.cfg.RootDir != "" {
+		// root_dir lets plugin hooks reach project-scoped state (e.g. the
+		// feature-flags plugin reading .acthur/flags.json) without the
+		// kernel exposing filesystem internals directly.
+		data["root_dir"] = e.cfg.RootDir
+	}
 	for k, v := range extra {
 		data[k] = v
 	}
