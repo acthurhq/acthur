@@ -140,11 +140,25 @@ func WithWriteHosts(writeHosts bool) DevEngineOption {
 // NewDevEngine creates a DevEngine. Call Start() to begin.
 func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver, opts ...DevEngineOption) *DevEngine {
 	ctx, cancel := context.WithCancel(context.Background())
+	pm := process.NewManager()
+
+	// Durable per-node log files under .acthur/logs/<node>.log — the seam
+	// `acthur service logs` reads from. Only wired when there's a real
+	// project root to write under (cfg.RootDir == "" in most unit tests,
+	// which must never touch disk).
+	if cfg.RootDir != "" {
+		if sink, err := process.FileLogSink(cfg.RootDir); err == nil {
+			pm.SetLogSink(sink)
+		} else {
+			output.Warn("", "could not set up .acthur/logs: %v", err)
+		}
+	}
+
 	e := &DevEngine{
 		cfg:      cfg,
 		graph:    g,
 		resolver: resolver,
-		pm:       process.NewManager(),
+		pm:       pm,
 		checker:  health.New(),
 		secrets:  fileSecretStore{rootDir: cfg.RootDir},
 		ctx:      ctx,
@@ -299,13 +313,14 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	}
 	args := container.ToRunArgs(spec, node.ID)
 
-	_, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
+	p, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
 		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 	e.containers = append(e.containers, node.ID)
+	e.writePIDFile(node.ID, p)
 	e.emit(plugin.EventAfterNodeStart, node, nil)
 
 	strategy := health.InfraStrategy("acthur-"+node.ID, spec.Healthcheck.Test, nil)
@@ -351,12 +366,13 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	cmd := r.DevCommand(env)
 
 	nodeDir := nodeDirectory(e.cfg.RootDir, node)
-	_, err = e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
+	p, err := e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
 		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
+	e.writePIDFile(node.ID, p)
 	e.emit(plugin.EventAfterNodeStart, node, nil)
 
 	// Wait for HTTP health
@@ -373,11 +389,35 @@ func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	return nil
 }
 
+// writePIDFile records p's OS PID under .acthur/run/<node>.pid so a separate
+// `acthur service restart <node>` invocation — a different OS process with
+// no shared memory with this one — can find and signal it. p is nil in
+// tests that use a fake processManager, and Pid() is 0 before the process
+// has actually started; both are silently skipped rather than treated as
+// errors, since a missing pidfile only degrades `service restart`, not dev.
+func (e *DevEngine) writePIDFile(nodeID string, p *process.Process) {
+	if e.cfg.RootDir == "" || p == nil {
+		return
+	}
+	pid := p.Pid()
+	if pid == 0 {
+		return
+	}
+	if err := process.WritePIDFile(e.cfg.RootDir, nodeID, pid); err != nil {
+		output.Warn(nodeID, "could not write pidfile: %v", err)
+	}
+}
+
 // shutdown stops all processes in reverse order. Containers the engine
 // started are stopped through the container runtime first — stopping only
 // the docker-run client process would leave them running.
 func (e *DevEngine) shutdown(order []*graph.Node) {
 	e.cancel()
+	if e.cfg.RootDir != "" {
+		for _, n := range order {
+			_ = process.RemovePIDFile(e.cfg.RootDir, n.ID)
+		}
+	}
 	for i := len(e.containers) - 1; i >= 0; i-- {
 		nodeID := e.containers[i]
 		if err := e.runDocker(container.ToStopArgs(nodeID)...); err != nil {
