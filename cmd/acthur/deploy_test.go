@@ -111,6 +111,71 @@ func TestRunDeploy_GateFailure_BlocksDeploy(t *testing.T) {
 	}
 }
 
+// TestRunDeploy_RemoteTargets_RequireTokenEnvVars: fly/railway/render are
+// gated by the same pre-deploy gate as compose/coolify — a missing
+// provider token blocks before any docker/API call is made.
+func TestRunDeploy_RemoteTargets_RequireTokenEnvVars(t *testing.T) {
+	cases := []struct {
+		target  string
+		wantVar string
+	}{
+		{"fly", "FLY_API_TOKEN"},
+		{"railway", "RAILWAY_TOKEN"},
+		{"render", "RENDER_API_KEY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.target, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestProject(t, dir)
+			writeBuildableAPINode(t, dir)
+			for _, v := range []string{"APP_ENV", "APP_PORT", "APP_SECRET", "DATABASE_URL", "REDIS_URL"} {
+				t.Setenv(v, "test-value")
+			}
+
+			var calls int
+			run := func(args ...string) (string, error) { calls++; return "", nil }
+
+			_, err := runDeploy(dir, "production", tc.target, false, run)
+			if err == nil {
+				t.Fatalf("expected the gate to block on a missing %s", tc.wantVar)
+			}
+			if !strings.Contains(err.Error(), tc.wantVar) {
+				t.Errorf("expected error to mention %s, got: %v", tc.wantVar, err)
+			}
+			if calls != 0 {
+				t.Errorf("gate failure must block the target, got %d docker/API calls", calls)
+			}
+		})
+	}
+}
+
+// TestRunDeploy_DryRun_RemoteTargets_PlanMentionsTarget: --dry-run for each
+// remote target reports the plan (including the FLY/RAILWAY/RENDER token
+// var it will require) without touching docker or the network.
+func TestRunDeploy_DryRun_RemoteTargets_PlanMentionsTarget(t *testing.T) {
+	for _, target := range []string{"fly", "railway", "render"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestProject(t, dir)
+			writeBuildableAPINode(t, dir)
+
+			var calls int
+			run := func(args ...string) (string, error) { calls++; return "", nil }
+
+			plan, err := runDeploy(dir, "production", target, true, run)
+			if err != nil {
+				t.Fatalf("dry run: %v", err)
+			}
+			if !strings.Contains(strings.Join(plan, "\n"), "target: "+target) {
+				t.Errorf("expected plan to mention target %q, got: %v", target, plan)
+			}
+			if calls != 0 {
+				t.Errorf("dry run must not invoke docker, got %d calls", calls)
+			}
+		})
+	}
+}
+
 // TestRunDeploy_UnknownEnv_Errors: naming an environment that acthur.yml
 // doesn't define fails pointedly.
 func TestRunDeploy_UnknownEnv_Errors(t *testing.T) {
