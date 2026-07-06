@@ -109,6 +109,39 @@ func TestGate_MissingEnvVar_Fails(t *testing.T) {
 	}
 }
 
+// TestGate_MissingEnvVar_ResolvedBySecretFallback: a required var absent from
+// the process environment is satisfied by the ResolveSecret fallback (the
+// project's local secret store in production).
+func TestGate_MissingEnvVar_ResolvedBySecretFallback(t *testing.T) {
+	dir := t.TempDir()
+	in := passingChecks(t, dir)
+	in.RequiredEnv = []string{"ACTHUR_GATE_TEST_MISSING_VAR"}
+	os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
+	in.ResolveSecret = func(key string) (string, bool) {
+		if key == "ACTHUR_GATE_TEST_MISSING_VAR" {
+			return "resolved-from-secret-store", true
+		}
+		return "", false
+	}
+	if _, err := deploy.RunGate(in); err != nil {
+		t.Fatalf("expected gate to pass via secret fallback, got: %v", err)
+	}
+}
+
+// TestGate_MissingEnvVar_ProcessEnvWinsOverSecretFallback: an exported env
+// var is checked before the fallback and satisfies the gate even if the
+// fallback would report ok=false.
+func TestGate_MissingEnvVar_ProcessEnvWinsOverSecretFallback(t *testing.T) {
+	dir := t.TempDir()
+	in := passingChecks(t, dir)
+	in.RequiredEnv = []string{"ACTHUR_GATE_TEST_ENV_WINS"}
+	t.Setenv("ACTHUR_GATE_TEST_ENV_WINS", "from-shell")
+	in.ResolveSecret = func(key string) (string, bool) { return "", false }
+	if _, err := deploy.RunGate(in); err != nil {
+		t.Fatalf("expected gate to pass via process env, got: %v", err)
+	}
+}
+
 // TestGate_CollectsAllFailures: the gate reports every failure at once, not
 // just the first — a deploy attempt should tell the whole story.
 func TestGate_CollectsAllFailures(t *testing.T) {

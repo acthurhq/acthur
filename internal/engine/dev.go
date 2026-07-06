@@ -19,14 +19,31 @@ import (
 	"github.com/acthur/acthur/internal/container"
 	"github.com/acthur/acthur/internal/contract"
 	"github.com/acthur/acthur/internal/dns"
+	"github.com/acthur/acthur/internal/flags"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
 	"github.com/acthur/acthur/internal/process"
 	"github.com/acthur/acthur/internal/proxy"
+	"github.com/acthur/acthur/internal/secrets"
 	"github.com/acthur/acthur/internal/watcher"
 )
+
+// projectSecretStore is the project-scoped secret store seam (internal/secrets.Store
+// in production) — every stored key/value pair is injected into every node's
+// process environment. Separate from the per-(node,key) secretStore interface
+// above, which only ever synthesizes adapter-declared Generate secrets.
+type projectSecretStore interface {
+	All() (map[string]string, error)
+}
+
+// projectFlagStore is the project feature-flag store seam (internal/flags.Store
+// in production) — every flag is exposed to every node process as
+// ACTHUR_FLAG_<NAME>=true|false (PRD §37).
+type projectFlagStore interface {
+	List() ([]flags.Flag, error)
+}
 
 // ---------------------------------------------------------------------------
 // DevEngine
@@ -63,6 +80,14 @@ type DevEngine struct {
 	secrets  secretStore
 	ctx      context.Context
 	cancel   context.CancelFunc
+
+	// projectSecrets and projectFlags back `acthur secrets`/`acthur flag`
+	// injection into every node process. Nil when cfg.RootDir is empty (unit
+	// tests that construct a DevEngine without a real project root) — no
+	// project-level env is merged in that case, matching the pre-existing
+	// per-node secretStore's own nil-rootDir handling.
+	projectSecrets projectSecretStore
+	projectFlags   projectFlagStore
 
 	// bus is the optional kernel event bus. Nil means no emission — plugins
 	// are entirely absent from this phase's callers (cmd/acthur, tests that
@@ -168,6 +193,10 @@ func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver, 
 		},
 		hostsPath: "/etc/hosts",
 		dnsLookup: dns.DefaultLookup,
+	}
+	if cfg.RootDir != "" {
+		e.projectSecrets = secrets.New(cfg.RootDir)
+		e.projectFlags = flags.New(cfg.RootDir)
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -467,9 +496,61 @@ func (e *DevEngine) emit(event plugin.Event, node *graph.Node, extra map[string]
 }
 
 // buildEnv constructs the environment for a node.
-// Injects service discovery URLs from data_flow and depends_on edges.
+// Injects service discovery URLs from data_flow and depends_on edges, then
+// merges in every project-scoped secret (acthur secrets set/get/list/rm) and
+// feature flag (acthur flag create/enable/disable/list) so both are visible
+// to the node's process without it knowing where they came from.
 func (e *DevEngine) buildEnv(node *graph.Node) (map[string]string, error) {
-	return resolveNodeEnv(e.graph, e.resolver, node, e.secrets, e.cfg.Dev.Port)
+	env, err := resolveNodeEnv(e.graph, e.resolver, node, e.secrets, e.cfg.Dev.Port)
+	if err != nil {
+		return nil, err
+	}
+	if err := mergeProjectSecrets(env, e.projectSecrets); err != nil {
+		return nil, fmt.Errorf("resolve project secrets for %q: %w", node.ID, err)
+	}
+	if err := mergeProjectFlags(env, e.projectFlags); err != nil {
+		return nil, fmt.Errorf("resolve feature flags for %q: %w", node.ID, err)
+	}
+	return env, nil
+}
+
+// mergeProjectSecrets copies every key/value the project secret store holds
+// into env, unless the key is already set — engine-owned keys (PORT) and
+// adapter/edge-injected keys always win over a same-named project secret.
+// A nil store (no project root, e.g. most unit tests) is a no-op.
+func mergeProjectSecrets(env map[string]string, store projectSecretStore) error {
+	if store == nil {
+		return nil
+	}
+	all, err := store.All()
+	if err != nil {
+		return err
+	}
+	for k, v := range all {
+		if _, exists := env[k]; exists {
+			continue
+		}
+		env[k] = v
+	}
+	return nil
+}
+
+// mergeProjectFlags exposes every project feature flag to env as
+// ACTHUR_FLAG_<NAME>=true|false. Flags live in their own namespace, so they
+// always overwrite (there is no legitimate collision to defer to). A nil
+// store is a no-op.
+func mergeProjectFlags(env map[string]string, store projectFlagStore) error {
+	if store == nil {
+		return nil
+	}
+	all, err := store.List()
+	if err != nil {
+		return err
+	}
+	for _, f := range all {
+		env[flags.EnvKey(f.Name)] = flags.EnvValue(f.Enabled)
+	}
+	return nil
 }
 
 // resolveNodeEnv builds the environment for node, injecting a discovery URL
