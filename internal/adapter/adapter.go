@@ -213,6 +213,21 @@ type Deployable interface {
 	DeployCommand(env map[string]string) Command
 }
 
+// SelfReloader is implemented by Runnable adapters whose DevCommand already
+// performs its own hot reload on file change (e.g. go:fiber's `air`, which
+// rebuilds and restarts the compiled binary itself). The dev engine's file
+// watcher consults this before restarting a node's process: restarting a
+// node that already reloads itself would just race the adapter's own
+// rebuild for the same port.
+//
+// An adapter with no SelfReloader implementation is assumed NOT to
+// self-reload — the watcher restarts its process on every file change,
+// which is the correct (if slightly more disruptive) default for a plain
+// `go run`-style DevCommand.
+type SelfReloader interface {
+	SelfReloads() bool
+}
+
 // DockerfileContext carries the node-level facts a Dockerizable adapter
 // needs to render a production Dockerfile. It is deliberately narrower than
 // ScaffoldContext (project scaffolding, run once at `acthur add`) and

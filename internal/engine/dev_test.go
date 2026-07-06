@@ -476,10 +476,12 @@ func (fakeConnectableAdapter) ConnectionEnv(ctx adapter.ContainerContext) map[st
 }
 
 type fakeProcessManager struct {
-	bin      string
-	args     []string
-	spawnErr error
-	stopped  []string
+	bin        string
+	args       []string
+	spawnErr   error
+	stopped    []string
+	restarted  []string
+	restartErr error
 }
 
 func (f *fakeProcessManager) Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*process.Process, error) {
@@ -489,6 +491,14 @@ func (f *fakeProcessManager) Spawn(nodeID, bin string, args []string, env map[st
 	f.bin = bin
 	f.args = append([]string(nil), args...)
 	return nil, nil
+}
+
+func (f *fakeProcessManager) Restart(nodeID string) error {
+	if f.restartErr != nil {
+		return f.restartErr
+	}
+	f.restarted = append(f.restarted, nodeID)
+	return nil
 }
 
 func (f *fakeProcessManager) StopAll(nodeIDs []string) {

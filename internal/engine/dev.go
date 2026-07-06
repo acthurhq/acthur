@@ -25,6 +25,7 @@ import (
 	"github.com/acthur/acthur/internal/plugin"
 	"github.com/acthur/acthur/internal/process"
 	"github.com/acthur/acthur/internal/proxy"
+	"github.com/acthur/acthur/internal/watcher"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ type AdapterResolver interface {
 
 type processManager interface {
 	Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*process.Process, error)
+	Restart(nodeID string) error
 	StopAll(nodeIDs []string)
 }
 
@@ -93,6 +95,11 @@ type DevEngine struct {
 	// overridable in tests so DNS behavior never depends on the test machine's
 	// real resolver or /etc/hosts contents.
 	dnsLookup dns.LookupFunc
+
+	// watcher polls each service node's directory for file changes and fires
+	// handleFileChange. Nil until Start() constructs it (no rootDir to watch
+	// in unit tests that call startNode/startInfraNode directly).
+	watcher *watcher.Watcher
 }
 
 // DevEngineOption configures optional DevEngine behavior at construction time.
@@ -215,6 +222,13 @@ func (e *DevEngine) Start() error {
 		return fmt.Errorf("proxy start failed: %w", err)
 	}
 
+	// Start the file watcher / hot reload cascade. It restarts a node's
+	// process on a file change in its directory, unless the node's adapter
+	// hot-reloads itself (e.g. air) — see handleFileChange.
+	e.watcher = watcher.New(e.graph, e.cfg.RootDir, 0)
+	e.watcher.OnChange(e.handleFileChange)
+	e.watcher.Start()
+
 	// Print ready message
 	e.printReady()
 
@@ -223,6 +237,9 @@ func (e *DevEngine) Start() error {
 
 	// Graceful shutdown
 	output.Info("", "shutting down...")
+	if e.watcher != nil {
+		e.watcher.Stop()
+	}
 	if e.proxy != nil {
 		e.proxy.Stop()
 	}
@@ -510,6 +527,36 @@ func (e *DevEngine) printReady() {
 		}
 	}
 	output.Ready(e.cfg.Project, urls)
+}
+
+// handleFileChange is the watcher.Handler the dev engine registers to react
+// to file changes in a service node's directory. A contract file change or a
+// change the watcher couldn't attribute to a node never restarts anything —
+// only a real service node's own directory triggers a restart, and only when
+// its adapter doesn't already reload itself (see adapter.SelfReloader).
+func (e *DevEngine) handleFileChange(ev watcher.Event) {
+	if ev.NodeID == "" || ev.NodeID == "__unknown__" || ev.NodeID == "__contracts__" {
+		return
+	}
+	node := e.graph.Node(ev.NodeID)
+	if node == nil || !node.IsService() {
+		return
+	}
+	a, ok := e.resolver.Adapter(node.Adapter)
+	if !ok {
+		return
+	}
+	if sr, ok := a.(adapter.SelfReloader); ok && sr.SelfReloads() {
+		output.Debug(node.ID, "file change — adapter self-reloads, skipping restart")
+		return
+	}
+
+	output.Info(node.ID, "file change detected — restarting...")
+	if err := e.pm.Restart(node.ID); err != nil {
+		output.Warn(node.ID, "restart failed: %v", err)
+		return
+	}
+	output.Success(node.ID, "restarted")
 }
 
 // checkDNS reports whether the project's dev domain and each service node's
