@@ -455,8 +455,12 @@ var buildCmd = &cobra.Command{
 	Use:   "build",
 	Short: "Build all services for production",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(8)
+		_, g := loadGraph()
+		if err := runBuild(mustCwd(), g, os.Stdout); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "build complete")
+		return nil
 	},
 }
 
@@ -705,46 +709,80 @@ var dbStatusCmd = &cobra.Command{
 	},
 }
 
+// runDbCreate is the shared implementation of `db create <name>` and
+// `db migrate:create <name>` — the PRD lists both spellings (§19.4) as the
+// same operation (write the next-numbered empty up/down migration pair), so
+// both cobra commands share this one RunE rather than duplicating it.
+func runDbCreate(cmd *cobra.Command, args []string) error {
+	up, down, err := migrations.CreateNext(mustCwd(), args[0])
+	if err != nil {
+		return err
+	}
+	output.Success(output.PrefixKernel, "created %s", up)
+	output.Success(output.PrefixKernel, "created %s", down)
+	return nil
+}
+
 var dbCreateCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Write a new numbered empty migration up/down pair",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		up, down, err := migrations.CreateNext(mustCwd(), args[0])
-		if err != nil {
-			return err
-		}
-		output.Success(output.PrefixKernel, "created %s", up)
-		output.Success(output.PrefixKernel, "created %s", down)
-		return nil
-	},
+	RunE:  runDbCreate,
 }
 
 var dbMigrateCreateCmd = &cobra.Command{
 	Use:   "migrate:create <name>",
-	Short: "Create a new migration file",
+	Short: "Create a new migration file (alias of `db create`)",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
-	},
+	RunE:  runDbCreate,
 }
+
+var dbSeedFile string
 
 var dbSeedCmd = &cobra.Command{
 	Use:   "seed",
 	Short: "Run database seeders",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		root := mustCwd()
+		if dbSeedFile != "" {
+			if err := migrations.SeedFile(root, url, dbSeedFile); err != nil {
+				return err
+			}
+			output.Success(output.PrefixKernel, "ran seed file %s", dbSeedFile)
+			return nil
+		}
+		if err := migrations.Seed(root, url); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "database seeded")
+		return nil
 	},
 }
+
+var dbResetYes bool
 
 var dbResetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Drop, migrate, and seed the database",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		if !dbResetYes {
+			return fmt.Errorf("acthur db reset is destructive (rolls back every migration before re-applying and seeding) — re-run with --yes to confirm")
+		}
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		if err := migrations.Reset(mustCwd(), url, migrations.ResetSteps{}); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "database reset (migrations reapplied + seeded)")
+		return nil
 	},
 }
 
@@ -752,13 +790,26 @@ var dbStudioCmd = &cobra.Command{
 	Use:   "studio",
 	Short: "Open the database studio UI in the browser",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		port, err := freeLocalPort()
+		if err != nil {
+			return err
+		}
+		return runDbStudio(url, deploy.DockerRunner, port, func(studioURL string) {
+			output.Success(output.PrefixKernel, "db studio running at %s", studioURL)
+			output.Info(output.PrefixKernel, "press Ctrl+C to stop")
+		}, waitForInterrupt)
 	},
 }
 
 func init() {
 	dbMigrateCmd.Flags().String("env", "dev", "environment to migrate")
+	dbSeedCmd.Flags().StringVar(&dbSeedFile, "file", "", "run exactly one seed file instead of the whole seeds/ directory")
+	dbResetCmd.Flags().BoolVar(&dbResetYes, "yes", false, "confirm the destructive reset")
 	dbCmd.AddCommand(dbMigrateCmd)
 	dbCmd.AddCommand(dbRollbackCmd)
 	dbCmd.AddCommand(dbStatusCmd)
@@ -1136,8 +1187,22 @@ var testCmd = &cobra.Command{
 	Long: `Run unit tests for all services, or specify a service name.
 Use flags to run integration, contract, E2E, or load tests.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		for _, name := range []string{"integration", "contract", "e2e", "load", "coverage", "watch"} {
+			on, _ := cmd.Flags().GetBool(name)
+			if on {
+				return fmt.Errorf("acthur test --%s is not implemented yet — only unit tests (`acthur test`, `acthur test <service>`) are wired up", name)
+			}
+		}
+		_, g := loadGraph()
+		service := ""
+		if len(args) > 0 {
+			service = args[0]
+		}
+		if err := runTest(mustCwd(), g, service, os.Stdout); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "tests passed")
+		return nil
 	},
 }
 

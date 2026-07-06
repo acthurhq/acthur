@@ -61,6 +61,20 @@ func Rollback(root, databaseURL string) error {
 	return nil
 }
 
+// DownAll reverts every applied migration — the first step of `acthur db
+// reset` (down-all, then up-all, then seed).
+func DownAll(root, databaseURL string) error {
+	m, err := newMigrate(root, databaseURL)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("rolling back all migrations: %w", err)
+	}
+	return nil
+}
+
 // Status reports the currently-applied migration version and whether the
 // last migration left the database in a dirty (partially-applied) state.
 func Status(root, databaseURL string) (version uint, dirty bool, err error) {
