@@ -1,0 +1,66 @@
+// Standard error type for this service. Handlers should throw an AppError
+// for consistent API responses; the error handler registered in
+// src/index.js converts it to JSON.
+
+export const Code = {
+  NOT_FOUND: 'not_found',
+  UNAUTHORIZED: 'unauthorized',
+  FORBIDDEN: 'forbidden',
+  VALIDATION: 'validation_failed',
+  CONFLICT: 'conflict',
+  INTERNAL: 'internal_error',
+  BAD_REQUEST: 'bad_request',
+  RATE_LIMIT: 'rate_limit_exceeded',
+};
+
+export class AppError extends Error {
+  constructor(httpStatus, code, message, details) {
+    super(message);
+    this.httpStatus = httpStatus;
+    this.code = code;
+    this.details = details;
+  }
+
+  toJSON() {
+    const body = { code: this.code, message: this.message };
+    if (this.details !== undefined) body.details = this.details;
+    return body;
+  }
+}
+
+export function notFound(resource) {
+  return new AppError(404, Code.NOT_FOUND, `${resource} not found`);
+}
+export function unauthorized(message) {
+  return new AppError(401, Code.UNAUTHORIZED, message);
+}
+export function forbidden(message) {
+  return new AppError(403, Code.FORBIDDEN, message);
+}
+export function validation(details) {
+  return new AppError(422, Code.VALIDATION, 'validation failed', details);
+}
+export function conflict(message) {
+  return new AppError(409, Code.CONFLICT, message);
+}
+export function internal() {
+  return new AppError(500, Code.INTERNAL, 'an internal error occurred');
+}
+
+/**
+ * errorHandler is registered via app.setErrorHandler in src/index.js.
+ * Converts AppError and Fastify's own validation errors into a consistent
+ * { "error": { code, message } } JSON response.
+ */
+export function errorHandler(err, _request, reply) {
+  if (err instanceof AppError) {
+    return reply.code(err.httpStatus).send({ error: err.toJSON() });
+  }
+  const status = err.statusCode || 500;
+  return reply.code(status).send({
+    error: {
+      code: status === 500 ? Code.INTERNAL : Code.BAD_REQUEST,
+      message: status === 500 ? 'an internal error occurred' : err.message,
+    },
+  });
+}
