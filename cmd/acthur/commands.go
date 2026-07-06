@@ -424,8 +424,9 @@ var devCmd = &cobra.Command{
 manages their processes, starts the unified dev proxy, and enables hot reload.
 
 With --strict, the dev proxy blocks (422) any data_flow request that
-violates its edge's contract instead of logging the violation and
-forwarding it.`,
+violates its edge's contract, and blocks (502) any backend response that
+violates the contract's Output schema, instead of logging the violation
+and forwarding it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, g := loadGraph()
 		reg, err := contract.LoadDir(cfg.RootDir)
@@ -444,7 +445,7 @@ forwarding it.`,
 func init() {
 	devCmd.Flags().BoolVar(&devDocker, "docker", false, "run all services in Docker (full containerization)")
 	devCmd.Flags().StringVar(&devEnv, "env", "dev", "environment name from acthur.yml")
-	devCmd.Flags().BoolVar(&devStrict, "strict", false, "block (422) data_flow requests that violate their contract instead of logging and forwarding")
+	devCmd.Flags().BoolVar(&devStrict, "strict", false, "block (422 requests / 502 responses) data_flow traffic that violates its contract instead of logging and forwarding")
 }
 
 // ---------------------------------------------------------------------------

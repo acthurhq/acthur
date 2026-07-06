@@ -8,12 +8,14 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -103,7 +105,7 @@ func New(g *graph.Graph, port int, opts ...Option) (*Proxy, error) {
 		opt(p)
 	}
 
-	routes, err := buildAllRoutes(g)
+	routes, err := p.buildAllRoutes(g)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +149,7 @@ func (p *Proxy) Stop() error {
 // UpdateRoutes replaces the route table with fresh routes from an updated graph.
 // Called when the graph is mutated at runtime (e.g. a new service added).
 func (p *Proxy) UpdateRoutes(g *graph.Graph) error {
-	routes, err := buildAllRoutes(g)
+	routes, err := p.buildAllRoutes(g)
 	if err != nil {
 		return err
 	}
@@ -234,11 +236,30 @@ type violationDetail struct {
 	Contract string `json:"contract"`
 }
 
+// flowCheckCtxKey is the context key used to hand the matched contract +
+// endpoint from request-time enforcement to the response-time check in
+// ModifyResponse — the two run at different points in
+// httputil.ReverseProxy's lifecycle but share the same request context.
+type flowCheckCtxKey struct{}
+
+// flowCheck carries what enforceContract matched, so checkResponseContract
+// does not need to re-match the endpoint from the (now-stripped) request path.
+type flowCheck struct {
+	route        *Route
+	contractName string
+	version      string
+	endpointID   string
+}
+
 // enforceContract resolves the flow route's edge contract and validates the
 // request against it. Returns true if dispatch should continue forwarding
 // the request (no registry configured, no contract declared, request
 // conforms, or dev mode logged-and-passed). Returns false if the response
 // has already been written (strict mode block).
+//
+// On a successful match (even one with request violations, in dev mode) it
+// stashes the matched contract/endpoint on r's context so ModifyResponse can
+// validate the response against the same endpoint's Output schema.
 func (p *Proxy) enforceContract(w http.ResponseWriter, r *http.Request, route *Route, g *graph.Graph) bool {
 	if p.registry == nil || g == nil {
 		return true // enforcement is opt-in — no registry, no check
@@ -249,13 +270,23 @@ func (p *Proxy) enforceContract(w http.ResponseWriter, r *http.Request, route *R
 		return true // edge declares no contract — nothing to enforce
 	}
 
-	violation := p.checkContract(contractName, r)
+	c, ep, violation := p.checkContract(contractName, r)
+	if ep != nil {
+		ctx := context.WithValue(r.Context(), flowCheckCtxKey{}, &flowCheck{
+			route:        route,
+			contractName: c.Name,
+			version:      c.Version,
+			endpointID:   ep.ID,
+		})
+		*r = *r.WithContext(ctx)
+	}
+
 	if violation == "" {
 		return true // conforming request
 	}
 
 	if p.strict {
-		p.writeViolation(w, route, contractName, violation)
+		p.writeViolation(w, route, contractName, "contract_violation", violation)
 		return false
 	}
 
@@ -263,18 +294,20 @@ func (p *Proxy) enforceContract(w http.ResponseWriter, r *http.Request, route *R
 	return true
 }
 
-// checkContract validates r against the named contract. Returns an empty
-// string when the request conforms, or a human-readable violation message.
-// A request with no matching endpoint in the contract counts as a violation.
-func (p *Proxy) checkContract(name string, r *http.Request) string {
+// checkContract validates r against the named contract. Returns the matched
+// contract and endpoint (nil if no endpoint could be matched) plus an empty
+// violation string when the request conforms, or a human-readable violation
+// message otherwise. A request with no matching endpoint in the contract
+// counts as a violation.
+func (p *Proxy) checkContract(name string, r *http.Request) (*contract.Contract, *contract.Endpoint, string) {
 	c, err := p.registry.GetLatest(name)
 	if err != nil {
-		return fmt.Sprintf("contract %q not found in registry: %v", name, err)
+		return nil, nil, fmt.Sprintf("contract %q not found in registry: %v", name, err)
 	}
 
 	ep := matchEndpoint(c, r.Method, r.URL.Path)
 	if ep == nil {
-		return fmt.Sprintf("no endpoint matches %s %s in contract %q", r.Method, r.URL.Path, name)
+		return c, nil, fmt.Sprintf("no endpoint matches %s %s in contract %q", r.Method, r.URL.Path, name)
 	}
 
 	headers := map[string]string{}
@@ -296,13 +329,65 @@ func (p *Proxy) checkContract(name string, r *http.Request) string {
 	validator := contract.NewValidator(p.registry, contract.SeverityWarn)
 	result := validator.ValidateRequest(c.Name, c.Version, ep.ID, headers, body)
 	if result.Valid {
-		return ""
+		return c, ep, ""
 	}
 	msgs := make([]string, len(result.Violations))
 	for i, v := range result.Violations {
 		msgs[i] = v.Message
 	}
-	return strings.Join(msgs, "; ")
+	return c, ep, strings.Join(msgs, "; ")
+}
+
+// checkResponseContract validates a flow route's backend response against
+// the Output schema of the endpoint matched at request time (carried via
+// resp.Request's context — see enforceContract). It is installed as the
+// route's httputil.ReverseProxy.ModifyResponse hook, so it runs after the
+// backend responds but before the response is written to the client,
+// letting strict mode rewrite the response into a structured 502.
+//
+// Only 2xx responses are checked — non-2xx responses generally use the
+// contract's Errors shapes, not Output, and validating them against Output
+// would misreport legitimate error responses as violations.
+func (p *Proxy) checkResponseContract(resp *http.Response) error {
+	if p.registry == nil {
+		return nil
+	}
+	fc, _ := resp.Request.Context().Value(flowCheckCtxKey{}).(*flowCheck)
+	if fc == nil {
+		return nil // no contract matched at request time — nothing to check
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil // best-effort: an unreadable body is not itself a contract violation
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(data))
+
+	body := map[string]any{}
+	_ = json.Unmarshal(data, &body) // best-effort — a non-JSON body simply yields no fields to check
+
+	validator := contract.NewValidator(p.registry, contract.SeverityWarn)
+	result := validator.ValidateResponse(fc.contractName, fc.version, fc.endpointID, body)
+	if result.Valid {
+		return nil
+	}
+
+	msgs := make([]string, len(result.Violations))
+	for i, v := range result.Violations {
+		msgs[i] = v.Message
+	}
+	violation := strings.Join(msgs, "; ")
+
+	if p.strict {
+		p.writeResponseViolation(resp, fc, violation)
+		return nil
+	}
+
+	output.Warn("proxy", "response contract violation: %s→%s contract %q: %s", fc.route.From, fc.route.To, fc.contractName, violation)
+	return nil
 }
 
 // matchEndpoint finds the contract endpoint matching method + path.
@@ -338,18 +423,49 @@ func matchEndpoint(c *contract.Contract, method, path string) *contract.Endpoint
 
 // writeViolation writes the structured 422 response for a blocked request
 // and logs the block on the proxy stream.
-func (p *Proxy) writeViolation(w http.ResponseWriter, route *Route, contractName, detail string) {
+func (p *Proxy) writeViolation(w http.ResponseWriter, route *Route, contractName, code, detail string) {
 	output.Error("proxy", "contract violation (blocked): %s→%s contract %q: %s", route.From, route.To, contractName, detail)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnprocessableEntity)
 	body := violationResponse{Error: violationDetail{
-		Code:     "contract_violation",
+		Code:     code,
 		Message:  detail,
 		Edge:     fmt.Sprintf("%s→%s", route.From, route.To),
 		Contract: contractName,
 	}}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// writeResponseViolation rewrites resp in place into a structured 502,
+// used in strict mode when a backend's response fails contract validation.
+// It runs from ModifyResponse, before the response is written to the
+// client, so overwriting resp.StatusCode/Body here still reaches the caller.
+func (p *Proxy) writeResponseViolation(resp *http.Response, fc *flowCheck, detail string) {
+	output.Error("proxy", "response contract violation (blocked): %s→%s contract %q: %s", fc.route.From, fc.route.To, fc.contractName, detail)
+
+	body := violationResponse{Error: violationDetail{
+		Code:     "response_contract_violation",
+		Message:  detail,
+		Edge:     fmt.Sprintf("%s→%s", fc.route.From, fc.route.To),
+		Contract: fc.contractName,
+	}}
+	data, _ := json.Marshal(body)
+
+	resp.StatusCode = http.StatusBadGateway
+	resp.Status = fmt.Sprintf("%d %s", http.StatusBadGateway, http.StatusText(http.StatusBadGateway))
+	resp.Body = io.NopCloser(bytes.NewReader(data))
+	resp.ContentLength = int64(len(data))
+	if resp.Header == nil {
+		resp.Header = make(http.Header)
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	// The stale Content-Length from the original backend response would
+	// otherwise be copied verbatim, leaving the client to wait for bytes
+	// that never arrive (or truncate a longer replacement body).
+	resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Transfer-Encoding")
 }
 
 // matchRoute returns the route with the longest matching prefix.
@@ -373,12 +489,12 @@ func (p *Proxy) matchRoute(routes []*Route, path string) *Route {
 // from proxied_through edges plus contract-checked flow routes from
 // data_flow edges. The combined table is sorted by path prefix length
 // descending (longest prefix wins).
-func buildAllRoutes(g *graph.Graph) ([]*Route, error) {
+func (p *Proxy) buildAllRoutes(g *graph.Graph) ([]*Route, error) {
 	routes, err := buildRoutes(g)
 	if err != nil {
 		return nil, err
 	}
-	flowRoutes, err := buildFlowRoutes(g)
+	flowRoutes, err := p.buildFlowRoutes(g)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +516,7 @@ func buildAllRoutes(g *graph.Graph) ([]*Route, error) {
 // data_flow edges: /_flow/<from>/<to>/* → strip prefix → forward to the
 // target node's port. Edges whose target has no port are skipped — there
 // is nowhere to forward to.
-func buildFlowRoutes(g *graph.Graph) ([]*Route, error) {
+func (p *Proxy) buildFlowRoutes(g *graph.Graph) ([]*Route, error) {
 	edges := g.EdgesOfType(config.EdgeDataFlow)
 	routes := make([]*Route, 0, len(edges))
 
@@ -423,6 +539,9 @@ func buildFlowRoutes(g *graph.Graph) ([]*Route, error) {
 			http.Error(w, fmt.Sprintf("service %q is unavailable", target.ID), http.StatusBadGateway)
 		}
 		rp.ModifyResponse = func(resp *http.Response) error {
+			if err := p.checkResponseContract(resp); err != nil {
+				return err
+			}
 			resp.Header.Set("X-Acthur-Node", target.ID)
 			return nil
 		}

@@ -59,6 +59,19 @@ func pingContract(name string) *contract.Contract {
 	}
 }
 
+// pingContractWithOutput is pingContract but with a declared Output schema,
+// used to exercise response validation.
+func pingContractWithOutput(name string) *contract.Contract {
+	return &contract.Contract{
+		Name:      name,
+		Version:   "1",
+		Transport: contract.TransportHTTP,
+		Endpoints: []contract.Endpoint{
+			{ID: "ping", Method: "GET", Path: "/ping", Output: map[string]string{"pong": "bool"}},
+		},
+	}
+}
+
 func TestProxy_FlowRoute_StripsPrefixAndForwards(t *testing.T) {
 	var gotPath string
 	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -297,5 +310,157 @@ func TestProxy_FlowRoute_NoMatchingEndpoint_CountsAsViolation(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for unmatched endpoint, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Response validation (mirrors the request-validation tests above)
+// ---------------------------------------------------------------------------
+
+func TestProxy_FlowRoute_ConformingResponse_PassesThroughByteIdentical(t *testing.T) {
+	wantBody := []byte(`{"pong":true}`)
+	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(wantBody)
+	}))
+	defer apiBackend.Close()
+
+	apiPort := extractPort(t, apiBackend.URL)
+	g := buildFlowGraph(t, apiPort, "pingapi")
+
+	registry := contract.NewRegistry()
+	if err := registry.Register(pingContractWithOutput("pingapi")); err != nil {
+		t.Fatalf("register contract: %v", err)
+	}
+
+	p, err := proxy.New(g, 14106, proxy.WithContractRegistry(registry))
+	if err != nil {
+		t.Fatalf("proxy creation failed: %v", err)
+	}
+	if err := p.Start(); err != nil {
+		t.Fatalf("proxy start failed: %v", err)
+	}
+	defer p.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://localhost:14106/_flow/web/api/ping")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for conforming response, got %d", resp.StatusCode)
+	}
+	var buf bytes.Buffer
+	buf.ReadFrom(resp.Body)
+	if !bytes.Equal(buf.Bytes(), wantBody) {
+		t.Fatalf("expected byte-identical body %q, got %q", wantBody, buf.Bytes())
+	}
+}
+
+func TestProxy_FlowRoute_ResponseViolation_DevMode_LogsWarningAndForwards(t *testing.T) {
+	// Backend omits the contract's required "pong" output field.
+	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer apiBackend.Close()
+
+	apiPort := extractPort(t, apiBackend.URL)
+	g := buildFlowGraph(t, apiPort, "pingapi")
+
+	registry := contract.NewRegistry()
+	if err := registry.Register(pingContractWithOutput("pingapi")); err != nil {
+		t.Fatalf("register contract: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	output.SetOutput(&logBuf, &logBuf)
+	defer output.SetOutput(os.Stdout, os.Stderr)
+
+	p, err := proxy.New(g, 14107, proxy.WithContractRegistry(registry))
+	if err != nil {
+		t.Fatalf("proxy creation failed: %v", err)
+	}
+	if err := p.Start(); err != nil {
+		t.Fatalf("proxy start failed: %v", err)
+	}
+	defer p.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://localhost:14107/_flow/web/api/ping")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected dev mode to forward the response despite the violation, got %d", resp.StatusCode)
+	}
+	var buf bytes.Buffer
+	buf.ReadFrom(resp.Body)
+	if buf.String() != "{}" {
+		t.Fatalf("expected the original response body to be forwarded unmodified, got %q", buf.String())
+	}
+
+	logLine := logBuf.String()
+	if !strings.Contains(logLine, "proxy") || !strings.Contains(strings.ToLower(logLine), "response") {
+		t.Fatalf("expected a response contract violation line on the proxy stream, got %q", logLine)
+	}
+}
+
+func TestProxy_FlowRoute_ResponseViolation_StrictMode_Returns502(t *testing.T) {
+	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer apiBackend.Close()
+
+	apiPort := extractPort(t, apiBackend.URL)
+	g := buildFlowGraph(t, apiPort, "pingapi")
+
+	registry := contract.NewRegistry()
+	if err := registry.Register(pingContractWithOutput("pingapi")); err != nil {
+		t.Fatalf("register contract: %v", err)
+	}
+
+	p, err := proxy.New(g, 14108, proxy.WithContractRegistry(registry), proxy.WithStrict(true))
+	if err != nil {
+		t.Fatalf("proxy creation failed: %v", err)
+	}
+	if err := p.Start(); err != nil {
+		t.Fatalf("proxy start failed: %v", err)
+	}
+	defer p.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://localhost:14108/_flow/web/api/ping")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 in strict mode for a response contract violation, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("expected JSON body, decode failed: %v", err)
+	}
+	if body.Error.Code != "response_contract_violation" {
+		t.Fatalf("expected error.code=response_contract_violation, got %q", body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, "pong") {
+		t.Fatalf("expected violation message to name the missing field, got %q", body.Error.Message)
 	}
 }
