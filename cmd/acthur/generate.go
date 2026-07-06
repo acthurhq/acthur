@@ -11,7 +11,12 @@ import (
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/contract"
 	"github.com/acthur/acthur/internal/generate"
+	"github.com/acthur/acthur/internal/generate/aicontext"
+	genci "github.com/acthur/acthur/internal/generate/ci"
+	"github.com/acthur/acthur/internal/generate/docsgen"
 	gengofiber "github.com/acthur/acthur/internal/generate/gofiber"
+	"github.com/acthur/acthur/internal/generate/skillgen"
+	"github.com/acthur/acthur/internal/generate/visualize"
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
@@ -184,6 +189,95 @@ func renumberMigrations(root string, files []plugin.GeneratedFile) []plugin.Gene
 		out[i].Path = fmt.Sprintf("migrations/%04d_%s.%s.sql", num, desc, m[3])
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// acthur generate ai-context / ci / docs / skill — Phase 9.
+// All four share the same shape: load cfg+graph (+contracts where needed),
+// run a pure internal/generate/<surface> renderer, persist the result(s)
+// through the write engine.
+// ---------------------------------------------------------------------------
+
+// runGenerateAIContext generates the AI coding-tool context file for tool
+// (defaults to "claude" if empty) from cfg + graph + the project's contracts.
+func runGenerateAIContext(root, tool string) ([]generate.Result, error) {
+	cfg, g, err := loadProjectGraph(root)
+	if err != nil {
+		return nil, err
+	}
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	file, err := aicontext.Generate(cfg, g, reg, tool)
+	if err != nil {
+		return nil, err
+	}
+	return generate.WriteFiles(root, "", []plugin.GeneratedFile{file})
+}
+
+// runGenerateCI generates the CI/CD pipeline config for target (defaults to
+// "github-actions" if empty).
+func runGenerateCI(root, target string) ([]generate.Result, error) {
+	cfg, _, err := loadProjectGraph(root)
+	if err != nil {
+		return nil, err
+	}
+	file, err := genci.Generate(cfg, target)
+	if err != nil {
+		return nil, err
+	}
+	return generate.WriteFiles(root, "", []plugin.GeneratedFile{file})
+}
+
+// runGenerateDocs generates per-contract API reference pages plus an index
+// from the project's contract registry. target must be "markdown" (the
+// default) or empty — acthur-prd.md §36 describes additional doc-site
+// targets (Astro, Nextra, README, OpenAPI) that are not yet implemented;
+// asking for one of those fails clearly rather than silently emitting
+// markdown under a different name.
+func runGenerateDocs(root, target string) ([]generate.Result, error) {
+	if target != "" && target != "markdown" {
+		return nil, fmt.Errorf(
+			"unsupported docs target %q — supported: markdown (nextra/readme/openapi are tracked but not yet implemented)",
+			target,
+		)
+	}
+	if _, _, err := loadProjectGraph(root); err != nil {
+		return nil, err
+	}
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	files, err := docsgen.Generate(reg)
+	if err != nil {
+		return nil, err
+	}
+	return generate.WriteFiles(root, "", files)
+}
+
+// runGenerateSkill generates a .claude/skills/<name>/SKILL.md scaffold
+// derived from cfg + graph.
+func runGenerateSkill(root, name string) ([]generate.Result, error) {
+	cfg, g, err := loadProjectGraph(root)
+	if err != nil {
+		return nil, err
+	}
+	file, err := skillgen.Generate(cfg, g, name)
+	if err != nil {
+		return nil, err
+	}
+	return generate.WriteFiles(root, "", []plugin.GeneratedFile{file})
+}
+
+// runGraphVisualize renders the project graph as a Mermaid or DOT diagram.
+func runGraphVisualize(root, format string) (string, error) {
+	_, g, err := loadProjectGraph(root)
+	if err != nil {
+		return "", err
+	}
+	return visualize.Render(g, format)
 }
 
 // printGenerateResults reports what the write engine did per file.
