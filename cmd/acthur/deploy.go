@@ -15,6 +15,7 @@ import (
 	"github.com/acthur/acthur/internal/graph"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthur/acthur/internal/secrets"
 )
 
 // ---------------------------------------------------------------------------
@@ -78,11 +79,23 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 		return plan, nil
 	}
 
-	// Gate before anything ships.
+	// Gate before anything ships. A required var not exported into this shell
+	// falls back to the project's local secret store (acthur secrets set) —
+	// convenient for local `acthur deploy` dev-loop testing; CI/production
+	// deploy environments are expected to export real vars, which are always
+	// checked first and win.
+	secretStore := secrets.New(root)
 	report, err := deploy.RunGate(deploy.GateInput{
 		Root:         root,
 		ServiceNodes: serviceNodes,
 		RequiredEnv:  requiredEnv,
+		ResolveSecret: func(key string) (string, bool) {
+			v, err := secretStore.Get(key)
+			if err != nil {
+				return "", false
+			}
+			return v, true
+		},
 	})
 	if err != nil {
 		return plan, err

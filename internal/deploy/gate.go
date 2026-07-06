@@ -13,6 +13,15 @@ import (
 	"strings"
 )
 
+// SecretResolver looks up a fallback value for a required env var that is not
+// already exported into the deploying shell's environment. Wired from
+// internal/secrets.Store.Get by the `acthur deploy` command so a secret set
+// via `acthur secrets set` satisfies the gate without also needing an
+// `export` — but a real production deploy environment (CI secrets, the host
+// shell) is still checked first and always wins. Returns ok=false if the key
+// resolves to nothing (unset, or no store configured).
+type SecretResolver func(key string) (value string, ok bool)
+
 // GateInput is everything the pre-deploy gate needs. The caller (the deploy
 // command) resolves it from config + graph so the gate stays testable
 // without either.
@@ -20,6 +29,12 @@ type GateInput struct {
 	Root         string   // project root
 	ServiceNodes []string // node IDs with buildable Go modules under Root/<node>
 	RequiredEnv  []string // env vars that must be set for the target env
+
+	// ResolveSecret is an optional fallback consulted for a RequiredEnv var
+	// that isn't set in the process environment. Nil disables the fallback
+	// (required vars must be exported, matching the gate's original
+	// behavior).
+	ResolveSecret SecretResolver
 }
 
 // CheckResult is one executed gate check.
@@ -56,7 +71,7 @@ func RunGate(in GateInput) (*GateReport, error) {
 	for _, node := range in.ServiceNodes {
 		record("test "+node, goRun(in.Root, node, "test", "./..."))
 	}
-	record("env vars", checkEnv(in.RequiredEnv))
+	record("env vars", checkEnv(in.RequiredEnv, in.ResolveSecret))
 
 	if len(failures) > 0 {
 		return report, fmt.Errorf("pre-deploy gate failed:\n  - %s", strings.Join(failures, "\n  - "))
@@ -103,15 +118,21 @@ func GoStream(root, node string, out io.Writer, env []string, args ...string) er
 	return nil
 }
 
-func checkEnv(required []string) error {
+func checkEnv(required []string, resolveSecret SecretResolver) error {
 	var missing []string
 	for _, v := range required {
-		if os.Getenv(v) == "" {
-			missing = append(missing, v)
+		if os.Getenv(v) != "" {
+			continue
 		}
+		if resolveSecret != nil {
+			if val, ok := resolveSecret(v); ok && val != "" {
+				continue
+			}
+		}
+		missing = append(missing, v)
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("required env vars not set: %s — export them (or add them to your deploy environment) before deploying", strings.Join(missing, ", "))
+		return fmt.Errorf("required env vars not set: %s — export them, add them to your deploy environment, or run 'acthur secrets set <KEY> <value>' before deploying", strings.Join(missing, ", "))
 	}
 	return nil
 }
