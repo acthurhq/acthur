@@ -15,8 +15,10 @@ import (
 
 	"github.com/acthur/acthur/internal/adapter"
 	_ "github.com/acthur/acthur/internal/adapter/backend/chi"
+	_ "github.com/acthur/acthur/internal/adapter/backend/fastify"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gin"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
+	_ "github.com/acthur/acthur/internal/adapter/backend/rustaxum"
 	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/contract"

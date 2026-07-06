@@ -1,0 +1,40 @@
+// GET /health — Acthur's health checker polls this and parses the JSON body.
+// Response shape matches every backend adapter (go:fiber, rust:axum, ...)
+// so the kernel's health poller is framework-agnostic.
+
+const startTime = process.hrtime.bigint();
+
+function uptimeSeconds() {
+  const now = process.hrtime.bigint();
+  return Number(now - startTime) / 1e9;
+}
+
+/**
+ * handler handles GET /health.
+ * Returns 200 if all checks pass, 503 if any fail.
+ */
+export function handler(appName) {
+  return async function (_request, reply) {
+    // Checks added here by migrations plugin, auth plugin, etc.
+    // Example (added by db:postgres adapter + migrations plugin):
+    // checks.database = await checkDatabase(pool);
+    const checks = {};
+
+    let status = 'healthy';
+    let httpStatus = 200;
+    for (const key of Object.keys(checks)) {
+      if (checks[key].status !== 'healthy') {
+        status = 'degraded';
+        httpStatus = 503;
+        break;
+      }
+    }
+
+    return reply.code(httpStatus).send({
+      status,
+      service: appName,
+      uptime_seconds: uptimeSeconds(),
+      checks,
+    });
+  };
+}

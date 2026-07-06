@@ -1,0 +1,54 @@
+//! GET /health — Acthur's health checker polls this and parses the JSON body.
+//! Response shape matches every backend adapter (go:fiber, node:fastify, ...)
+//! so the kernel's health poller is framework-agnostic.
+
+use axum::{extract::State, http::StatusCode, Json};
+use serde::Serialize;
+use std::collections::HashMap;
+
+use crate::AppState;
+
+#[derive(Serialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub service: String,
+    pub uptime_seconds: f64,
+    pub checks: HashMap<String, Check>,
+}
+
+#[derive(Serialize)]
+pub struct Check {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// handler handles GET /health.
+/// Returns 200 if all checks pass, 503 if any fail.
+pub async fn handler(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    // Checks added here by migrations plugin, auth plugin, etc.
+    // Example (added by db:postgres adapter + migrations plugin):
+    // checks.insert("database".into(), check_database(&pool).await);
+    let checks: HashMap<String, Check> = HashMap::new();
+
+    let mut status = "healthy".to_string();
+    let mut http_status = StatusCode::OK;
+    for check in checks.values() {
+        if check.status != "healthy" {
+            status = "degraded".to_string();
+            http_status = StatusCode::SERVICE_UNAVAILABLE;
+            break;
+        }
+    }
+
+    let body = HealthResponse {
+        status,
+        service: state.app_name.clone(),
+        uptime_seconds: state.start.elapsed().as_secs_f64(),
+        checks,
+    };
+
+    (http_status, Json(body))
+}
