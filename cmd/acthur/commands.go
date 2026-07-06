@@ -6,9 +6,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/acthur/acthur/internal/adapter"
 	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
@@ -19,6 +22,7 @@ import (
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/engine"
 	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthur/acthur/internal/health"
 	"github.com/acthur/acthur/internal/output"
 	"github.com/acthur/acthur/internal/plugin"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/auth"
@@ -26,6 +30,7 @@ import (
 	_ "github.com/acthur/acthur/internal/plugin/builtin/multitenancy"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/rbac"
 	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
+	"github.com/acthur/acthur/internal/process"
 	"github.com/spf13/cobra"
 )
 
@@ -1138,29 +1143,91 @@ var serviceCmd = &cobra.Command{
 	Short: "Manage individual services in the graph",
 }
 
+var serviceAddName string
+
+var serviceAddCmd = &cobra.Command{
+	Use:   "add <infra>",
+	Short: "Add an infra node to the graph",
+	Long: `Adds an infra node to acthur.yml's graph.nodes (e.g. "acthur service add
+cache:redis" adds a "redis" node using the cache:redis adapter) and rebuilds
+the graph to confirm the result is still valid. Use --name to pick a
+different node ID than the adapter's default.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfig()
+		summary, err := runServiceAdd(cfg.RootDir, args[0], serviceAddName)
+		if err != nil {
+			return err
+		}
+		if summary.AlreadyHad {
+			output.Info(summary.NodeID, "already present in the graph — nothing to do")
+			return nil
+		}
+		output.Success(summary.NodeID, "added (%s) to the graph", summary.Adapter)
+		return nil
+	},
+}
+
 func init() {
-	serviceCmd.AddCommand(&cobra.Command{
-		Use:   "add <infra>",
-		Short: "Add an infra node to the graph",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
-	})
+	serviceAddCmd.Flags().StringVar(&serviceAddName, "name", "", "node ID to use instead of the adapter's default")
+	serviceCmd.AddCommand(serviceAddCmd)
+
 	serviceCmd.AddCommand(&cobra.Command{
 		Use:   "logs <name>",
 		Short: "Stream logs from a service",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			path := process.LogPath(cfg.RootDir, args[0])
+
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+			stop := make(chan struct{})
+			go func() {
+				<-quit
+				close(stop)
+			}()
+
+			return runServiceLogs(path, cmd.OutOrStdout(), stop, 300*time.Millisecond)
+		},
 	})
+
 	serviceCmd.AddCommand(&cobra.Command{
 		Use:   "restart <name>",
 		Short: "Restart a specific service",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			return runServiceRestart(cfg.RootDir, args[0], nil)
+		},
 	})
+
 	serviceCmd.AddCommand(&cobra.Command{
-		Use:   "health",
-		Short: "Show health status of all graph nodes",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		Use:   "health [name]",
+		Short: "Show health status of one node, or all graph nodes",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, g := loadGraph()
+			checker := health.New()
+
+			if len(args) == 1 {
+				return runServiceHealth(g, checker, args[0])
+			}
+
+			var failed int
+			for _, node := range g.Nodes() {
+				if strings.HasPrefix(node.Adapter, "kernel:") {
+					continue
+				}
+				if err := runServiceHealth(g, checker, node.ID); err != nil {
+					failed++
+				}
+			}
+			if failed > 0 {
+				return fmt.Errorf("%d node(s) unhealthy", failed)
+			}
+			return nil
+		},
 	})
 }
 
