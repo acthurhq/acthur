@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner executes a docker CLI invocation and returns its stdout. Injected
@@ -86,4 +87,32 @@ func (t *ComposeTarget) Status() ([]ServiceStatus, error) {
 		services = append(services, s)
 	}
 	return services, nil
+}
+
+// WaitHealthy polls Status until every service is healthy (or running with
+// no healthcheck), or the timeout elapses — in which case the error names
+// every service still unhealthy.
+func (t *ComposeTarget) WaitHealthy(timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastUnhealthy []string
+	for {
+		services, err := t.Status()
+		if err != nil {
+			return err
+		}
+		lastUnhealthy = nil
+		for _, s := range services {
+			ok := s.State == "running" && (s.Health == "" || s.Health == "healthy")
+			if !ok {
+				lastUnhealthy = append(lastUnhealthy, fmt.Sprintf("%s (state=%s health=%s)", s.Service, s.State, s.Health))
+			}
+		}
+		if len(services) > 0 && len(lastUnhealthy) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("stack did not become healthy within %s: %s", timeout, strings.Join(lastUnhealthy, ", "))
+		}
+		time.Sleep(interval)
+	}
 }

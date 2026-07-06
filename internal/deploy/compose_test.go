@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/acthur/acthur/internal/deploy"
 )
@@ -93,5 +94,39 @@ func TestComposeTarget_Down(t *testing.T) {
 	}
 	if !strings.Contains(joined, "down") {
 		t.Errorf("expected compose down, got: %s", joined)
+	}
+}
+
+// TestComposeTarget_WaitHealthy: polls Status until every service reports
+// healthy (or running with no healthcheck), failing pointedly on timeout.
+func TestComposeTarget_WaitHealthy(t *testing.T) {
+	healthy := `{"Service":"api","State":"running","Health":"healthy"}`
+	starting := `{"Service":"api","State":"running","Health":"starting"}`
+
+	calls := 0
+	run := func(args ...string) (string, error) {
+		calls++
+		if calls < 3 {
+			return starting, nil
+		}
+		return healthy, nil
+	}
+	target := deploy.NewComposeTarget("f.yml", run)
+	if err := target.WaitHealthy(2*time.Second, time.Millisecond); err != nil {
+		t.Fatalf("WaitHealthy: %v", err)
+	}
+	if calls < 3 {
+		t.Errorf("expected polling, got %d calls", calls)
+	}
+}
+
+func TestComposeTarget_WaitHealthy_Timeout(t *testing.T) {
+	run := func(args ...string) (string, error) {
+		return `{"Service":"api","State":"running","Health":"starting"}`, nil
+	}
+	target := deploy.NewComposeTarget("f.yml", run)
+	err := target.WaitHealthy(5*time.Millisecond, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "api") {
+		t.Fatalf("expected timeout error naming the unhealthy service, got: %v", err)
 	}
 }
