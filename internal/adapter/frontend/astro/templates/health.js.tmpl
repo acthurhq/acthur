@@ -1,0 +1,46 @@
+// GET /health — Acthur's health checker polls this and parses the JSON body.
+// Response shape matches every service adapter (go:fiber, rust:axum,
+// node:fastify, ui:next, ...) so the kernel's health poller is
+// framework-agnostic. This is an Astro server endpoint: it only runs
+// because astro.config.mjs sets output: 'server', so it works identically
+// in `astro dev` and the built @astrojs/node standalone server.
+export const prerender = false;
+
+const startTime = process.hrtime.bigint();
+
+function uptimeSeconds() {
+  const now = process.hrtime.bigint();
+  return Number(now - startTime) / 1e9;
+}
+
+/**
+ * GET handles GET /health.
+ * Returns 200 if all checks pass, 503 if any fail.
+ */
+export async function GET() {
+  // Checks added here by migrations plugin, auth plugin, etc.
+  const checks = {};
+
+  let status = 'healthy';
+  let httpStatus = 200;
+  for (const key of Object.keys(checks)) {
+    if (checks[key].status !== 'healthy') {
+      status = 'degraded';
+      httpStatus = 503;
+      break;
+    }
+  }
+
+  return new Response(
+    JSON.stringify({
+      status,
+      service: '{{.NodeID}}',
+      uptime_seconds: uptimeSeconds(),
+      checks,
+    }),
+    {
+      status: httpStatus,
+      headers: { 'content-type': 'application/json' },
+    }
+  );
+}
