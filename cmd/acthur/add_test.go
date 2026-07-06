@@ -109,15 +109,45 @@ func TestRunAdd_AppendsPluginAndWritesMigrationsFilesAtRoot(t *testing.T) {
 			t.Errorf("unexpected result for %s: %+v", r.Path, r)
 		}
 	}
+
+	// Phase 7 slice 1 (#48): files acthur add writes are now also recorded
+	// in generated.lock at the project root.
+	lockData, err := os.ReadFile(filepath.Join(dir, "generated.lock"))
+	if err != nil {
+		t.Fatalf("expected generated.lock to be written: %v", err)
+	}
+	for _, rel := range []string{
+		"migrations/.keep",
+		"migrations/0001_init.up.sql",
+		"migrations/0001_init.down.sql",
+	} {
+		if !strings.Contains(string(lockData), rel) {
+			t.Errorf("expected generated.lock to record %s, got:\n%s", rel, lockData)
+		}
+	}
 }
 
-func TestRunAdd_Idempotent_SecondCallSkipsYAMLEditAndExistingFiles(t *testing.T) {
+// TestRunAdd_Idempotent_SecondCallRegeneratesUnchangedFilesViaLock: acthur
+// add now writes through internal/generate, which records every file it
+// writes in generated.lock (Phase 7 slice 1, #48). A second, identical add
+// is still idempotent byte-for-byte — the on-disk content the generator
+// produces the second time round is unchanged — but the *reported* status
+// is now "written" rather than "skipped", because the write engine treats
+// "disk hash still matches the lock" as safe-to-regenerate (the user never
+// touched the file) rather than "already exists, leave alone". That is the
+// documented generated.lock semantic from the Phase 7 PRD, not a behavior
+// regression: nothing on disk actually changes.
+func TestRunAdd_Idempotent_SecondCallRegeneratesUnchangedFilesViaLock(t *testing.T) {
 	resetPluginProcessState(t)
 	dir := t.TempDir()
 	writeTestProject(t, dir)
 
 	if _, err := runAdd(dir, "migrations", ""); err != nil {
 		t.Fatalf("first runAdd: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "migrations", "0001_init.up.sql"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	summary, err := runAdd(dir, "migrations", "")
@@ -137,9 +167,21 @@ func TestRunAdd_Idempotent_SecondCallSkipsYAMLEditAndExistingFiles(t *testing.T)
 	}
 
 	for _, r := range summary.Results {
-		if r.Status != addFileSkipped {
-			t.Errorf("expected all files to be skipped on second add, got %+v", r)
+		if r.Status != addFileWritten {
+			t.Errorf("expected all files to be regenerated (written) on an untouched second add, got %+v", r)
 		}
+	}
+
+	after, err := os.ReadFile(filepath.Join(dir, "migrations", "0001_init.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Error("expected regenerated content to be byte-identical since nothing changed")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "generated.lock")); err != nil {
+		t.Errorf("expected generated.lock to exist after add: %v", err)
 	}
 }
 
