@@ -1,0 +1,70 @@
+package auth
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"sync"
+	"time"
+)
+
+// magicLinkTTL is how long an issued magic-link token stays redeemable.
+const magicLinkTTL = 15 * time.Minute
+
+// ErrMagicLinkInvalid is returned when a magic-link token is unknown,
+// already consumed, or expired.
+var ErrMagicLinkInvalid = errors.New("auth: magic link token invalid or expired")
+
+type magicLinkEntry struct {
+	email     string
+	expiresAt time.Time
+}
+
+// MagicLinkStore issues and consumes single-use magic-link tokens.
+// In-memory by default — swap for a DB-backed implementation if the
+// service runs more than one instance.
+type MagicLinkStore struct {
+	mu      sync.Mutex
+	entries map[string]magicLinkEntry
+}
+
+// NewMagicLinkStore constructs an empty, in-memory MagicLinkStore.
+func NewMagicLinkStore() *MagicLinkStore {
+	return &MagicLinkStore{entries: make(map[string]magicLinkEntry)}
+}
+
+// Issue mints a single-use token for email, valid for magicLinkTTL.
+func (m *MagicLinkStore) Issue(email string) (string, error) {
+	token, err := randomToken()
+	if err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	m.entries[token] = magicLinkEntry{email: email, expiresAt: time.Now().Add(magicLinkTTL)}
+	m.mu.Unlock()
+	return token, nil
+}
+
+// Consume redeems token exactly once, returning the email it was issued
+// for. A second call with the same token fails.
+func (m *MagicLinkStore) Consume(token string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.entries[token]
+	if !ok {
+		return "", ErrMagicLinkInvalid
+	}
+	delete(m.entries, token)
+	if time.Now().After(entry.expiresAt) {
+		return "", ErrMagicLinkInvalid
+	}
+	return entry.email, nil
+}
+
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
