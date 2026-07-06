@@ -15,6 +15,7 @@ import (
 	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
 	"github.com/acthur/acthur/internal/config"
 	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthur/acthur/internal/deploy"
 	"github.com/acthur/acthur/internal/doctor"
 	"github.com/acthur/acthur/internal/engine"
 	"github.com/acthur/acthur/internal/graph"
@@ -475,8 +476,13 @@ var deployCmd = &cobra.Command{
 	Long: `Runs pre-deploy checks, builds all services, generates deploy manifests
 from the graph, and ships to the configured target.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(8)
+		plan, err := runDeploy(mustCwd(), deployEnv, deployTarget, deployDryRun, deploy.DockerRunner)
+		if deployDryRun && err == nil {
+			for _, line := range plan {
+				output.Info("deploy", "%s", line)
+			}
+		}
+		return err
 	},
 }
 
