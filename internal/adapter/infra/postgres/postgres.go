@@ -40,7 +40,7 @@ func (a *Adapter) Container(ctx adapter.ContainerContext) adapter.ContainerSpec 
 		Ports: []int{5432},
 		Volumes: []adapter.Volume{
 			{
-				Name:      ctx.NodeID + "-data",
+				Name:      volumeName(ctx),
 				MountPath: "/var/lib/postgresql/data",
 			},
 		},
@@ -77,4 +77,14 @@ func (a *Adapter) ConnectionEnv(ctx adapter.ContainerContext) map[string]string 
 			spec.Env["POSTGRES_DB"],
 		),
 	}
+}
+
+// volumeName scopes the data volume by project: a host running two acthur
+// projects must never share database state (witnessed live — a stale
+// schema_migrations version from another project broke db migrate).
+func volumeName(ctx adapter.ContainerContext) string {
+	if ctx.Project == "" {
+		return ctx.NodeID + "-data"
+	}
+	return ctx.Project + "-" + ctx.NodeID + "-data"
 }

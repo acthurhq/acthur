@@ -348,6 +348,7 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 		return err
 	}
 	spec := c.Container(adapter.ContainerContext{
+		Project: e.cfg.Project,
 		NodeID:  node.ID,
 		Version: node.Config.Version,
 	})
@@ -358,7 +359,7 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 		e.emit(plugin.EventAfterNodeHealthy, node, nil)
 		return nil
 	}
-	args := container.ToRunArgs(spec, node.ID)
+	args := container.ToRunArgs(spec, container.Name(e.cfg.Project, node.ID))
 
 	p, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
 	if err != nil {
@@ -467,7 +468,7 @@ func (e *DevEngine) shutdown(order []*graph.Node) {
 	}
 	for i := len(e.containers) - 1; i >= 0; i-- {
 		nodeID := e.containers[i]
-		if err := e.runDocker(container.ToStopArgs(nodeID)...); err != nil {
+		if err := e.runDocker(container.ToStopArgs(container.Name(e.cfg.Project, nodeID))...); err != nil {
 			output.Warn(nodeID, "container stop error: %v", err)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/acthur/acthur/internal/config"
@@ -251,4 +252,27 @@ func extractPort(t *testing.T, rawURL string) int {
 	}
 	t.Fatalf("could not extract port from %q", rawURL)
 	return 0
+}
+
+// TestTCPStrategy_UsesAdapterDefaultPort: infra nodes routinely omit port
+// in acthur.yml (the adapter's well-known default applies everywhere else —
+// container specs, connection env). The TCP probe must resolve the same
+// default instead of failing with "no port configured", or `acthur monitor`
+// and `service health` report a healthy database as unhealthy.
+func TestTCPStrategy_UsesAdapterDefaultPort(t *testing.T) {
+	node := &graph.Node{ID: "queue", Type: config.NodeTypeInfra, Adapter: "queue:nats"}
+	err := (&health.TCPStrategy{}).Check(context.Background(), node)
+	if err != nil && strings.Contains(err.Error(), "no port configured") {
+		t.Fatalf("TCP probe must fall back to the adapter default port, got: %v", err)
+	}
+}
+
+// TestHTTPStrategy_NoPortStillErrors: a service node with no port and no
+// adapter default genuinely can't be probed — that must stay an error.
+func TestHTTPStrategy_NoPortStillErrors(t *testing.T) {
+	node := &graph.Node{ID: "svc", Type: config.NodeTypeService, Adapter: "custom:thing"}
+	err := health.NewHTTPStrategy().Check(context.Background(), node)
+	if err == nil || !strings.Contains(err.Error(), "no port") {
+		t.Fatalf("expected no-port error for unresolvable node, got: %v", err)
+	}
 }

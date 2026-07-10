@@ -102,6 +102,7 @@ type ScaffoldContext struct {
 
 // ContainerContext carries node-level facts the adapter needs to build a spec.
 type ContainerContext struct {
+	Project string // project name — scopes host-shared resources (volumes)
 	NodeID  string
 	Version string // from node's version: field in acthur.yml
 	Env     map[string]string
