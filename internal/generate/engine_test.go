@@ -63,6 +63,41 @@ func TestWriteFiles_FreshWrite_WritesAndRecordsLock(t *testing.T) {
 	}
 }
 
+// TestWriteFiles_NestedPath_LockKeyUsesForwardSlash guards the generated.lock
+// key format for a GeneratedFile.Path with subdirectories (e.g. the
+// ecosystem plugins' "internal/security/security.go" style output). The key
+// must always be forward-slash-joined ("api/internal/security/security.go"),
+// never OS-native-joined: on Windows, joining nodeID and relPath with
+// filepath.Join would key the entry as "api\internal\security\security.go",
+// which then fails to match any "/"-separated lookup or assertion (as
+// TestRunAdd_EcosystemPlugins_RoundTrip in cmd/acthur does). This can't
+// reproduce the Windows failure mode on Linux — filepath.Join is "/" on
+// every non-Windows GOOS — but it locks in the intended, OS-independent key
+// shape so a future refactor back to filepath.Join in lockKey is caught here
+// rather than only in Windows CI.
+func TestWriteFiles_NestedPath_LockKeyUsesForwardSlash(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("package security\n")
+	files := []plugin.GeneratedFile{
+		{Path: "internal/security/security.go", Content: content},
+	}
+
+	if _, err := generate.WriteFiles(root, "api", files); err != nil {
+		t.Fatalf("WriteFiles: %v", err)
+	}
+
+	lock := readLock(t, root)
+	const wantKey = "api/internal/security/security.go"
+	if _, ok := lock[wantKey]; !ok {
+		t.Errorf("expected lock to have forward-slash key %q, got keys: %+v", wantKey, lock)
+	}
+	for k := range lock {
+		if strings.Contains(k, "\\") {
+			t.Errorf("lock key %q contains a backslash; keys must always be forward-slash-joined", k)
+		}
+	}
+}
+
 func TestWriteFiles_CleanRegenerate_OverwritesWhenDiskMatchesLock(t *testing.T) {
 	root := t.TempDir()
 	original := []byte("package api\n\nfunc Foo() {}\n")

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -151,11 +152,22 @@ func WriteFiles(root, nodeID string, files []plugin.GeneratedFile) ([]Result, er
 // "migrations/", "deploy/", or ".acthur/" (project-scoped state — e.g. the
 // https plugin's generated dev-cert README) land at the project root,
 // everything else under nodeID/.
+//
+// The key is always forward-slash-joined (path.Join, not filepath.Join) so
+// generated.lock keys are stable across platforms: relPath comes from
+// plugin.GeneratedFile.Path, which every generator constructs with "/"
+// regardless of OS, and nodeID never contains a path separator. Using
+// filepath.Join here would key/write "api\internal\...\x.go" on Windows,
+// which then fails to match the "/"-separated path callers (and this
+// package's own tests) look up or assert against. filepath.Join(root, key)
+// below still produces a correct OS-native path: filepath.Clean treats "/"
+// as a separator on Windows too, so a "/"-joined key renders fine either
+// way.
 func lockKey(nodeID, relPath string) string {
 	if strings.HasPrefix(relPath, "migrations/") || strings.HasPrefix(relPath, "deploy/") || strings.HasPrefix(relPath, ".acthur/") {
 		return relPath
 	}
-	return filepath.Join(nodeID, relPath)
+	return path.Join(nodeID, relPath)
 }
 
 func modeOf(f plugin.GeneratedFile) os.FileMode {
