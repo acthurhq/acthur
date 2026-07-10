@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -12,8 +13,15 @@ import (
 // TestWaitForInterrupt_ReturnsOnSIGTERM: a process manager or CI runner that
 // stops `acthur db studio` sends SIGTERM, not SIGINT (Ctrl+C) — if
 // waitForInterrupt only caught SIGINT, that path would skip the deferred
-// `docker stop` in runDbStudio and leak the studio container.
+// `docker stop` in runDbStudio and leak the studio container. Unix-only:
+// os.Process.Signal only supports os.Interrupt and os.Kill on Windows —
+// sending SIGTERM there returns "not supported by windows", so there is no
+// way to exercise this path on that platform; the production
+// signal.Notify(ch, syscall.SIGTERM) registration is a harmless no-op there.
 func TestWaitForInterrupt_ReturnsOnSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM cannot be sent via os.Process.Signal on Windows")
+	}
 	done := make(chan struct{})
 	go func() {
 		waitForInterrupt()
