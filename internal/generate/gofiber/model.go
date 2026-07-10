@@ -97,7 +97,7 @@ func buildModel(c *contract.Contract, modulePath string) (*model, error) {
 			ID:           e.ID,
 			GoName:       goName(e.ID),
 			Method:       method,
-			FiberMethod:  strings.Title(strings.ToLower(method)),
+			FiberMethod:  fiberMethodName(method),
 			Path:         e.Path,
 			PathParams:   pathParams(e.Path),
 			AuthRequired: e.Auth == "required",
@@ -120,6 +120,18 @@ func buildModel(c *contract.Contract, modulePath string) (*model, error) {
 
 	m.NeedsTime = anyTimestamp(m)
 	return m, nil
+}
+
+// fiberMethodName renders an HTTP method as the fiber router method call
+// name (e.g. "GET" -> "Get"). method is always a plain-ASCII HTTP verb, so a
+// manual first-letter capitalization avoids the Unicode word-boundary
+// caveats of the deprecated strings.Title.
+func fiberMethodName(method string) string {
+	lower := strings.ToLower(method)
+	if lower == "" {
+		return lower
+	}
+	return strings.ToUpper(lower[:1]) + lower[1:]
 }
 
 func successCode(method string, out []fieldSpec) int {
@@ -217,11 +229,11 @@ func parseField(name, decl string) (fieldSpec, error) {
 			case c == "required":
 				f.Required = true
 			case strings.HasPrefix(c, "max:"):
-				fmt.Sscanf(c, "max:%d", &f.MaxLen)
-			case strings.HasPrefix(c, "min:"):
-				// accepted, not yet enforced in generated validation
+				_, _ = fmt.Sscanf(c, "max:%d", &f.MaxLen)
 			default:
-				// unknown constraints are tolerated (forward compat)
+				// min: is accepted but not yet enforced in generated
+				// validation; other unknown constraints are tolerated too
+				// (forward compat)
 			}
 		}
 	}

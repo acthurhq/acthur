@@ -68,9 +68,9 @@ func buildMonitorRows(g *graph.Graph, checker healthPoller, rootDir string) []mo
 // writeMonitorTable renders rows as an aligned table to out.
 func writeMonitorTable(out io.Writer, rows []monitorRow) {
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NODE\tTYPE\tADAPTER\tHEALTH\tPID")
+	_, _ = fmt.Fprintln(tw, "NODE\tTYPE\tADAPTER\tHEALTH\tPID")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Node, r.Type, r.Adapter, r.Health, r.PID)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Node, r.Type, r.Adapter, r.Health, r.PID)
 	}
 	tw.Flush() //nolint:errcheck // best-effort terminal output
 }
@@ -91,7 +91,7 @@ func runMonitor(g *graph.Graph, checker healthPoller, rootDir string, out io.Wri
 		case <-stop:
 			return
 		case <-ticker.C:
-			fmt.Fprint(out, "\033[H\033[2J") // clear screen for a refreshed view
+			_, _ = fmt.Fprint(out, "\033[H\033[2J")  // clear screen for a refreshed view
 			writeMonitorTable(out, buildMonitorRows(g, checker, rootDir))
 		}
 	}

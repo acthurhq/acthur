@@ -359,8 +359,8 @@ plugins:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	defer os.Chdir(wd)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(wd) }()
+	_ = os.Chdir(dir)
 
 	oldBus := kernelBus
 	kernelBus = plugin.NewBus()
@@ -407,8 +407,8 @@ plugins:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	defer os.Chdir(wd)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(wd) }()
+	_ = os.Chdir(dir)
 
 	bootstrapPlugins()
 

@@ -27,9 +27,7 @@ func serviceSig(e endpointSpec) string {
 // serviceCallArgs renders the argument list a handler passes to the service.
 func serviceCallArgs(e endpointSpec) string {
 	args := []string{"c.Context()"}
-	for _, p := range e.PathParams {
-		args = append(args, p)
-	}
+	args = append(args, e.PathParams...)
 	if len(e.Input) > 0 {
 		args = append(args, "in")
 	}

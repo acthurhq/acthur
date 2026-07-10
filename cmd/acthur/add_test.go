@@ -52,7 +52,7 @@ graph:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(wd) })
+	t.Cleanup(func() { _ = os.Chdir(wd) })
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +232,8 @@ graph:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	defer os.Chdir(wd)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(wd) }()
+	_ = os.Chdir(dir)
 
 	_, err := runAdd(dir, "migrations", "web")
 	if err == nil {
@@ -264,8 +264,8 @@ graph:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	defer os.Chdir(wd)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(wd) }()
+	_ = os.Chdir(dir)
 
 	summary, err := runAdd(dir, "migrations", "api")
 	if err != nil {

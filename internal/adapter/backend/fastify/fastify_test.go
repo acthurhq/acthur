@@ -237,7 +237,7 @@ func TestFastify_Scaffold_IDStrategy_UUID(t *testing.T) {
 // Syntax validity is the strongest assertion available without a network
 // `npm install` (skipped per verification scope — see status note): every
 // generated .js file must parse under `node --check`. Mirrors the intent of
-// go:fiber's compile test and rust:axum's `cargo check` test.
+// The go:fiber's compile test and rust:axum's `cargo check` test.
 func TestFastify_Scaffold_AllJSFilesPassNodeCheck(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping syntax-check test in short mode")

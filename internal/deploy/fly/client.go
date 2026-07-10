@@ -106,7 +106,7 @@ func (c *Client) do(method, path string, body any, out any) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("fly: %s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

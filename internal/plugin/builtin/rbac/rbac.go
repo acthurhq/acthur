@@ -1,5 +1,5 @@
 // Package rbac is the built-in "rbac" plugin: role-based access control for
-// go:fiber projects. It depends on the "auth" plugin (built in a parallel
+// The go:fiber projects. It depends on the "auth" plugin (built in a parallel
 // slice) for authentication, but never imports auth's package or generated
 // code — see the ASSUMPTION note on the generated internal/rbac package
 // (rbac.go's Generate) for the one contract point between the two.

@@ -395,12 +395,12 @@ func openapiScalarType(schema map[string]any, required, plain bool) (string, err
 		return withConstraints("bool", schema, required, plain), nil
 	case "string", "":
 		base := "string"
-		switch {
-		case format == "date-time":
+		switch format {
+		case "date-time":
 			base = "timestamp"
-		case format == "email":
+		case "email":
 			base = "email"
-		case format == "uuid":
+		case "uuid":
 			if x, _ := schema["x-acthur-type"].(string); x == "ulid" {
 				base = "ulid"
 			} else {

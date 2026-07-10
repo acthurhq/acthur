@@ -52,7 +52,7 @@ func runServiceLogs(path string, out io.Writer, stop <-chan struct{}, pollInterv
 		}
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := io.Copy(out, f); err != nil {
 		return fmt.Errorf("read %s: %w", path, err)

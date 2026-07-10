@@ -134,7 +134,7 @@ func (c *Client) do(method, path string, query url.Values, body any, out any) er
 	if err != nil {
 		return fmt.Errorf("coolify: %s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

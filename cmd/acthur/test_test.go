@@ -54,7 +54,7 @@ graph:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(wd) })
+	t.Cleanup(func() { _ = os.Chdir(wd) })
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}

@@ -141,7 +141,7 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 	}
 	dockerfile, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Dockerfile: %w", err)
+		return nil, fmt.Errorf("rendering Dockerfile: %w", err)
 	}
 
 	return []adapter.File{

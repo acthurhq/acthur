@@ -10,7 +10,7 @@ import (
 )
 
 // selfReloadingAdapter is a Runnable+SelfReloader fake standing in for
-// go:fiber's real air-backed adapter, without depending on gofiber's
+// The go:fiber's real air-backed adapter, without depending on gofiber's
 // concrete templates.
 type selfReloadingAdapter struct {
 	fakeAdapter

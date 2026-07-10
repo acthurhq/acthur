@@ -34,7 +34,7 @@ func runBuild(root string, g *graph.Graph, out io.Writer) error {
 
 	for _, node := range nodes {
 		binPath := filepath.Join(outDir, node)
-		fmt.Fprintf(out, "--- building %s ---\n", node)
+		_, _ = fmt.Fprintf(out, "--- building %s ---\n", node)
 		// CGO_ENABLED=0: a fully static binary, no libc dependency in the
 		// deploy image. -ldflags="-s -w": strip debug/symbol info to shrink
 		// the binary — standard production Go build flags.
@@ -45,7 +45,7 @@ func runBuild(root string, g *graph.Graph, out io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("stat built binary %s: %w", binPath, err)
 		}
-		fmt.Fprintf(out, "%-20s %8.2f MB  %s\n", node, float64(info.Size())/(1024*1024), binPath)
+		_, _ = fmt.Fprintf(out, "%-20s %8.2f MB  %s\n", node, float64(info.Size())/(1024*1024), binPath)
 	}
 	return nil
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func TestProjectInfoTool_Summarizes(t *testing.T) {
-	os.Unsetenv("ANTHROPIC_API_KEY")
+	_ = os.Unsetenv("ANTHROPIC_API_KEY")
 	cfg := &config.Config{
 		Project: "demo",
 		Plugins: []config.PluginEntry{{Name: "migrations"}, {Name: "auth"}},

@@ -233,10 +233,10 @@ func saveLock(root string, l lock) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	defer func() { _ = os.Remove(tmpPath) }()  // no-op once the rename below succeeds
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

@@ -121,7 +121,7 @@ func WriteHostsEntries(path string, hosts []string) error {
 	if err != nil {
 		return fmt.Errorf("open %s for append: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := fmt.Fprintf(f, "\n# added by acthur dev --write-hosts\n%s\n", HostsBlock(hosts)); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

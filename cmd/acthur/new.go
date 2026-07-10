@@ -132,7 +132,7 @@ func resolveNewOptions(in io.Reader, out io.Writer, projectName string, wi wizar
 	if !wi.AdapterSet {
 		choices := backendScaffoldAdapters()
 		def := defaultBackendAdapter()
-		fmt.Fprintf(out, "Which backend adapter? (%s) [%s]: ", strings.Join(choices, ", "), def)
+		_, _ = fmt.Fprintf(out, "Which backend adapter? (%s) [%s]: ", strings.Join(choices, ", "), def)
 		if line := readLine(reader); line != "" {
 			opts.Adapter = line
 		} else {
@@ -152,13 +152,13 @@ func resolveNewOptions(in io.Reader, out io.Writer, projectName string, wi wizar
 	}
 
 	if !wi.DBSet {
-		fmt.Fprint(out, "Include a database (db:postgres)? [Y/n]: ")
+		_, _ = fmt.Fprint(out, "Include a database (db:postgres)? [Y/n]: ")
 		line := strings.ToLower(readLine(reader))
 		opts.DB = line == "" || line == "y" || line == "yes"
 	}
 
 	if !wi.ModuleSet {
-		fmt.Fprintf(out, "Module prefix [%s]: ", projectName)
+		_, _ = fmt.Fprintf(out, "Module prefix [%s]: ", projectName)
 		if line := readLine(reader); line != "" {
 			opts.Module = line
 		} else {

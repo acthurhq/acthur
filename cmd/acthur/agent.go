@@ -51,7 +51,7 @@ func runAgentTask(d agentDeps, systemSuffix, userPrompt string) error {
 	if err != nil {
 		return fmt.Errorf("agent request failed: %w", err)
 	}
-	fmt.Fprintln(d.out, text)
+	_, _ = fmt.Fprintln(d.out, text)
 	return nil
 }
 
@@ -99,7 +99,7 @@ func runAgentReview(d agentDeps) error {
 		return fmt.Errorf("failed to read git diff: %w", err)
 	}
 	if strings.TrimSpace(diff) == "" {
-		fmt.Fprintln(d.out, "No changes to review (git diff is empty).")
+		_, _ = fmt.Fprintln(d.out, "No changes to review (git diff is empty).")
 		return nil
 	}
 	return runAgentTask(d,

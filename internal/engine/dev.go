@@ -302,7 +302,7 @@ func (e *DevEngine) Start() error {
 		e.watcher.Stop()
 	}
 	if e.proxy != nil {
-		e.proxy.Stop()
+		_ = e.proxy.Stop()
 	}
 	e.shutdown(order)
 	output.Success("", "all services stopped")

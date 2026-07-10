@@ -35,7 +35,7 @@ func ExecSQLFile(databaseURL string, contents []byte) error {
 	if err != nil {
 		return fmt.Errorf("opening database connection: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(string(contents)); err != nil {
 		return fmt.Errorf("executing seed sql: %w", err)
 	}

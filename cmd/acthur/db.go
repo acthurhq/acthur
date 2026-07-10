@@ -26,7 +26,7 @@ func freeLocalPort() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("finding a free local port: %w", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 

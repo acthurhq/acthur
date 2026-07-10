@@ -74,7 +74,7 @@ func TestRunServiceLogs_PicksUpAppendedContentBeforeStopping(t *testing.T) {
 	if _, err := f.WriteString("line two\n"); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	time.Sleep(30 * time.Millisecond)
 	close(stop)

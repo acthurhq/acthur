@@ -175,7 +175,7 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 	}
 	dockerfile, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Dockerfile: %w", err)
+		return nil, fmt.Errorf("rendering Dockerfile: %w", err)
 	}
 
 	return []adapter.File{
@@ -196,7 +196,7 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 }
 
 // DockerfileFor renders a production-ready, multi-stage Dockerfile for a
-// go:fiber service node (Dockerizable capability). It is distinct from the
+// The go:fiber service node (Dockerizable capability). It is distinct from the
 // scaffold-time Dockerfile Scaffold() writes once into the project: this one
 // is (re)rendered by internal/deploy/artifacts on every `acthur deploy`, so
 // EXPOSE/HEALTHCHECK always reflect the node's current graph facts —

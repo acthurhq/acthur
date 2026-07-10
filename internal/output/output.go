@@ -42,7 +42,6 @@ var (
 	colorInfo    = color.New(color.FgCyan)
 	colorMuted   = color.New(color.FgHiBlack)
 	colorBold    = color.New(color.Bold)
-	colorService = color.New(color.FgMagenta)
 
 	// Output targets — overridable for testing
 	stdout io.Writer = os.Stdout
@@ -65,17 +64,17 @@ func SetOutput(out, err io.Writer) {
 
 // Banner prints the Acthur startup banner.
 func Banner() {
-	fmt.Fprintln(stdout)
-	colorBold.Fprintln(stdout, "  ✦  Acthur — Runtime Graph Operating System")
-	colorMuted.Fprintln(stdout, "     github.com/acthur/acthur")
-	fmt.Fprintln(stdout)
+	_, _ = fmt.Fprintln(stdout)
+	_, _ = colorBold.Fprintln(stdout, "  ✦  Acthur — Runtime Graph Operating System")
+	_, _ = colorMuted.Fprintln(stdout, "     github.com/acthur/acthur")
+	_, _ = fmt.Fprintln(stdout)
 }
 
 // Header prints a section header line.
 func Header(text string) {
-	fmt.Fprintln(stdout)
-	colorBold.Fprintf(stdout, "  %s\n", text)
-	colorMuted.Fprintf(stdout, "  %s\n", strings.Repeat(SymbolSeparator, len(text)+2))
+	_, _ = fmt.Fprintln(stdout)
+	_, _ = colorBold.Fprintf(stdout, "  %s\n", text)
+	_, _ = colorMuted.Fprintf(stdout, "  %s\n", strings.Repeat(SymbolSeparator, len(text)+2))
 }
 
 // --- Scoped log lines -------------------------------------------------------
@@ -86,36 +85,36 @@ func Header(text string) {
 func Info(scope, format string, args ...any) {
 	prefix := resolveScope(scope)
 	msg := fmt.Sprintf(format, args...)
-	colorMuted.Fprintf(stdout, "[%s] ", prefix)
-	colorInfo.Fprintf(stdout, "%s  ", SymbolInfo)
-	fmt.Fprintln(stdout, msg)
+	_, _ = colorMuted.Fprintf(stdout, "[%s] ", prefix)
+	_, _ = colorInfo.Fprintf(stdout, "%s  ", SymbolInfo)
+	_, _ = fmt.Fprintln(stdout, msg)
 }
 
 // Success prints a success message.
 func Success(scope, format string, args ...any) {
 	prefix := resolveScope(scope)
 	msg := fmt.Sprintf(format, args...)
-	colorMuted.Fprintf(stdout, "[%s] ", prefix)
-	colorSuccess.Fprintf(stdout, "%s  ", SymbolSuccess)
-	fmt.Fprintln(stdout, msg)
+	_, _ = colorMuted.Fprintf(stdout, "[%s] ", prefix)
+	_, _ = colorSuccess.Fprintf(stdout, "%s  ", SymbolSuccess)
+	_, _ = fmt.Fprintln(stdout, msg)
 }
 
 // Warn prints a warning. Warnings do not stop execution.
 func Warn(scope, format string, args ...any) {
 	prefix := resolveScope(scope)
 	msg := fmt.Sprintf(format, args...)
-	colorMuted.Fprintf(stdout, "[%s] ", prefix)
-	colorWarning.Fprintf(stdout, "%s  ", SymbolWarning)
-	fmt.Fprintln(stdout, msg)
+	_, _ = colorMuted.Fprintf(stdout, "[%s] ", prefix)
+	_, _ = colorWarning.Fprintf(stdout, "%s  ", SymbolWarning)
+	_, _ = fmt.Fprintln(stdout, msg)
 }
 
 // Error prints an error message to stderr. Does not exit.
 func Error(scope, format string, args ...any) {
 	prefix := resolveScope(scope)
 	msg := fmt.Sprintf(format, args...)
-	colorMuted.Fprintf(stderr, "[%s] ", prefix)
-	colorError.Fprintf(stderr, "%s  ", SymbolError)
-	fmt.Fprintln(stderr, msg)
+	_, _ = colorMuted.Fprintf(stderr, "[%s] ", prefix)
+	_, _ = colorError.Fprintf(stderr, "%s  ", SymbolError)
+	_, _ = fmt.Fprintln(stderr, msg)
 }
 
 // Debug prints a debug message only when verbose mode is on.
@@ -125,41 +124,41 @@ func Debug(scope, format string, args ...any) {
 	}
 	prefix := resolveScope(scope)
 	msg := fmt.Sprintf(format, args...)
-	colorMuted.Fprintf(stdout, "[%s] [debug] %s\n", prefix, msg)
+	_, _ = colorMuted.Fprintf(stdout, "[%s] [debug] %s\n", prefix, msg)
 }
 
 // ServiceLog prints a log line tagged with a service name (used by process manager).
 // Color is derived from the service name for visual differentiation.
 func ServiceLog(service, line string) {
 	c := serviceColor(service)
-	c.Fprintf(stdout, "[%s] ", service)
-	fmt.Fprintln(stdout, line)
+	_, _ = c.Fprintf(stdout, "[%s] ", service)
+	_, _ = fmt.Fprintln(stdout, line)
 }
 
 // --- Structured output -------------------------------------------------------
 
 // Step prints a wizard or multi-step process step.
 func Step(n, total int, text string) {
-	colorMuted.Fprintf(stdout, "\n  Step %d of %d", n, total)
-	colorMuted.Fprintln(stdout, "  "+strings.Repeat(SymbolSeparator, 40))
-	colorBold.Fprintf(stdout, "  %s\n\n", text)
+	_, _ = colorMuted.Fprintf(stdout, "\n  Step %d of %d", n, total)
+	_, _ = colorMuted.Fprintln(stdout, "  "+strings.Repeat(SymbolSeparator, 40))
+	_, _ = colorBold.Fprintf(stdout, "  %s\n\n", text)
 }
 
 // Item prints a single checklist item with a status indicator.
 func Item(status ItemStatus, text string) {
 	switch status {
 	case StatusOK:
-		colorSuccess.Fprintf(stdout, "  %s  ", SymbolSuccess)
+		_, _ = colorSuccess.Fprintf(stdout, "  %s  ", SymbolSuccess)
 	case StatusFail:
-		colorError.Fprintf(stdout, "  %s  ", SymbolError)
+		_, _ = colorError.Fprintf(stdout, "  %s  ", SymbolError)
 	case StatusWarn:
-		colorWarning.Fprintf(stdout, "  %s  ", SymbolWarning)
+		_, _ = colorWarning.Fprintf(stdout, "  %s  ", SymbolWarning)
 	case StatusSkip:
-		colorMuted.Fprintf(stdout, "  %s  ", SymbolPending)
+		_, _ = colorMuted.Fprintf(stdout, "  %s  ", SymbolPending)
 	case StatusRunning:
-		colorInfo.Fprintf(stdout, "  %s  ", SymbolRunning)
+		_, _ = colorInfo.Fprintf(stdout, "  %s  ", SymbolRunning)
 	}
-	fmt.Fprintln(stdout, text)
+	_, _ = fmt.Fprintln(stdout, text)
 }
 
 // ItemStatus represents the visual state of a checklist item.
@@ -186,48 +185,48 @@ func Table(rows [][2]string) {
 	}
 	for _, r := range rows {
 		padding := strings.Repeat(" ", maxLeft-len(r[0])+2)
-		colorBold.Fprintf(stdout, "  %s", r[0])
-		colorMuted.Fprintf(stdout, "%s", padding)
-		fmt.Fprintln(stdout, r[1])
+		_, _ = colorBold.Fprintf(stdout, "  %s", r[0])
+		_, _ = colorMuted.Fprintf(stdout, "%s", padding)
+		_, _ = fmt.Fprintln(stdout, r[1])
 	}
 }
 
 // Separator prints a horizontal divider.
 func Separator() {
-	colorMuted.Fprintln(stdout, "\n  "+strings.Repeat(SymbolSeparator, 45)+"\n")
+	_, _ = colorMuted.Fprintln(stdout, "\n  "+strings.Repeat(SymbolSeparator, 45)+"\n")
 }
 
 // Blank prints a blank line.
-func Blank() { fmt.Fprintln(stdout) }
+func Blank() { _, _ = fmt.Fprintln(stdout) }
 
 // --- Error display -----------------------------------------------------------
 
 // Fatal prints a structured fatal error with context and a fix hint,
 // then exits with the provided exit code.
 func Fatal(e *ActhurError) {
-	fmt.Fprintln(stderr)
-	colorError.Fprintf(stderr, "  %s  Error: %s\n\n", SymbolError, e.Message)
+	_, _ = fmt.Fprintln(stderr)
+	_, _ = colorError.Fprintf(stderr, "  %s  Error: %s\n\n", SymbolError, e.Message)
 
 	if e.Context != "" {
-		colorMuted.Fprintf(stderr, "  Context:  ")
-		fmt.Fprintln(stderr, e.Context)
+		_, _ = colorMuted.Fprintf(stderr, "  Context:  ")
+		_, _ = fmt.Fprintln(stderr, e.Context)
 	}
 	if e.Problem != "" {
-		colorMuted.Fprintf(stderr, "  Problem:  ")
-		fmt.Fprintln(stderr, e.Problem)
+		_, _ = colorMuted.Fprintf(stderr, "  Problem:  ")
+		_, _ = fmt.Fprintln(stderr, e.Problem)
 	}
 	if e.Fix != "" {
-		fmt.Fprintln(stderr)
-		colorMuted.Fprintf(stderr, "  Fix:      ")
-		fmt.Fprintln(stderr, e.Fix)
+		_, _ = fmt.Fprintln(stderr)
+		_, _ = colorMuted.Fprintf(stderr, "  Fix:      ")
+		_, _ = fmt.Fprintln(stderr, e.Fix)
 	}
 	if e.DocsURL != "" {
-		fmt.Fprintln(stderr)
-		colorMuted.Fprintf(stderr, "  Docs:     ")
-		colorInfo.Fprintln(stderr, e.DocsURL)
+		_, _ = fmt.Fprintln(stderr)
+		_, _ = colorMuted.Fprintf(stderr, "  Docs:     ")
+		_, _ = colorInfo.Fprintln(stderr, e.DocsURL)
 	}
-	fmt.Fprintln(stderr)
-	colorMuted.Fprintf(stderr, "  Exit code: %d\n\n", e.Code)
+	_, _ = fmt.Fprintln(stderr)
+	_, _ = colorMuted.Fprintf(stderr, "  Exit code: %d\n\n", e.Code)
 	os.Exit(int(e.Code))
 }
 
@@ -235,15 +234,15 @@ func Fatal(e *ActhurError) {
 
 // Ready prints the "all services ready" message with URL list.
 func Ready(project string, urls map[string]string) {
-	fmt.Fprintln(stdout)
-	colorSuccess.Fprintf(stdout, "  ✦  %s is ready\n\n", project)
+	_, _ = fmt.Fprintln(stdout)
+	_, _ = colorSuccess.Fprintf(stdout, "  ✦  %s is ready\n\n", project)
 	for name, url := range urls {
-		colorMuted.Fprintf(stdout, "     %-16s", name)
-		colorInfo.Fprintln(stdout, url)
+		_, _ = colorMuted.Fprintf(stdout, "     %-16s", name)
+		_, _ = colorInfo.Fprintln(stdout, url)
 	}
-	fmt.Fprintln(stdout)
-	colorMuted.Fprintln(stdout, "  Press Ctrl+C to stop all services")
-	fmt.Fprintln(stdout)
+	_, _ = fmt.Fprintln(stdout)
+	_, _ = colorMuted.Fprintln(stdout, "  Press Ctrl+C to stop all services")
+	_, _ = fmt.Fprintln(stdout)
 }
 
 // --- Spinner -----------------------------------------------------------------
@@ -269,7 +268,7 @@ func NewSpinner(msg string) *Spinner {
 				return
 			default:
 				frame := spinnerFrames[i%len(spinnerFrames)]
-				colorInfo.Fprintf(stdout, "\r  %s  %s", frame, s.msg)
+				_, _ = colorInfo.Fprintf(stdout, "\r  %s  %s", frame, s.msg)
 				time.Sleep(80 * time.Millisecond)
 				i++
 			}
@@ -282,14 +281,14 @@ func NewSpinner(msg string) *Spinner {
 func (s *Spinner) Stop(success bool, msg string) {
 	close(s.done)
 	elapsed := time.Since(s.start).Round(time.Millisecond)
-	fmt.Fprintf(stdout, "\r")
+	_, _ = fmt.Fprintf(stdout, "\r")
 	if success {
-		colorSuccess.Fprintf(stdout, "  %s  ", SymbolSuccess)
+		_, _ = colorSuccess.Fprintf(stdout, "  %s  ", SymbolSuccess)
 	} else {
-		colorError.Fprintf(stdout, "  %s  ", SymbolError)
+		_, _ = colorError.Fprintf(stdout, "  %s  ", SymbolError)
 	}
-	fmt.Fprintf(stdout, "%s ", msg)
-	colorMuted.Fprintf(stdout, "(%s)\n", elapsed)
+	_, _ = fmt.Fprintf(stdout, "%s ", msg)
+	_, _ = colorMuted.Fprintf(stdout, "(%s)\n", elapsed)
 }
 
 // --- Helpers -----------------------------------------------------------------

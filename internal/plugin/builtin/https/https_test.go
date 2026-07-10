@@ -124,7 +124,7 @@ func TestServeTLS_RealHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTPS request against generated cert failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}

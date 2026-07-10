@@ -1,5 +1,5 @@
 // Package auth is Acthur's built-in "auth" plugin (Phase 6 Slice 2). For
-// go:fiber service nodes it generates a complete authentication package
+// The go:fiber service nodes it generates a complete authentication package
 // under internal/auth/: JWT issue/verify (HS256, secret from
 // AUTH_JWT_SECRET), a DB-backed session store, a magic-link token flow, an
 // OAuth2 provider registry, register/login/logout/me route handlers
@@ -9,7 +9,7 @@
 // Third-party dependencies (golang-jwt/jwt/v5, jackc/pgx/v5,
 // golang.org/x/crypto/bcrypt) reach the target go.mod without a
 // MergeMarker: golang-jwt and pgx are already direct requires in the
-// go:fiber adapter's scaffolded go.mod (internal/adapter/backend/gofiber/
+// The go:fiber adapter's scaffolded go.mod (internal/adapter/backend/gofiber/
 // templates/go.mod.tmpl), and bcrypt is a transitive import `go mod tidy`
 // resolves and adds on its own. See docs/implementation/active/
 // 0004-phase-6-first-plugins.md for the recorded decision.

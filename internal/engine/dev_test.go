@@ -907,21 +907,13 @@ func TestShutdown_EmitsBeforeAndAfterStopForRealNodesOnly(t *testing.T) {
 	order := []*graph.Node{db, api, proxyNode}
 	eng.shutdown(order)
 
-	want := []string{
-		"kernel:node:before_stop:proxy",
-		"kernel:node:before_stop:api",
-		"kernel:node:before_stop:db",
-		"kernel:node:after_stop:proxy",
-		"kernel:node:after_stop:api",
-		"kernel:node:after_stop:db",
-	}
 	// The kernel proxy node must never appear.
 	for _, s := range *seq {
 		if strings.Contains(s, ":proxy") {
 			t.Fatalf("expected no stop events for kernel-materialized proxy node, got %#v", *seq)
 		}
 	}
-	want = []string{
+	want := []string{
 		"kernel:node:before_stop:api",
 		"kernel:node:before_stop:db",
 		"kernel:node:after_stop:api",

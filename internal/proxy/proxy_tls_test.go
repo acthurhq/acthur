@@ -40,7 +40,7 @@ func TestProxy_WithTLS_ServesRealHTTPS(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 
 	time.Sleep(150 * time.Millisecond)
 
@@ -61,7 +61,7 @@ func TestProxy_WithTLS_ServesRealHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTPS request through proxy failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.Header.Get("X-Backend") != "api" {
 		t.Errorf("expected X-Backend=api, got %q", resp.Header.Get("X-Backend"))
 	}

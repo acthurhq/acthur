@@ -99,7 +99,7 @@ func TestServer_ToolsCall_Success(t *testing.T) {
 			var in struct {
 				Text string `json:"text"`
 			}
-			json.Unmarshal(args, &in)
+			_ = json.Unmarshal(args, &in)
 			return map[string]string{"echoed": in.Text}, nil
 		},
 	}

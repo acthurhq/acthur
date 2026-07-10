@@ -163,6 +163,6 @@ func (s *Server) write(out io.Writer, resp response) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out.Write(data)
-	out.Write([]byte("\n"))
+	_, _ = out.Write(data)
+	_, _ = out.Write([]byte("\n"))
 }

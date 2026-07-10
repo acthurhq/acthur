@@ -57,7 +57,7 @@ func FileLogSink(rootDir string) (LogSink, error) {
 			}
 			files[nodeID] = f
 		}
-		fmt.Fprintln(f, line)
+		_, _ = fmt.Fprintln(f, line)
 	}, nil
 }
 

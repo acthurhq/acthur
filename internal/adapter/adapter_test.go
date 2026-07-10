@@ -72,7 +72,7 @@ func TestRegistry_DuplicatePanics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber core interface tests
+// The go:fiber core interface tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_Name(t *testing.T) {
@@ -144,7 +144,7 @@ func TestGoFiber_EnvVars_ContainsDatabaseURL(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber Runnable capability tests
+// The go:fiber Runnable capability tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_DevCommand(t *testing.T) {
@@ -187,7 +187,7 @@ func TestGoFiber_TestCommand(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber Scaffolder capability tests
+// The go:fiber Scaffolder capability tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_Scaffold_ProducesFiles(t *testing.T) {
@@ -280,7 +280,7 @@ func TestGoFiber_Scaffold_FilesHaveContent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber Dockerizable capability tests (Phase 8 slice 1, #51)
+// The go:fiber Dockerizable capability tests (Phase 8 slice 1, #51)
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_SatisfiesDockerizable(t *testing.T) {
@@ -949,8 +949,8 @@ func TestGoFiber_Scaffold_AirRerunsCrashedBinary(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:chi / go:gin adapter tests (issue #58) — same parity contract as
-// go:fiber: Scaffolder, Runnable (with air self-reload), Dockerizable.
+// The go:chi / go:gin adapter tests (issue #58) — same parity contract as
+// The go:fiber: Scaffolder, Runnable (with air self-reload), Dockerizable.
 // Shared assertions are parametrized over both adapters; a couple of
 // adapter-specific checks (Detect signature, per-framework import) follow.
 // ---------------------------------------------------------------------------

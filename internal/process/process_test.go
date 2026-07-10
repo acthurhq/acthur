@@ -57,9 +57,9 @@ func TestProcess_StateTransitions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	p.Start(ctx)
+	_ = p.Start(ctx)
 	time.Sleep(100 * time.Millisecond)
-	p.Stop(5 * time.Second)
+	_ = p.Stop(5 * time.Second)
 
 	// Should have seen: Running, Stopping, Stopped
 	sawRunning := false
@@ -94,9 +94,9 @@ func TestProcess_OutputCapture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	p.Start(ctx)
+	_ = p.Start(ctx)
 	time.Sleep(500 * time.Millisecond) // give it time to output
-	p.Stop(2 * time.Second)
+	_ = p.Stop(2 * time.Second)
 
 	found := false
 	for _, l := range lines {
@@ -188,7 +188,7 @@ func TestManager_SpawnAndGet(t *testing.T) {
 		t.Error("expected Get to return the spawned process")
 	}
 
-	m.Stop("test-node")
+	_ = m.Stop("test-node")
 }
 
 func TestManager_SpawnDuplicate(t *testing.T) {
@@ -197,12 +197,12 @@ func TestManager_SpawnDuplicate(t *testing.T) {
 	}
 
 	m := process.NewManager()
-	m.Spawn("dup-node", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("dup-node", sleepCmd(), sleepArgs(), nil, "")
 	_, err := m.Spawn("dup-node", sleepCmd(), sleepArgs(), nil, "")
 	if err == nil {
 		t.Error("expected error spawning duplicate node, got nil")
 	}
-	m.Stop("dup-node")
+	_ = m.Stop("dup-node")
 }
 
 func TestManager_GetNonExistent(t *testing.T) {
@@ -227,9 +227,9 @@ func TestManager_All(t *testing.T) {
 	}
 
 	m := process.NewManager()
-	m.Spawn("node-a", sleepCmd(), sleepArgs(), nil, "")
-	m.Spawn("node-b", sleepCmd(), sleepArgs(), nil, "")
-	m.Spawn("node-c", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("node-a", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("node-b", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("node-c", sleepCmd(), sleepArgs(), nil, "")
 
 	all := m.All()
 	if len(all) != 3 {
@@ -275,7 +275,7 @@ func TestManager_LogSinkReceivesOutputLines(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	m.Stop("logged-node")
+	_ = m.Stop("logged-node")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -389,7 +389,7 @@ func TestProcess_StopTerminatesWholeProcessTree(t *testing.T) {
 	var pid int
 	for i := 0; i < 50; i++ {
 		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
-			fmt.Sscanf(string(b), "%d", &pid)
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -404,7 +404,7 @@ func TestProcess_StopTerminatesWholeProcessTree(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	if err := syscall.Kill(pid, 0); err == nil {
-		syscall.Kill(pid, syscall.SIGKILL) // clean up
+		_ = syscall.Kill(pid, syscall.SIGKILL)  // clean up
 		t.Fatalf("grandchild %d survived Stop — process tree not terminated", pid)
 	}
 }
@@ -433,7 +433,7 @@ func TestProcess_RestartReapsOrphanedGrandchildren(t *testing.T) {
 	var pid int
 	for i := 0; i < 50; i++ {
 		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
-			fmt.Sscanf(string(b), "%d", &pid)
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -443,17 +443,17 @@ func TestProcess_RestartReapsOrphanedGrandchildren(t *testing.T) {
 	}
 
 	// Simulate a hard crash of the supervised process itself.
-	syscall.Kill(p.Pid(), syscall.SIGKILL)
+	_ = syscall.Kill(p.Pid(), syscall.SIGKILL)
 	time.Sleep(200 * time.Millisecond)
 
 	if err := p.Restart(ctx); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	defer p.Stop(5 * time.Second)
+	defer func() { _ = p.Stop(5 * time.Second) }()
 	time.Sleep(200 * time.Millisecond)
 
 	if err := syscall.Kill(pid, 0); err == nil {
-		syscall.Kill(pid, syscall.SIGKILL) // clean up
+		_ = syscall.Kill(pid, syscall.SIGKILL)  // clean up
 		t.Fatalf("orphaned grandchild %d survived restart", pid)
 	}
 }

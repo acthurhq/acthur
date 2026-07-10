@@ -41,7 +41,7 @@ func Migrate(root, databaseURL string) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("running migrations: %w", err)
 	}
@@ -54,7 +54,7 @@ func Rollback(root, databaseURL string) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 	if err := m.Steps(-1); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("rolling back migration: %w", err)
 	}
@@ -68,7 +68,7 @@ func DownAll(root, databaseURL string) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 	if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("rolling back all migrations: %w", err)
 	}
@@ -82,7 +82,7 @@ func Status(root, databaseURL string) (version uint, dirty bool, err error) {
 	if mErr != nil {
 		return 0, false, mErr
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 	version, dirty, err = m.Version()
 	if errors.Is(err, migrate.ErrNilVersion) {
 		return 0, false, nil

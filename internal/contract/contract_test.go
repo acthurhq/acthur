@@ -278,7 +278,7 @@ endpoints:
 
 func TestRegistry_Get_Registered(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP})
 
 	c, err := reg.Get("users", "1")
 	if err != nil {
@@ -299,8 +299,8 @@ func TestRegistry_Get_NotRegistered(t *testing.T) {
 
 func TestRegistry_GetLatest(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
-	reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
 
 	c, err := reg.GetLatest("users")
 	if err != nil {
@@ -327,7 +327,7 @@ func TestRegistry_IdempotentRegister(t *testing.T) {
 
 func TestRegistry_DuplicateVersionDifferentChecksum(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1",
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1",
 		Transport: contract.TransportHTTP, Checksum: "aaa"})
 
 	err := reg.Register(&contract.Contract{Name: "users", Version: "1",
@@ -339,9 +339,9 @@ func TestRegistry_DuplicateVersionDifferentChecksum(t *testing.T) {
 
 func TestRegistry_All(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
-	reg.Register(&contract.Contract{Name: "appointments", Version: "1", Transport: contract.TransportHTTP, Checksum: "b"})
-	reg.Register(&contract.Contract{Name: "vets", Version: "1", Transport: contract.TransportHTTP, Checksum: "c"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
+	_ = reg.Register(&contract.Contract{Name: "appointments", Version: "1", Transport: contract.TransportHTTP, Checksum: "b"})
+	_ = reg.Register(&contract.Contract{Name: "vets", Version: "1", Transport: contract.TransportHTTP, Checksum: "c"})
 
 	all := reg.All()
 	if len(all) != 3 {
@@ -351,9 +351,9 @@ func TestRegistry_All(t *testing.T) {
 
 func TestRegistry_Versions(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
-	reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
-	reg.Register(&contract.Contract{Name: "users", Version: "3", Transport: contract.TransportHTTP, Checksum: "c"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "3", Transport: contract.TransportHTTP, Checksum: "c"})
 
 	versions := reg.Versions("users")
 	if len(versions) != 3 {
@@ -929,7 +929,7 @@ func TestParseFile_GraphQLImport(t *testing.T) {
 
 func TestValidator_ValidRequest(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{
+	_ = reg.Register(&contract.Contract{
 		Name:      "users",
 		Version:   "1",
 		Transport: contract.TransportHTTP,
@@ -955,7 +955,7 @@ func TestValidator_ValidRequest(t *testing.T) {
 
 func TestValidator_MissingRequiredField(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{
+	_ = reg.Register(&contract.Contract{
 		Name:      "users",
 		Version:   "1",
 		Transport: contract.TransportHTTP,
@@ -985,7 +985,7 @@ func TestValidator_MissingRequiredField(t *testing.T) {
 
 func TestValidator_MissingAuthHeader(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{
+	_ = reg.Register(&contract.Contract{
 		Name:      "users",
 		Version:   "1",
 		Transport: contract.TransportHTTP,
@@ -1024,18 +1024,6 @@ func writeContract(t *testing.T, content string) string {
 	path := filepath.Join(dir, "test.contract.yml")
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write contract: %v", err)
-	}
-	return path
-}
-
-// writeFileWithExt writes content to a temp file with the given basename
-// (including extension), for exercising ParseFile's format dispatch.
-func writeFileWithExt(t *testing.T, basename, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, basename)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write file: %v", err)
 	}
 	return path
 }

@@ -77,7 +77,7 @@ func TestProxy_RoutesAPIRequests(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 
 	time.Sleep(100 * time.Millisecond) // let server bind
 
@@ -86,7 +86,7 @@ func TestProxy_RoutesAPIRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.Header.Get("X-Backend") != "api" {
 		t.Errorf("expected X-Backend=api, got %q", resp.Header.Get("X-Backend"))
 	}
@@ -110,8 +110,8 @@ func TestProxy_RoutesRootToWeb(t *testing.T) {
 
 	g := buildGraphWithPorts(t, apiPort, webPort)
 	p, _ := proxy.New(g, 14001)
-	p.Start()
-	defer p.Stop()
+	_ = p.Start()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	// Request to / should go to web backend (catch-all)
@@ -119,7 +119,7 @@ func TestProxy_RoutesRootToWeb(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.Header.Get("X-Backend") != "web" {
 		t.Errorf("expected root to route to web (X-Backend=web), got %q",
 			resp.Header.Get("X-Backend"))
@@ -142,15 +142,15 @@ func TestProxy_InjectsNodeHeader(t *testing.T) {
 
 	g := buildGraphWithPorts(t, apiPort, webPort)
 	p, _ := proxy.New(g, 14002)
-	p.Start()
-	defer p.Stop()
+	_ = p.Start()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14002/api/test")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// Proxy should inject X-Acthur-Node header in response
 	if resp.Header.Get("X-Acthur-Node") == "" {
@@ -175,15 +175,15 @@ func TestProxy_UnavailableBackend(t *testing.T) {
 	}
 	g, _ := graph.Build(cfg)
 	p, _ := proxy.New(g, 14003)
-	p.Start()
-	defer p.Stop()
+	_ = p.Start()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14003/api/test")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	// Should get a 502 Bad Gateway
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("expected 502 for unavailable backend, got %d", resp.StatusCode)

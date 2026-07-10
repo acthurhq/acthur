@@ -30,7 +30,7 @@ func TestClaudeProvider_Complete_SendsExpectedRequest(t *testing.T) {
 			Content: []contentBlock{{Type: "text", Text: "hello from claude"}},
 			Model:   gotBody.Model,
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -80,7 +80,7 @@ func TestClaudeProvider_Complete_ConcatenatesMultipleTextBlocks(t *testing.T) {
 				{Type: "text", Text: "part two."},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -98,7 +98,7 @@ func TestClaudeProvider_Complete_NonOKStatusReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"type": "error",
 			"error": map[string]string{
 				"type":    "authentication_error",

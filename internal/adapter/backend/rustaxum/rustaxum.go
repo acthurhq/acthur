@@ -119,7 +119,7 @@ func (a *Adapter) EnvVars() []adapter.EnvVar {
 func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) {
 	cargoToml, err := renderTemplate("cargo.toml.tmpl", tmplCargoToml, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Cargo.toml: %w", err)
+		return nil, fmt.Errorf("rendering Cargo.toml: %w", err)
 	}
 	mainRs, err := renderTemplate("main.rs.tmpl", tmplMainRs, ctx)
 	if err != nil {
@@ -155,7 +155,7 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 	}
 	dockerfile, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Dockerfile: %w", err)
+		return nil, fmt.Errorf("rendering Dockerfile: %w", err)
 	}
 
 	return []adapter.File{

@@ -99,7 +99,7 @@ func TestGate_MissingEnvVar_Fails(t *testing.T) {
 	dir := t.TempDir()
 	in := passingChecks(t, dir)
 	in.RequiredEnv = []string{"ACTHUR_GATE_TEST_MISSING_VAR"}
-	os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
+	_ = os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
 	_, err := deploy.RunGate(in)
 	if err == nil {
 		t.Fatal("expected gate failure for missing env var")
@@ -116,7 +116,7 @@ func TestGate_MissingEnvVar_ResolvedBySecretFallback(t *testing.T) {
 	dir := t.TempDir()
 	in := passingChecks(t, dir)
 	in.RequiredEnv = []string{"ACTHUR_GATE_TEST_MISSING_VAR"}
-	os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
+	_ = os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
 	in.ResolveSecret = func(key string) (string, bool) {
 		if key == "ACTHUR_GATE_TEST_MISSING_VAR" {
 			return "resolved-from-secret-store", true
@@ -152,7 +152,7 @@ func TestGate_CollectsAllFailures(t *testing.T) {
 		ServiceNodes: []string{"api"},
 		RequiredEnv:  []string{"ACTHUR_GATE_TEST_MISSING_VAR"},
 	}
-	os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
+	_ = os.Unsetenv("ACTHUR_GATE_TEST_MISSING_VAR")
 	_, err := deploy.RunGate(in)
 	if err == nil {
 		t.Fatal("expected failures")

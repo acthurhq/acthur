@@ -22,11 +22,11 @@ func TestWatcher_DetectsFileModification(t *testing.T) {
 
 	root := t.TempDir()
 	apiDir := filepath.Join(root, "services", "api")
-	os.MkdirAll(apiDir, 0755)
+	_ = os.MkdirAll(apiDir, 0755)
 
 	// Write initial file
 	srcFile := filepath.Join(apiDir, "handler.go")
-	os.WriteFile(srcFile, []byte("package api"), 0644)
+	_ = os.WriteFile(srcFile, []byte("package api"), 0644)
 
 	g := buildWatcherGraph(t, root)
 	w := watcher.New(g, root, 50*time.Millisecond)
@@ -42,7 +42,7 @@ func TestWatcher_DetectsFileModification(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Modify the file
-	os.WriteFile(srcFile, []byte("package api\n// modified"), 0644)
+	_ = os.WriteFile(srcFile, []byte("package api\n// modified"), 0644)
 
 	select {
 	case event := <-events:
@@ -64,7 +64,7 @@ func TestWatcher_DetectsFileCreation(t *testing.T) {
 
 	root := t.TempDir()
 	apiDir := filepath.Join(root, "services", "api")
-	os.MkdirAll(apiDir, 0755)
+	_ = os.MkdirAll(apiDir, 0755)
 
 	g := buildWatcherGraph(t, root)
 	w := watcher.New(g, root, 50*time.Millisecond)
@@ -82,7 +82,7 @@ func TestWatcher_DetectsFileCreation(t *testing.T) {
 
 	// Create a new file
 	newFile := filepath.Join(apiDir, "service.go")
-	os.WriteFile(newFile, []byte("package api"), 0644)
+	_ = os.WriteFile(newFile, []byte("package api"), 0644)
 
 	select {
 	case event := <-events:
@@ -102,10 +102,10 @@ func TestWatcher_IgnoresNodeModules(t *testing.T) {
 	root := t.TempDir()
 	apiDir := filepath.Join(root, "services", "api")
 	nodeModulesDir := filepath.Join(apiDir, "node_modules", "pkg")
-	os.MkdirAll(nodeModulesDir, 0755)
+	_ = os.MkdirAll(nodeModulesDir, 0755)
 
 	// Write initial real file
-	os.WriteFile(filepath.Join(apiDir, "handler.go"), []byte("package api"), 0644)
+	_ = os.WriteFile(filepath.Join(apiDir, "handler.go"), []byte("package api"), 0644)
 
 	g := buildWatcherGraph(t, root)
 	w := watcher.New(g, root, 50*time.Millisecond)
@@ -120,7 +120,7 @@ func TestWatcher_IgnoresNodeModules(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Write to node_modules — should be ignored
-	os.WriteFile(filepath.Join(nodeModulesDir, "index.js"), []byte("//ignored"), 0644)
+	_ = os.WriteFile(filepath.Join(nodeModulesDir, "index.js"), []byte("//ignored"), 0644)
 
 	select {
 	case e := <-events:
@@ -137,8 +137,8 @@ func TestWatcher_IgnoresNonSourceFiles(t *testing.T) {
 
 	root := t.TempDir()
 	apiDir := filepath.Join(root, "services", "api")
-	os.MkdirAll(apiDir, 0755)
-	os.WriteFile(filepath.Join(apiDir, "handler.go"), []byte("package api"), 0644)
+	_ = os.MkdirAll(apiDir, 0755)
+	_ = os.WriteFile(filepath.Join(apiDir, "handler.go"), []byte("package api"), 0644)
 
 	g := buildWatcherGraph(t, root)
 	w := watcher.New(g, root, 50*time.Millisecond)
@@ -151,7 +151,7 @@ func TestWatcher_IgnoresNonSourceFiles(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Write binary file — should be ignored
-	os.WriteFile(filepath.Join(apiDir, "app.exe"), []byte{0x00, 0x01, 0x02}, 0644)
+	_ = os.WriteFile(filepath.Join(apiDir, "app.exe"), []byte{0x00, 0x01, 0x02}, 0644)
 
 	select {
 	case e := <-events:
@@ -185,8 +185,8 @@ func TestWatcher_MultipleHandlers(t *testing.T) {
 
 	root := t.TempDir()
 	apiDir := filepath.Join(root, "services", "api")
-	os.MkdirAll(apiDir, 0755)
-	os.WriteFile(filepath.Join(apiDir, "main.go"), []byte("package main"), 0644)
+	_ = os.MkdirAll(apiDir, 0755)
+	_ = os.WriteFile(filepath.Join(apiDir, "main.go"), []byte("package main"), 0644)
 
 	g := buildWatcherGraph(t, root)
 	w := watcher.New(g, root, 50*time.Millisecond)
@@ -200,7 +200,7 @@ func TestWatcher_MultipleHandlers(t *testing.T) {
 	defer w.Stop()
 	time.Sleep(100 * time.Millisecond)
 
-	os.WriteFile(filepath.Join(apiDir, "main.go"), []byte("package main\n//updated"), 0644)
+	_ = os.WriteFile(filepath.Join(apiDir, "main.go"), []byte("package main\n//updated"), 0644)
 
 	select {
 	case <-ch1:
@@ -303,7 +303,7 @@ func buildWatcherGraph(t *testing.T, root string) *graph.Graph {
 	t.Helper()
 
 	apiDir := filepath.Join(root, "services", "api")
-	os.MkdirAll(apiDir, 0755)
+	_ = os.MkdirAll(apiDir, 0755)
 
 	cfg := &config.Config{
 		Project: "watchtest",

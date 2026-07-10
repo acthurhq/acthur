@@ -89,7 +89,7 @@ func (a *Adapter) SelfReloads() bool { return true }
 // BuildCommand installs production dependencies deterministically
 // (package-lock.json-pinned) ahead of `acthur build`/`acthur deploy`.
 // Plain JS has no compile step; this is the closest equivalent to
-// go:fiber's `go build` or rust:axum's `cargo build --release`.
+// The go:fiber's `go build` or rust:axum's `cargo build --release`.
 func (a *Adapter) BuildCommand(env map[string]string) adapter.Command {
 	return adapter.Command{
 		Bin:  "npm",
@@ -158,7 +158,7 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 	}
 	dockerfile, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Dockerfile: %w", err)
+		return nil, fmt.Errorf("rendering Dockerfile: %w", err)
 	}
 
 	return []adapter.File{

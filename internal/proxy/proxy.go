@@ -660,13 +660,3 @@ func pathPrefixFor(node *graph.Node) string {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// WebSocket support
-// ---------------------------------------------------------------------------
-
-// isWebSocketUpgrade returns true if the request is a WebSocket upgrade.
-// WebSocket connections (used by Vite/Next.js HMR) must be proxied
-// without modification.
-func isWebSocketUpgrade(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-}

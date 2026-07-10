@@ -92,9 +92,9 @@ func TestRunDeploy_GateFailure_BlocksDeploy(t *testing.T) {
 	dir := t.TempDir()
 	writeTestProject(t, dir)
 	root := filepath.Join(dir, "api")
-	os.MkdirAll(root, 0o755)
-	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/api\n\ngo 1.22\n"), 0o644)
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc main() { undefinedSymbol() }\n"), 0o644)
+	_ = os.MkdirAll(root, 0o755)
+	_ = os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/api\n\ngo 1.22\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc main() { undefinedSymbol() }\n"), 0o644)
 
 	var calls int
 	run := func(args ...string) (string, error) { calls++; return "", nil }
@@ -196,8 +196,8 @@ graph:
 		t.Fatal(err)
 	}
 	wd, _ := os.Getwd()
-	defer os.Chdir(wd)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(wd) }()
+	_ = os.Chdir(dir)
 
 	_, err := runDeploy(dir, "production", "", false, func(args ...string) (string, error) { return "", nil })
 	if err == nil || !strings.Contains(err.Error(), "production") || !strings.Contains(err.Error(), "staging") {

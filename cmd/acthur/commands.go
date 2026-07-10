@@ -1638,7 +1638,7 @@ process listings.`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), value)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), value)
 			return nil
 		},
 	})
@@ -1657,7 +1657,7 @@ process listings.`,
 				return nil
 			}
 			for _, k := range keys {
-				fmt.Fprintln(cmd.OutOrStdout(), k)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), k)
 			}
 			return nil
 		},

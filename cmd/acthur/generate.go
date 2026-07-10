@@ -26,7 +26,7 @@ import (
 // ---------------------------------------------------------------------------
 // acthur generate from-contract / model — Phase 7 Slice 3.
 // Resolves the project + target nodes the same way acthur add does, runs the
-// go:fiber pipeline, renumbers contract-range migrations to the next free
+// The go:fiber pipeline, renumbers contract-range migrations to the next free
 // slot, and persists through the write engine (generated.lock semantics).
 // ---------------------------------------------------------------------------
 

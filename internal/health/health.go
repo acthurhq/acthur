@@ -67,7 +67,7 @@ func (s *HTTPStrategy) Check(ctx context.Context, node *graph.Node) error {
 	if err != nil {
 		return fmt.Errorf("not ready: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("not healthy: status %d", resp.StatusCode)
 	}
@@ -96,7 +96,7 @@ func (s *TCPStrategy) Check(ctx context.Context, node *graph.Node) error {
 	if err != nil {
 		return fmt.Errorf("TCP connect to %s failed: %w", addr, err)
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 

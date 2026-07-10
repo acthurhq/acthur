@@ -90,14 +90,14 @@ func TestProxy_FlowRoute_StripsPrefixAndForwards(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14100/_flow/web/api/ping")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 from backend, got %d", resp.StatusCode)
@@ -124,7 +124,7 @@ func TestProxy_FlowRoute_NoRegistry_PassesThroughWithoutEnforcement(t *testing.T
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	// A request that would violate the (nonexistent) contract still passes.
@@ -132,7 +132,7 @@ func TestProxy_FlowRoute_NoRegistry_PassesThroughWithoutEnforcement(t *testing.T
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected pass-through 200 with no registry configured, got %d", resp.StatusCode)
 	}
@@ -143,7 +143,7 @@ func TestProxy_FlowRoute_ConformingRequestPassesThroughByteIdentical(t *testing.
 	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write(wantBody)
+		_, _ = w.Write(wantBody)
 	}))
 	defer apiBackend.Close()
 
@@ -162,20 +162,20 @@ func TestProxy_FlowRoute_ConformingRequestPassesThroughByteIdentical(t *testing.
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14102/_flow/web/api/ping")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for conforming request, got %d", resp.StatusCode)
 	}
 	var buf bytes.Buffer
-	buf.ReadFrom(resp.Body)
+	_, _ = buf.ReadFrom(resp.Body)
 	if !bytes.Equal(buf.Bytes(), wantBody) {
 		t.Fatalf("expected byte-identical body %q, got %q", wantBody, buf.Bytes())
 	}
@@ -206,7 +206,7 @@ func TestProxy_FlowRoute_DevMode_LogsViolationAndForwards(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	// /pong doesn't match any endpoint on the "pingapi" contract → violation.
@@ -214,7 +214,7 @@ func TestProxy_FlowRoute_DevMode_LogsViolationAndForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected dev mode to forward despite violation, got %d", resp.StatusCode)
@@ -248,14 +248,14 @@ func TestProxy_FlowRoute_StrictMode_Blocks422(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14104/_flow/web/api/pong")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 in strict mode, got %d", resp.StatusCode)
@@ -299,7 +299,7 @@ func TestProxy_FlowRoute_NoMatchingEndpoint_CountsAsViolation(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	// POST /ping matches no endpoint (only GET /ping is defined) → violation → 422.
@@ -307,7 +307,7 @@ func TestProxy_FlowRoute_NoMatchingEndpoint_CountsAsViolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for unmatched endpoint, got %d", resp.StatusCode)
 	}
@@ -322,7 +322,7 @@ func TestProxy_FlowRoute_ConformingResponse_PassesThroughByteIdentical(t *testin
 	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write(wantBody)
+		_, _ = w.Write(wantBody)
 	}))
 	defer apiBackend.Close()
 
@@ -341,20 +341,20 @@ func TestProxy_FlowRoute_ConformingResponse_PassesThroughByteIdentical(t *testin
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14106/_flow/web/api/ping")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for conforming response, got %d", resp.StatusCode)
 	}
 	var buf bytes.Buffer
-	buf.ReadFrom(resp.Body)
+	_, _ = buf.ReadFrom(resp.Body)
 	if !bytes.Equal(buf.Bytes(), wantBody) {
 		t.Fatalf("expected byte-identical body %q, got %q", wantBody, buf.Bytes())
 	}
@@ -365,7 +365,7 @@ func TestProxy_FlowRoute_ResponseViolation_DevMode_LogsWarningAndForwards(t *tes
 	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer apiBackend.Close()
 
@@ -388,20 +388,20 @@ func TestProxy_FlowRoute_ResponseViolation_DevMode_LogsWarningAndForwards(t *tes
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14107/_flow/web/api/ping")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected dev mode to forward the response despite the violation, got %d", resp.StatusCode)
 	}
 	var buf bytes.Buffer
-	buf.ReadFrom(resp.Body)
+	_, _ = buf.ReadFrom(resp.Body)
 	if buf.String() != "{}" {
 		t.Fatalf("expected the original response body to be forwarded unmodified, got %q", buf.String())
 	}
@@ -416,7 +416,7 @@ func TestProxy_FlowRoute_ResponseViolation_StrictMode_Returns502(t *testing.T) {
 	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer apiBackend.Close()
 
@@ -435,14 +435,14 @@ func TestProxy_FlowRoute_ResponseViolation_StrictMode_Returns502(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatalf("proxy start failed: %v", err)
 	}
-	defer p.Stop()
+	defer func() { _ = p.Stop() }()
 	time.Sleep(100 * time.Millisecond)
 
 	resp, err := http.Get("http://localhost:14108/_flow/web/api/ping")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502 in strict mode for a response contract violation, got %d", resp.StatusCode)

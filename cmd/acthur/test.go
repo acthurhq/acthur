@@ -22,10 +22,10 @@ func runTest(root string, g *graph.Graph, service string, out io.Writer) error {
 
 	var failed []string
 	for _, node := range nodes {
-		fmt.Fprintf(out, "--- go test ./... (%s) ---\n", node)
+		_, _ = fmt.Fprintf(out, "--- go test ./... (%s) ---\n", node)
 		if err := deploy.GoStream(root, node, out, nil, "test", "./..."); err != nil {
 			failed = append(failed, node)
-			fmt.Fprintf(out, "FAIL %s: %v\n", node, err)
+			_, _ = fmt.Fprintf(out, "FAIL %s: %v\n", node, err)
 		}
 	}
 	if len(failed) > 0 {

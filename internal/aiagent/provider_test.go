@@ -16,7 +16,7 @@ func TestResolveAPIKey_ExpandsEnvVarSyntax(t *testing.T) {
 }
 
 func TestResolveAPIKey_FallsBackToConventionalEnvVar(t *testing.T) {
-	os.Unsetenv("ANTHROPIC_API_KEY")
+	_ = os.Unsetenv("ANTHROPIC_API_KEY")
 	t.Setenv("ANTHROPIC_API_KEY", "fallback-key")
 	got := ResolveAPIKey(config.AIConfig{Provider: config.ProviderClaude})
 	if got != "fallback-key" {
@@ -32,7 +32,7 @@ func TestResolveAPIKey_OllamaNeedsNoKey(t *testing.T) {
 }
 
 func TestResolveAPIKey_EmptyWhenNothingSet(t *testing.T) {
-	os.Unsetenv("ANTHROPIC_API_KEY")
+	_ = os.Unsetenv("ANTHROPIC_API_KEY")
 	got := ResolveAPIKey(config.AIConfig{Provider: config.ProviderClaude})
 	if got != "" {
 		t.Fatalf("got %q, want empty", got)
@@ -47,7 +47,7 @@ func TestResolveProvider_NoProviderConfigured(t *testing.T) {
 }
 
 func TestResolveProvider_ClaudeMissingKey(t *testing.T) {
-	os.Unsetenv("ANTHROPIC_API_KEY")
+	_ = os.Unsetenv("ANTHROPIC_API_KEY")
 	_, err := ResolveProvider(config.AIConfig{Provider: config.ProviderClaude})
 	if err == nil {
 		t.Fatal("expected error for missing API key, got nil")

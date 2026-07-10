@@ -1,5 +1,5 @@
 // Package admin is the built-in "admin" plugin (Phase 9, tracker #65). For
-// go:fiber service nodes it generates internal/admin/admin.go: a
+// The go:fiber service nodes it generates internal/admin/admin.go: a
 // read-only operational dashboard (identity/uptime + this process's
 // feature-flag state) at GET /admin (HTML) and /admin/api/* (JSON).
 //
