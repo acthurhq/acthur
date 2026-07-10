@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/plugin/builtin/migrations"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/migrations"
 )
 
 // fakeExecutor records every (databaseURL, sql) call it receives, and

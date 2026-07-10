@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/acthur/acthur/internal/deploy"
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/graph"
 )
 
 // buildOutputDir is where production binaries land, relative to the

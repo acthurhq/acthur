@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/output"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // ---------------------------------------------------------------------------

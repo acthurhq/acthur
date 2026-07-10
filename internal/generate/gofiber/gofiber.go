@@ -3,8 +3,8 @@ package gofiber
 import (
 	"fmt"
 
-	"github.com/acthur/acthur/internal/contract"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // Generate turns a parsed contract into the full go:fiber file set for the

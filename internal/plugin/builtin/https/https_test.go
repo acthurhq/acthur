@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acthur/acthur/internal/plugin"
-	"github.com/acthur/acthur/internal/plugin/builtin/https"
+	"github.com/acthurhq/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/https"
 )
 
 func TestEnsureDevCert_GeneratesCAAndLeaf(t *testing.T) {

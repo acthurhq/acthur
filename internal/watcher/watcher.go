@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------

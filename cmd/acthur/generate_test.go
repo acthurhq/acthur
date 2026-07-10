@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/generate"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/generate"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // copyUsersContract copies the vetangle users contract into dir/contracts/.

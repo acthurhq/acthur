@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/acthur/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/deploy"
 )
 
 // ServiceArtifact describes one Dockerizable service node the target must

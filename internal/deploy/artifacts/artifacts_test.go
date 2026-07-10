@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/deploy/artifacts"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/deploy/artifacts"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/plugin"
 
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber" // register go:fiber
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"  // register db:postgres
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber" // register go:fiber
+	_ "github.com/acthurhq/acthur/internal/adapter/infra/postgres"  // register db:postgres
 
 	"gopkg.in/yaml.v3"
 )

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/frontend/astro" // register ui:astro
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/frontend/astro" // register ui:astro
 )
 
 func mustResolve(t *testing.T) adapter.Adapter {

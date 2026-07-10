@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/contract"
-	"github.com/acthur/acthur/internal/generate/docsgen"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/generate/docsgen"
 )
 
 func repoRoot(t *testing.T) string {

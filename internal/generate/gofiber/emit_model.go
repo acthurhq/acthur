@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // GenerateModel turns `acthur generate model <Name> <field:type>...` input

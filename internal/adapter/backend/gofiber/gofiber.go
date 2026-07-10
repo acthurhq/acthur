@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"text/template"
 
-	"github.com/acthur/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/adapter"
 )
 
 //go:embed templates/go.mod.tmpl

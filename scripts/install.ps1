@@ -10,7 +10,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ACTHUR_REPO  = "acthur/acthur"
+$ACTHUR_REPO  = "acthurhq/acthur"
 $ACTHUR_DIR   = "$env:APPDATA\acthur"
 $ACTHUR_BIN   = "$ACTHUR_DIR\bin"
 $ACTHUR_EXE   = "$ACTHUR_BIN\acthur.exe"

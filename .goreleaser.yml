@@ -29,7 +29,7 @@ builds:
         goarch: arm64
     ldflags:
       - -s -w
-      - -X github.com/acthur/acthur/cmd/acthur.Version={{.Version}}
+      - -X github.com/acthurhq/acthur/cmd/acthur.Version={{.Version}}
     flags:
       - -trimpath
 
@@ -63,7 +63,7 @@ changelog:
 
 release:
   github:
-    owner: acthur
+    owner: acthurhq
     name: acthur
   draft: false
   prerelease: auto
@@ -74,7 +74,7 @@ brews:
     homepage: https://acthur.dev
     description: Runtime Graph Operating System with Pluggable Infrastructure Nodes
     repository:
-      owner: acthur
+      owner: acthurhq
       name: homebrew-tap
     install: |
       bin.install "acthur"
@@ -86,6 +86,6 @@ scoops:
     homepage: https://acthur.dev
     description: Runtime Graph Operating System with Pluggable Infrastructure Nodes
     repository:
-      owner: acthur
+      owner: acthurhq
       name: scoop-bucket
     license: MIT

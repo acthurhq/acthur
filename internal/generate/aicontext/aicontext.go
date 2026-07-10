@@ -17,10 +17,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/contract"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // Tool identifies which AI coding tool's context file convention to emit.

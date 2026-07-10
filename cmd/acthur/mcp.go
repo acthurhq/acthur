@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/contract"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/health"
-	"github.com/acthur/acthur/internal/mcp"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/health"
+	"github.com/acthurhq/acthur/internal/mcp"
 )
 
 // loadMCPContext loads acthur.yml, builds the graph, and loads the contract

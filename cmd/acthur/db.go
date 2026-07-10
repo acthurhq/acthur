@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/acthur/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/deploy"
 )
 
 // studioContainerName is fixed and namespaced so a leftover container from a

@@ -6,7 +6,7 @@ package postgres
 import (
 	"fmt"
 
-	"github.com/acthur/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/adapter"
 )
 
 // Adapter implements adapter.Adapter (core) and adapter.Containerized for db:postgres.

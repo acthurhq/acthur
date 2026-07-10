@@ -66,7 +66,7 @@ func SetOutput(out, err io.Writer) {
 func Banner() {
 	_, _ = fmt.Fprintln(stdout)
 	_, _ = colorBold.Fprintln(stdout, "  ✦  Acthur — Runtime Graph Operating System")
-	_, _ = colorMuted.Fprintln(stdout, "     github.com/acthur/acthur")
+	_, _ = colorMuted.Fprintln(stdout, "     github.com/acthurhq/acthur")
 	_, _ = fmt.Fprintln(stdout)
 }
 

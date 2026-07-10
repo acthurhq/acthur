@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/chi"     // register go:chi
-	_ "github.com/acthur/acthur/internal/adapter/backend/gin"     // register go:gin
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber" // register go:fiber
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"  // register db:postgres
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/chi"     // register go:chi
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gin"     // register go:gin
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber" // register go:fiber
+	_ "github.com/acthurhq/acthur/internal/adapter/infra/postgres"  // register db:postgres
 )
 
 // ---------------------------------------------------------------------------

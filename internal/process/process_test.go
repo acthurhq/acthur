@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acthur/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/process"
 )
 
 // ---------------------------------------------------------------------------

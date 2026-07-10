@@ -6,7 +6,7 @@
 package rbac
 
 import (
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 type rbacPlugin struct{}

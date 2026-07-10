@@ -17,8 +17,8 @@ import (
 	"sort"
 	"text/template"
 
-	acthurflags "github.com/acthur/acthur/internal/flags"
-	"github.com/acthur/acthur/internal/plugin"
+	acthurflags "github.com/acthurhq/acthur/internal/flags"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 //go:embed templates/flags.go.tmpl

@@ -12,37 +12,37 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/chi"
-	_ "github.com/acthur/acthur/internal/adapter/backend/fastify"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gin"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
-	_ "github.com/acthur/acthur/internal/adapter/backend/rustaxum"
-	_ "github.com/acthur/acthur/internal/adapter/frontend/astro"
-	_ "github.com/acthur/acthur/internal/adapter/frontend/next"
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/contract"
-	"github.com/acthur/acthur/internal/deploy"
-	"github.com/acthur/acthur/internal/doctor"
-	"github.com/acthur/acthur/internal/engine"
-	"github.com/acthur/acthur/internal/flags"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/health"
-	"github.com/acthur/acthur/internal/output"
-	"github.com/acthur/acthur/internal/plugin"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/admin"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/auth"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/featureflags"
-	devhttps "github.com/acthur/acthur/internal/plugin/builtin/https"
-	"github.com/acthur/acthur/internal/plugin/builtin/migrations"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/multitenancy"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/observability"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/rbac"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/security"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/testplugin"
-	"github.com/acthur/acthur/internal/process"
-	"github.com/acthur/acthur/internal/secrets"
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/chi"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/fastify"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gin"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/rustaxum"
+	_ "github.com/acthurhq/acthur/internal/adapter/frontend/astro"
+	_ "github.com/acthurhq/acthur/internal/adapter/frontend/next"
+	_ "github.com/acthurhq/acthur/internal/adapter/infra/postgres"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/doctor"
+	"github.com/acthurhq/acthur/internal/engine"
+	"github.com/acthurhq/acthur/internal/flags"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/health"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/plugin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/admin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/auth"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/featureflags"
+	devhttps "github.com/acthurhq/acthur/internal/plugin/builtin/https"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/migrations"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/multitenancy"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/observability"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/rbac"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/security"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/testplugin"
+	"github.com/acthurhq/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -1856,7 +1856,7 @@ func init() {
 // ---------------------------------------------------------------------------
 
 // Version is set at build time via ldflags:
-// go build -ldflags "-X github.com/acthur/acthur/cmd.Version=0.1.0"
+// go build -ldflags "-X github.com/acthurhq/acthur/cmd.Version=0.1.0"
 var Version = "dev"
 
 var versionCmd = &cobra.Command{
@@ -1866,7 +1866,7 @@ var versionCmd = &cobra.Command{
 		output.Table([][2]string{
 			{"Version:", Version},
 			{"Docs:", "https://acthur.dev"},
-			{"Source:", "https://github.com/acthur/acthur"},
+			{"Source:", "https://github.com/acthurhq/acthur"},
 		})
 		fmt.Println()
 	},

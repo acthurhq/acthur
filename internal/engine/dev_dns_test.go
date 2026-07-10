@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/graph"
 )
 
 // alwaysMissingLookup reports every hostname as unresolved — the seam for

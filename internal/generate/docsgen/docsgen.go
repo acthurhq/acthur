@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/acthur/acthur/internal/contract"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // Generate renders one docs/api/<name>.md file per contract in reg, plus a

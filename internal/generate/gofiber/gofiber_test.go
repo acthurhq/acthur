@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	gofiberadapter "github.com/acthur/acthur/internal/adapter/backend/gofiber"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/contract"
-	gengofiber "github.com/acthur/acthur/internal/generate/gofiber"
-	"github.com/acthur/acthur/internal/plugin"
-	"github.com/acthur/acthur/internal/scaffold"
+	gofiberadapter "github.com/acthurhq/acthur/internal/adapter/backend/gofiber"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
+	gengofiber "github.com/acthurhq/acthur/internal/generate/gofiber"
+	"github.com/acthurhq/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/scaffold"
 )
 
 // repoRoot walks up from the test's working directory to the module root.

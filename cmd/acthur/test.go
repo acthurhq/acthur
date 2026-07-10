@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/acthur/acthur/internal/deploy"
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/graph"
 )
 
 // runTest runs `go test ./...`, streamed live to out, in every buildable

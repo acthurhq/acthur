@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/fastify" // register node:fastify
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/fastify" // register node:fastify
 )
 
 func mustResolve(t *testing.T) adapter.Adapter {

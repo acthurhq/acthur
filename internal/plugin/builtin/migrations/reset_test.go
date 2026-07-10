@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/plugin/builtin/migrations"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/migrations"
 )
 
 // TestReset_RunsStepsInOrder: down-all, then up-all, then seed — and each

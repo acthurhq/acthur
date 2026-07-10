@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
-	"github.com/acthur/acthur/internal/config"
-	acthurflags "github.com/acthur/acthur/internal/flags"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/plugin"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/featureflags"
-	"github.com/acthur/acthur/internal/scaffold"
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber"
+	"github.com/acthurhq/acthur/internal/config"
+	acthurflags "github.com/acthurhq/acthur/internal/flags"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/plugin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/featureflags"
+	"github.com/acthurhq/acthur/internal/scaffold"
 )
 
 func minimalConfig() *config.Config {

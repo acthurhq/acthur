@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/graph"
 )
 
 // KernelAPIImpl is the kernel's real, concrete KernelAPI implementation.

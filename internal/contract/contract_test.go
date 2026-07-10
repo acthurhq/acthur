@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/contract"
 )
 
 // ---------------------------------------------------------------------------

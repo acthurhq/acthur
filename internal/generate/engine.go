@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin"
 	"gopkg.in/yaml.v3"
 )
 

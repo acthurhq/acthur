@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // resetPluginProcessState clears the process-global plugin-kernel state

@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/contract"
 )
 
 // fieldSpec is one contract field mapped to Go.

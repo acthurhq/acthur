@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/graph"
 )
 
 // nodeInfo is the wire shape of one graph node in graph_query's result.

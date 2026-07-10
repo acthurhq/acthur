@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	"github.com/acthur/acthur/internal/container"
+	"github.com/acthurhq/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/container"
 )
 
 func TestToRunArgs_ProjectsContainerSpecToDockerRunArgs(t *testing.T) {

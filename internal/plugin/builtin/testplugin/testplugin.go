@@ -6,7 +6,7 @@
 package testplugin
 
 import (
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 type testPlugin struct{}

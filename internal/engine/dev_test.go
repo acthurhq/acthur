@@ -8,16 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acthur/acthur/internal/adapter"
-	"github.com/acthur/acthur/internal/adapter/backend/gofiber"
-	"github.com/acthur/acthur/internal/adapter/infra/postgres"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/flags"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/health"
-	"github.com/acthur/acthur/internal/plugin"
-	"github.com/acthur/acthur/internal/process"
-	"github.com/acthur/acthur/internal/secrets"
+	"github.com/acthurhq/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/adapter/backend/gofiber"
+	"github.com/acthurhq/acthur/internal/adapter/infra/postgres"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/flags"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/health"
+	"github.com/acthurhq/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/secrets"
 )
 
 type fakeDevResolver struct {

@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
 )
 
 func TestProjectInfoTool_Summarizes(t *testing.T) {

@@ -11,7 +11,7 @@
 
 set -e
 
-ACTHUR_REPO="acthur/acthur"
+ACTHUR_REPO="acthurhq/acthur"
 ACTHUR_BIN_DIR="${HOME}/.acthur/bin"
 ACTHUR_BIN="${ACTHUR_BIN_DIR}/acthur"
 GITHUB_API="https://api.github.com/repos/${ACTHUR_REPO}/releases/latest"

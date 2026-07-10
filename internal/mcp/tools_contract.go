@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/contract"
 )
 
 type contractSummary struct {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/acthur/acthur/internal/aiagent"
+	"github.com/acthurhq/acthur/internal/aiagent"
 )
 
 // agentDeps holds `acthur agent`'s seams: root directory, output stream,

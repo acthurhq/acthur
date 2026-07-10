@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/acthur/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/process"
 )
 
 func TestFileLogSink_AppendsLinesToPerNodeFile(t *testing.T) {

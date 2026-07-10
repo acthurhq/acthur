@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/acthur/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/rustaxum" // register rust:axum
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/rustaxum" // register rust:axum
 )
 
 func mustResolve(t *testing.T) adapter.Adapter {

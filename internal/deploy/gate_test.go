@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/deploy"
 )
 
 // writeGoNode writes a minimal buildable (and optionally test-failing) Go

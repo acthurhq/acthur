@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/acthur/acthur/internal/adapter"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/output"
-	"github.com/acthur/acthur/internal/scaffold"
+	"github.com/acthurhq/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/scaffold"
 	"github.com/mattn/go-isatty"
 )
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/aiagent"
+	"github.com/acthurhq/acthur/internal/aiagent"
 )
 
 // fakeProvider is an injectable aiagent.Provider — no real network call.

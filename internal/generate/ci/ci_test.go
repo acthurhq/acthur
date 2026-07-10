@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/generate/ci"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/generate/ci"
 	"gopkg.in/yaml.v3"
 )
 

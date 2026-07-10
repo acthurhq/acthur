@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/acthur/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/adapter"
 )
 
 // Name returns the container name for a node, scoped by project so two

@@ -58,13 +58,18 @@ real Docker, real Postgres — not simulated.
     legitimately includes an unimplemented adapter like `cache:redis` for a
     node the caller doesn't intend to deploy yet) — flagged to the user
     rather than changed unilaterally.
-  - Finding 5 (installer/release namespace `github.com/acthur/acthur`):
-    unchanged. Renaming the module path and org touches `go.mod`, every
-    import, GoReleaser, install scripts, and docs — a one-way, highly
-    disruptive change that needs the user's canonical org/module decision
-    first.
   - P2 plugin discovery outside a project: unchanged, low severity, not
     revisited this pass.
+
+## Update — 2026-07-10, later same day (Finding 5 resolved)
+
+The user confirmed the canonical GitHub org: **acthurhq**. Finding 5
+(installer/release namespace) is now closed: `go.mod`'s module path, every
+internal `github.com/acthur/acthur/...` import (~1283 files), `.goreleaser.yml`
+(release/homebrew/scoop `owner:` fields and the version ldflags path),
+`scripts/install.sh`/`scripts/install.ps1`'s `ACTHUR_REPO`, and `CLAUDE.md`
+were all repointed to `github.com/acthurhq/acthur`. `go build ./... && go vet
+./... && go test ./...` green after the rename.
 
 Boundary review (repo-split readiness, per project convention): no
 `internal/*` package imports `cmd/*`; no adapter package imports a sibling

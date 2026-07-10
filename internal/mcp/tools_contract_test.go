@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/contract"
 )
 
 func testRegistry(t *testing.T) *contract.Registry {

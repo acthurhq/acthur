@@ -1,4 +1,4 @@
-module github.com/acthur/acthur
+module github.com/acthurhq/acthur
 
 go 1.22
 

@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/acthur/acthur/internal/plugin/builtin/admin"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/featureflags"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/https"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/observability"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/security"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/admin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/featureflags"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/https"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/observability"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/security"
 )
 
 // TestRunAdd_EcosystemPlugins_RoundTrip proves the full CLI-level flow

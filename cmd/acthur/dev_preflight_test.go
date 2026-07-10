@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/doctor"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/doctor"
 )
 
 // TestDevDoctorPreflight_AbortsOnBlockingFailure asserts `acthur dev` refuses

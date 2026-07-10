@@ -5,13 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/plugin"
-	"github.com/acthur/acthur/internal/plugin/builtin/migrations"
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber"
+	_ "github.com/acthurhq/acthur/internal/adapter/infra/postgres"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/migrations"
 )
 
 // baseConfig returns a minimal go:fiber + db:postgres project used across

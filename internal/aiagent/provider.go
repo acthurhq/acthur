@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/acthur/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/config"
 )
 
 // defaultEnvVar maps a provider to the conventional environment variable

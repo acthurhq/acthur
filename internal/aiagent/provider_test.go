@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/config"
 )
 
 func TestResolveAPIKey_ExpandsEnvVarSyntax(t *testing.T) {

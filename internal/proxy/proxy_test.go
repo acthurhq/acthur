@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/proxy"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/proxy"
 )
 
 // ---------------------------------------------------------------------------

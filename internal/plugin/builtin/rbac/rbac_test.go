@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/plugin"
-	_ "github.com/acthur/acthur/internal/plugin/builtin/rbac"
+	"github.com/acthurhq/acthur/internal/plugin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/rbac"
 )
 
 // stubAuthPlugin stands in for the real "auth" plugin, which is being built

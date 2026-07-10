@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/plugin"
 	"gopkg.in/yaml.v3"
 )
 
 // goVersion pins the Go toolchain version the generated workflow installs.
-// Matches this repo's go.mod (module github.com/acthur/acthur, go 1.22) —
+// Matches this repo's go.mod (module github.com/acthurhq/acthur, go 1.22) —
 // acthur itself is a Go binary regardless of which adapters a project uses,
 // since `acthur build`/`acthur test` drive every adapter's own toolchain.
 const goVersion = "1.22"

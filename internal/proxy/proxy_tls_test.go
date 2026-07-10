@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acthur/acthur/internal/plugin/builtin/https"
-	"github.com/acthur/acthur/internal/proxy"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/https"
+	"github.com/acthurhq/acthur/internal/proxy"
 )
 
 // TestProxy_WithTLS_ServesRealHTTPS proves the WithTLS seam end-to-end: a

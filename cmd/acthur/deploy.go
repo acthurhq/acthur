@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/acthur/acthur/internal/deploy"
-	"github.com/acthur/acthur/internal/deploy/artifacts"
-	"github.com/acthur/acthur/internal/deploy/coolify"
-	"github.com/acthur/acthur/internal/deploy/fly"
-	"github.com/acthur/acthur/internal/deploy/railway"
-	"github.com/acthur/acthur/internal/deploy/render"
-	"github.com/acthur/acthur/internal/generate"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/output"
-	"github.com/acthur/acthur/internal/plugin"
-	"github.com/acthur/acthur/internal/secrets"
+	"github.com/acthurhq/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/deploy/artifacts"
+	"github.com/acthurhq/acthur/internal/deploy/coolify"
+	"github.com/acthurhq/acthur/internal/deploy/fly"
+	"github.com/acthurhq/acthur/internal/deploy/railway"
+	"github.com/acthurhq/acthur/internal/deploy/render"
+	"github.com/acthurhq/acthur/internal/generate"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/secrets"
 )
 
 // ---------------------------------------------------------------------------

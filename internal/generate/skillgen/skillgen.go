@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // nameRe matches a valid skill name: lowercase kebab-case, matching the

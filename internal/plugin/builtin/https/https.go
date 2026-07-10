@@ -3,7 +3,7 @@ package https
 import (
 	"fmt"
 
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 type httpsPlugin struct{}
