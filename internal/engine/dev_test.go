@@ -503,6 +503,50 @@ func TestStartInfraNode_UsesDeclaredHealthcheckForReadiness(t *testing.T) {
 	}
 }
 
+func TestStartInfraNode_HealthcheckTargetsProjectScopedContainerName(t *testing.T) {
+	node := &graph.Node{
+		ID:      "db",
+		Type:    config.NodeTypeInfra,
+		Adapter: "db:custom",
+	}
+	g := graph.NewTestGraph(map[string]*graph.Node{"db": node})
+	checker := &fakeHealthChecker{}
+	eng := NewDevEngine(&config.Config{Project: "shop"}, g, fakeDevResolver{
+		adapters: map[string]adapter.Adapter{
+			"db:custom": fakeContainerAdapter{
+				healthcheck: adapter.Healthcheck{
+					Test: []string{"CMD-SHELL", "pg_isready -U postgres"},
+				},
+			},
+		},
+	})
+	eng.pm = &fakeProcessManager{}
+	eng.checker = checker
+
+	if err := eng.startInfraNode(node); err != nil {
+		t.Fatalf("start infra node: %v", err)
+	}
+
+	exec, ok := checker.strategy.(*health.ExecStrategy)
+	if !ok {
+		t.Fatalf("expected exec strategy, got %T", checker.strategy)
+	}
+	for _, arg := range exec.Args {
+		if arg == "acthur-db" {
+			t.Fatalf("exec healthcheck targeted unscoped container name %q, want project-scoped %q; args=%v", arg, "acthur-shop-db", exec.Args)
+		}
+	}
+	found := false
+	for _, arg := range exec.Args {
+		if arg == "acthur-shop-db" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected exec healthcheck to target %q, got args=%v", "acthur-shop-db", exec.Args)
+	}
+}
+
 func TestStartInfraNode_FallsBackToTCPReadinessWithoutHealthcheck(t *testing.T) {
 	node := &graph.Node{
 		ID:      "db",
@@ -624,6 +668,7 @@ func (f *fakeProcessManager) StopAll(nodeIDs []string) {
 
 type fakeHealthChecker struct {
 	strategyName string
+	strategy     health.Strategy
 	err          error
 }
 
@@ -633,6 +678,7 @@ func (f *fakeHealthChecker) WaitFor(ctx context.Context, node *graph.Node, timeo
 
 func (f *fakeHealthChecker) WaitForStrategy(ctx context.Context, node *graph.Node, strategy health.Strategy, timeout time.Duration) error {
 	f.strategyName = strategy.Name()
+	f.strategy = strategy
 	return f.err
 }
 

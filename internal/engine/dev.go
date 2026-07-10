@@ -371,7 +371,7 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	e.writePIDFile(node.ID, p)
 	e.emit(plugin.EventAfterNodeStart, node, nil)
 
-	strategy := health.InfraStrategy("acthur-"+node.ID, spec.Healthcheck.Test, nil)
+	strategy := health.InfraStrategy(container.Name(e.cfg.Project, node.ID), spec.Healthcheck.Test, nil)
 	if err := e.checker.WaitForStrategy(e.ctx, node, strategy, 60*time.Second); err != nil {
 		e.graph.SetState(node.ID, graph.StateDegraded)
 		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
