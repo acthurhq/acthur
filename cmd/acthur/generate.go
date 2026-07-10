@@ -82,7 +82,10 @@ func runGenerateFromContract(root, contractArg, nodeFlag string) ([]generate.Res
 		if err != nil {
 			return nil, fmt.Errorf("generating from %s for node %q: %w", filepath.Base(path), node.ID, err)
 		}
-		files = renumberMigrations(root, files)
+		files, err = renumberMigrations(root, files)
+		if err != nil {
+			return nil, err
+		}
 		results, err := generate.WriteFiles(root, node.ID, files)
 		if err != nil {
 			return nil, err
@@ -128,7 +131,10 @@ func runGenerateModel(root, name string, fieldArgs []string, nodeFlag string) ([
 		if err != nil {
 			return nil, err
 		}
-		files = renumberMigrations(root, files)
+		files, err = renumberMigrations(root, files)
+		if err != nil {
+			return nil, err
+		}
 		results, err := generate.WriteFiles(root, node.ID, files)
 		if err != nil {
 			return nil, err
@@ -140,12 +146,24 @@ func runGenerateModel(root, name string, fieldArgs []string, nodeFlag string) ([
 
 var migrationName = regexp.MustCompile(`^(\d{4})_(.+)\.(up|down)\.sql$`)
 
+// contractMigrationRangeStart/End are the reserved version-number band for
+// contract-generated migrations (acthur-prd.md Phase 7); plugin migrations
+// (e.g. auth) reserve their own bands below it (e.g. 0100-0199).
+const (
+	contractMigrationRangeStart = 400
+	contractMigrationRangeEnd   = 499
+)
+
 // renumberMigrations rewrites the pipeline's fixed 0400 migration numbers to
 // real ones: a migration whose description already exists in the project's
-// migrations dir reuses its number (regeneration must not burn versions);
-// a new description takes the next free number — golang-migrate rejects
-// duplicate versions, so two contracts can never share one.
-func renumberMigrations(root string, files []plugin.GeneratedFile) []plugin.GeneratedFile {
+// migrations dir *within the contract range* reuses its number
+// (regeneration must not burn versions); a new description takes the next
+// free number in the range — golang-migrate rejects duplicate versions, so
+// two contracts can never share one. A description that collides with an
+// existing migration *outside* the contract range (e.g. a plugin's reserved
+// band) is a hard error: reusing that number would silently overwrite the
+// plugin's migration content on disk via generated.lock.
+func renumberMigrations(root string, files []plugin.GeneratedFile) ([]plugin.GeneratedFile, error) {
 	existing := map[string]int{} // description → number
 	used := map[int]bool{}
 	entries, _ := os.ReadDir(filepath.Join(root, "migrations"))
@@ -159,13 +177,13 @@ func renumberMigrations(root string, files []plugin.GeneratedFile) []plugin.Gene
 
 	assigned := map[string]int{}
 	nextFree := func() int {
-		for n := 400; n <= 499; n++ {
+		for n := contractMigrationRangeStart; n <= contractMigrationRangeEnd; n++ {
 			if !used[n] {
 				used[n] = true
 				return n
 			}
 		}
-		return 500 // range exhausted; still unique, surfaced by review
+		return contractMigrationRangeEnd + 1 // range exhausted; still unique, surfaced by review
 	}
 
 	out := make([]plugin.GeneratedFile, len(files))
@@ -180,6 +198,12 @@ func renumberMigrations(root string, files []plugin.GeneratedFile) []plugin.Gene
 		num, ok := assigned[desc]
 		if !ok {
 			if n, exists := existing[desc]; exists {
+				if n < contractMigrationRangeStart || n > contractMigrationRangeEnd {
+					return nil, fmt.Errorf(
+						"contract migration %q collides with existing migration %04d_%s outside the contract range (%d-%d) — rename the contract field/model to avoid reusing a plugin-reserved migration",
+						desc, n, desc, contractMigrationRangeStart, contractMigrationRangeEnd,
+					)
+				}
 				num = n
 			} else {
 				num = nextFree()
@@ -188,7 +212,7 @@ func renumberMigrations(root string, files []plugin.GeneratedFile) []plugin.Gene
 		}
 		out[i].Path = fmt.Sprintf("migrations/%04d_%s.%s.sql", num, desc, m[3])
 	}
-	return out
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

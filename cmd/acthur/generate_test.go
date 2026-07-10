@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/acthur/acthur/internal/generate"
+	"github.com/acthur/acthur/internal/plugin"
 )
 
 // copyUsersContract copies the vetangle users contract into dir/contracts/.
@@ -295,5 +296,68 @@ func TestRunGenerateSkill_InvalidName_Errors(t *testing.T) {
 
 	if _, err := runGenerateSkill(dir, "Not Valid"); err == nil {
 		t.Fatal("expected error for invalid skill name")
+	}
+}
+
+// TestRenumberMigrations_DescriptionCollisionOutsideContractRange_Errors:
+// a plugin (e.g. auth) reserves migrations/0100-0199 with a description
+// that happens to match a contract-generated migration's description
+// (e.g. both called "users"). renumberMigrations must not silently reuse
+// 0100 for the contract-range (0400-0499) file — that would overwrite the
+// plugin's migration content on disk via generated.lock. It must instead
+// report the collision so the caller can fail loudly.
+func TestRenumberMigrations_DescriptionCollisionOutsideContractRange_Errors(t *testing.T) {
+	dir := t.TempDir()
+	migrationsDir := filepath.Join(dir, "migrations")
+	if err := os.MkdirAll(migrationsDir, 0o755); err != nil {
+		t.Fatalf("mkdir migrations: %v", err)
+	}
+	// Simulate an existing plugin-owned migration in the reserved
+	// auth range (0100-0199) with the same description a contract
+	// generator would also produce.
+	for _, suffix := range []string{"up", "down"} {
+		path := filepath.Join(migrationsDir, "0100_users."+suffix+".sql")
+		if err := os.WriteFile(path, []byte("-- auth plugin migration\n"), 0o644); err != nil {
+			t.Fatalf("write existing migration: %v", err)
+		}
+	}
+
+	files := []plugin.GeneratedFile{
+		{Path: "migrations/0400_users.up.sql", Content: []byte("-- contract migration up\n")},
+		{Path: "migrations/0400_users.down.sql", Content: []byte("-- contract migration down\n")},
+	}
+
+	if _, err := renumberMigrations(dir, files); err == nil {
+		t.Fatal("expected renumberMigrations to error on a description collision outside the contract range")
+	}
+}
+
+// TestRenumberMigrations_ReusesNumberWithinContractRange: regenerating the
+// same contract-derived migration (description already assigned inside
+// 0400-0499) must still reuse its number, not burn a new one.
+func TestRenumberMigrations_ReusesNumberWithinContractRange(t *testing.T) {
+	dir := t.TempDir()
+	migrationsDir := filepath.Join(dir, "migrations")
+	if err := os.MkdirAll(migrationsDir, 0o755); err != nil {
+		t.Fatalf("mkdir migrations: %v", err)
+	}
+	for _, suffix := range []string{"up", "down"} {
+		path := filepath.Join(migrationsDir, "0400_users."+suffix+".sql")
+		if err := os.WriteFile(path, []byte("-- prior contract migration\n"), 0o644); err != nil {
+			t.Fatalf("write existing migration: %v", err)
+		}
+	}
+
+	files := []plugin.GeneratedFile{
+		{Path: "migrations/0400_users.up.sql", Content: []byte("-- regenerated up\n")},
+		{Path: "migrations/0400_users.down.sql", Content: []byte("-- regenerated down\n")},
+	}
+
+	out, err := renumberMigrations(dir, files)
+	if err != nil {
+		t.Fatalf("renumberMigrations: %v", err)
+	}
+	if out[0].Path != "migrations/0400_users.up.sql" {
+		t.Fatalf("expected reused number 0400, got %q", out[0].Path)
 	}
 }
