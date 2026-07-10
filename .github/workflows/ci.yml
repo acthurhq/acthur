@@ -33,6 +33,7 @@ jobs:
     name: Test (Go ${{ matrix.go }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         go: ["1.22", "1.23"]
         # macos-13 (Intel/x86_64), not macos-latest (Apple Silicon/arm64):
