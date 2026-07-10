@@ -2,6 +2,76 @@
 
 Date: 2026-07-06
 
+## Update — 2026-07-10 (findings closed since this audit)
+
+Re-verified live against a real scaffolded project (`final-witness`: go:fiber +
+db:postgres + migrations/auth/feature-flags/observability/security plugins),
+real Docker, real Postgres — not simulated.
+
+- **P0 wrong-container health check (Finding 1 below): fixed.** `startInfraNode`
+  (`internal/engine/dev.go`) now builds both the docker-run name and the exec
+  healthcheck target from the same `container.Name(project, nodeID)` call.
+  Regression test: `TestStartInfraNode_HealthcheckTargetsProjectScopedContainerName`
+  (`internal/engine/dev_test.go`). Live-witnessed: `acthur dev` brought a
+  project-scoped Postgres to healthy, `acthur db migrate/seed/reset --yes` all
+  passed against the real container.
+- **P1 migration-range collision (Finding 3 below): fixed.** `renumberMigrations`
+  (`cmd/acthur/generate.go`) now errors when a contract-generated migration's
+  description collides with an existing migration *outside* the 0400-0499
+  contract range, instead of silently reusing that plugin-reserved number.
+  Regression tests: `TestRenumberMigrations_DescriptionCollisionOutsideContractRange_Errors`,
+  `TestRenumberMigrations_ReusesNumberWithinContractRange` (`cmd/acthur/generate_test.go`).
+- **New finding + fix, found while re-verifying Phase 8: deploy Dockerfile Go
+  version drift.** The go:fiber production Dockerfile hardcoded
+  `golang:1.22-alpine`. A plugin dependency (observability's
+  `prometheus/client_golang`) bumps a scaffolded node's `go.mod` `go` directive
+  via `go mod tidy` well past 1.22 — reproduced live (`go 1.23.0`/`1.25.0`
+  depending on installed toolchain), and `acthur deploy --target compose`
+  failed at `go mod download` with "go.mod requires go >= X". Fixed:
+  `artifacts.Project` now reads each node's actual `go.mod` directive
+  (`nodeGoVersion`, `internal/deploy/artifacts/artifacts.go`) and threads it
+  into the Dockerfile template instead of a version fixed at codegen time.
+  Regression test: `TestProject_DockerfileUsesNodesActualGoModVersion`.
+  Live-witnessed: real `acthur deploy --target compose --env production`
+  against `final-witness` (go.mod at `go 1.23.0`) produced a healthy compose
+  stack (`docker ps` showed both containers healthy, `GET /health` → 200
+  through the deployed container).
+- **New finding + fix: `acthur db studio` leaked its adminer container on
+  SIGTERM.** `waitForInterrupt` (`cmd/acthur/db.go`) only trapped
+  `os.Interrupt`; SIGTERM's default disposition terminates the process
+  immediately, skipping the deferred `docker stop`. Reproduced live (`kill
+  <pid>` left `acthur-db-studio` running). Fixed by also catching
+  `syscall.SIGTERM`. Regression test: `TestWaitForInterrupt_ReturnsOnSIGTERM`.
+- **P0 full suite not green (Finding 2 below): still flaky, not truly fixed.**
+  `internal/process.TestProcess_OutputCapture` still fails intermittently
+  under full-suite parallel load (passes standalone and on rerun every time
+  observed across this session and the prior one). Root cause not
+  investigated — left as a known flake, not silently ignored.
+- **Not addressed — deliberately left for a product decision, not a
+  code fix:**
+  - Finding 4 (Phase 8 deploy projection silently skips unsupported
+    adapters): the existing test suite (`TestProject_NoDockerfileForUnresolvableAdapters`
+    et al.) explicitly documents and asserts the current silent-skip
+    behavior as intentional ("Slice 1 projects what the adapter registry can
+    actually back"). Making this a hard error is a real behavior change with
+    product tradeoffs (e.g. it would block deploying a graph that
+    legitimately includes an unimplemented adapter like `cache:redis` for a
+    node the caller doesn't intend to deploy yet) — flagged to the user
+    rather than changed unilaterally.
+  - Finding 5 (installer/release namespace `github.com/acthur/acthur`):
+    unchanged. Renaming the module path and org touches `go.mod`, every
+    import, GoReleaser, install scripts, and docs — a one-way, highly
+    disruptive change that needs the user's canonical org/module decision
+    first.
+  - P2 plugin discovery outside a project: unchanged, low severity, not
+    revisited this pass.
+
+Boundary review (repo-split readiness, per project convention): no
+`internal/*` package imports `cmd/*`; no adapter package imports a sibling
+adapter package across backend/frontend/infra; no plugin imports a sibling
+plugin; no deploy target imports a sibling target. All still clean as of this
+update.
+
 Scope: fresh audit against `docs/acthur-prd.md` and `docs/prd/phase-*.md`. I did not trust completion notes, comments, or the previous audit. I did not edit implementation code.
 
 ## Executive Verdict
