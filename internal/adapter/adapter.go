@@ -241,6 +241,16 @@ type DockerfileContext struct {
 	// listening port (e.g. a queue-worker service) — the adapter must omit
 	// EXPOSE and HEALTHCHECK in that case rather than guess one.
 	Port int
+	// GoVersion is the node's actual go.mod `go` directive (major.minor,
+	// e.g. "1.23"), when the caller could read one. A Go-toolchain-based
+	// adapter must use this (falling back to its own floor only when
+	// empty) rather than a version baked into the template at codegen
+	// time — a plugin's dependency (e.g. observability's
+	// prometheus/client_golang) can bump go.mod's directive via `go mod
+	// tidy` well after scaffolding, and a stale hardcoded builder image
+	// then fails `go mod download` with "go.mod requires go >= X".
+	// Non-Go adapters ignore this field.
+	GoVersion string
 }
 
 // Dockerizable can render a production-ready, multi-stage Dockerfile for a

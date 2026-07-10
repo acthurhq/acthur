@@ -9,6 +9,9 @@ package artifacts
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -80,7 +83,7 @@ type composeFile struct {
 // fresh on every `acthur deploy`, and generated.lock (internal/generate)
 // still protects a hand-edited Dockerfile by skipping it with a warning
 // rather than silently clobbering it.
-func Project(cfg *config.Config, g *graph.Graph) ([]plugin.GeneratedFile, error) {
+func Project(cfg *config.Config, g *graph.Graph, root string) ([]plugin.GeneratedFile, error) {
 	nodes := g.Nodes()
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 
@@ -111,7 +114,7 @@ func Project(cfg *config.Config, g *graph.Graph) ([]plugin.GeneratedFile, error)
 
 		switch n.Type {
 		case config.NodeTypeService:
-			svc, dockerfile, ok, err := projectService(a, n, proxied[n.ID])
+			svc, dockerfile, ok, err := projectService(a, n, proxied[n.ID], nodeGoVersion(root, n.ID))
 			if err != nil {
 				return nil, fmt.Errorf("node %q: %w", n.ID, err)
 			}
@@ -163,13 +166,32 @@ func Project(cfg *config.Config, g *graph.Graph) ([]plugin.GeneratedFile, error)
 // projectService projects a service node onto a compose service plus its
 // rendered Dockerfile, if its adapter satisfies Dockerizable. ok is false
 // (with a nil error) when the adapter has no Dockerfile capability yet.
-func projectService(a adapter.Adapter, n *graph.Node, isProxied bool) (composeService, []byte, bool, error) {
+var goModDirective = regexp.MustCompile(`(?m)^go\s+(\d+)\.(\d+)(?:\.\d+)?\s*$`)
+
+// nodeGoVersion reads nodeID's own go.mod (if any) under root and returns
+// its `go` directive as major.minor (e.g. "1.25") for use as a Docker
+// builder image tag. Returns "" when root/nodeID has no go.mod (non-Go
+// adapters) or it can't be parsed — the caller's adapter then falls back to
+// its own hardcoded floor.
+func nodeGoVersion(root, nodeID string) string {
+	data, err := os.ReadFile(filepath.Join(root, nodeID, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	m := goModDirective.FindSubmatch(data)
+	if m == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s.%s", m[1], m[2])
+}
+
+func projectService(a adapter.Adapter, n *graph.Node, isProxied bool, goVersion string) (composeService, []byte, bool, error) {
 	d, ok := a.(adapter.Dockerizable)
 	if !ok {
 		return composeService{}, nil, false, nil
 	}
 
-	dockerfile, err := d.DockerfileFor(adapter.DockerfileContext{NodeID: n.ID, Port: n.Port})
+	dockerfile, err := d.DockerfileFor(adapter.DockerfileContext{NodeID: n.ID, Port: n.Port, GoVersion: goVersion})
 	if err != nil {
 		return composeService{}, nil, false, fmt.Errorf("rendering Dockerfile: %w", err)
 	}

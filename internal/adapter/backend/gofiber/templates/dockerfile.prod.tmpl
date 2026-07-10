@@ -4,7 +4,7 @@
 # every `acthur deploy` from the node's current graph facts.
 
 # -- Build stage ---------------------------------------------------------------
-FROM golang:1.22-alpine AS builder
+FROM golang:{{if .GoVersion}}{{.GoVersion}}{{else}}1.22{{end}}-alpine AS builder
 
 WORKDIR /build
 

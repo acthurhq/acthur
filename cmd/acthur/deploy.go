@@ -62,7 +62,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 	}
 
 	// Project the artifacts (in memory — nothing written yet).
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, root)
 	if err != nil {
 		return nil, fmt.Errorf("projecting deploy artifacts: %w", err)
 	}

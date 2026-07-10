@@ -1,6 +1,7 @@
 package artifacts_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,9 +23,11 @@ import (
 // not resolve adapters (only graph.Validate does), so the graph still
 // builds; Project() must skip nodes whose adapter can't be resolved rather
 // than error.
+var vetangleRoot = filepath.Join("..", "..", "..", "testdata", "vetangle")
+
 func loadVetangle(t *testing.T) (*config.Config, *graph.Graph) {
 	t.Helper()
-	cfg, err := config.LoadFile(filepath.Join("..", "..", "..", "testdata", "vetangle", "acthur.yml"))
+	cfg, err := config.LoadFile(filepath.Join(vetangleRoot, "acthur.yml"))
 	if err != nil {
 		t.Fatalf("config.LoadFile: %v", err)
 	}
@@ -99,7 +102,7 @@ func parseCompose(t *testing.T, content []byte) composeFile {
 
 func TestProject_EmitsDockerfilePerDockerizableServiceNode(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -114,7 +117,7 @@ func TestProject_EmitsDockerfilePerDockerizableServiceNode(t *testing.T) {
 // has more than one package (caught live by the Phase 8 witness).
 func TestProject_DockerfileBuildsTheRootMainPackage(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +137,7 @@ func TestProject_DockerfileBuildsTheRootMainPackage(t *testing.T) {
 // witness: running app, permanently unhealthy container).
 func TestProject_HealthcheckUsesIPv4Loopback(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func TestProject_HealthcheckUsesIPv4Loopback(t *testing.T) {
 
 func TestProject_NoDockerfileForInfraNodes(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -167,7 +170,7 @@ func TestProject_NoDockerfileForInfraNodes(t *testing.T) {
 
 func TestProject_NoDockerfileForUnresolvableAdapters(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -184,7 +187,7 @@ func TestProject_NoDockerfileForUnresolvableAdapters(t *testing.T) {
 
 func TestProject_DockerfileContent_MatchesDockerizableCapability(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -206,7 +209,7 @@ func TestProject_DockerfileContent_MatchesDockerizableCapability(t *testing.T) {
 
 func TestProject_WorkerDockerfile_NoExposeOrHealthcheck(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -226,7 +229,7 @@ func TestProject_WorkerDockerfile_NoExposeOrHealthcheck(t *testing.T) {
 
 func TestProject_EmitsComposeFile(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -238,7 +241,7 @@ func TestProject_EmitsComposeFile(t *testing.T) {
 
 func TestProject_Compose_ContainsExpectedServices(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -266,7 +269,7 @@ func serviceNames(cf composeFile) []string {
 
 func TestProject_Compose_ServiceUsesBuildDirective(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -288,7 +291,7 @@ func TestProject_Compose_ServiceUsesBuildDirective(t *testing.T) {
 
 func TestProject_Compose_PostgresUsesOfficialImage(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -304,7 +307,7 @@ func TestProject_Compose_PostgresUsesOfficialImage(t *testing.T) {
 
 func TestProject_Compose_PostgresHasNamedVolume(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -323,7 +326,7 @@ func TestProject_Compose_PostgresHasNamedVolume(t *testing.T) {
 
 func TestProject_Compose_PostgresHealthcheckUsesPgIsready(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -345,7 +348,7 @@ func TestProject_Compose_PostgresHealthcheckUsesPgIsready(t *testing.T) {
 
 func TestProject_Compose_DependsOnServiceHealthyFromGraphEdges(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -374,7 +377,7 @@ func TestProject_Compose_DependsOnServiceHealthyFromGraphEdges(t *testing.T) {
 
 func TestProject_Compose_PortsPublishedOnlyForProxiedNodes(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -398,7 +401,7 @@ func TestProject_Compose_PortsPublishedOnlyForProxiedNodes(t *testing.T) {
 
 func TestProject_Compose_RestartUnlessStopped(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -412,7 +415,7 @@ func TestProject_Compose_RestartUnlessStopped(t *testing.T) {
 
 func TestProject_Compose_OneInternalNetworkSharedByAllServices(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -433,7 +436,7 @@ func TestProject_Compose_OneInternalNetworkSharedByAllServices(t *testing.T) {
 
 func TestProject_Compose_EnvUsesVarRefsNeverLiteralSecrets(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g)
+	files, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -470,13 +473,45 @@ func TestProject_Compose_EnvUsesVarRefsNeverLiteralSecrets(t *testing.T) {
 // Determinism
 // ---------------------------------------------------------------------------
 
+// TestProject_DockerfileUsesNodesActualGoModVersion: a plugin's dependency
+// (e.g. observability's prometheus/client_golang) can bump a scaffolded
+// node's go.mod `go` directive well past whatever version was true at
+// scaffold time — caught live running a real `acthur deploy` against a
+// project with the observability plugin added: `go mod tidy` bumped go.mod
+// to "go 1.25.0" but the rendered Dockerfile still pinned
+// "golang:1.22-alpine", so `go mod download` failed with "go.mod requires
+// go >= 1.25.0". The Dockerfile must reflect the node's actual go.mod, not
+// a version fixed at codegen time.
+func TestProject_DockerfileUsesNodesActualGoModVersion(t *testing.T) {
+	cfg, g := loadVetangle(t)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+		t.Fatalf("mkdir api: %v", err)
+	}
+	goMod := "module example.com/api\n\ngo 1.25.0\n\nrequire github.com/gofiber/fiber/v2 v2.52.4\n"
+	if err := os.WriteFile(filepath.Join(root, "api", "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	files, err := artifacts.Project(cfg, g, root)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	f := fileByPath(t, files, "deploy/Dockerfile.api")
+	content := string(f.Content)
+	if !strings.Contains(content, "FROM golang:1.25-alpine AS builder") {
+		t.Errorf("expected builder image to track go.mod's go 1.25 directive, got:\n%s", content)
+	}
+}
+
 func TestProject_DeterministicAcrossRuns(t *testing.T) {
 	cfg, g := loadVetangle(t)
-	files1, err := artifacts.Project(cfg, g)
+	files1, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project (run 1): %v", err)
 	}
-	files2, err := artifacts.Project(cfg, g)
+	files2, err := artifacts.Project(cfg, g, vetangleRoot)
 	if err != nil {
 		t.Fatalf("Project (run 2): %v", err)
 	}
