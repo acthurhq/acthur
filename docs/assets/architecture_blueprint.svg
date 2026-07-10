@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="100%" height="100%">
+  <defs>
+    <!-- Glow Filters -->
+    <filter id="teal-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="purple-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Gradients -->
+    <linearGradient id="grid-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e1726" />
+      <stop offset="100%" stop-color="#070c14" />
+    </linearGradient>
+    
+    <linearGradient id="teal-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="100%" stop-color="#4facfe" />
+    </linearGradient>
+
+    <linearGradient id="purple-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b92b27" />
+      <stop offset="100%" stop-color="#1565c0" />
+    </linearGradient>
+
+    <linearGradient id="magenta-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff007f" />
+      <stop offset="100%" stop-color="#7000ff" />
+    </linearGradient>
+
+    <!-- Tech Grid Pattern -->
+    <pattern id="blueprint-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#162740" stroke-width="0.8" />
+      <circle cx="0" cy="0" r="1.5" fill="#00f2fe" opacity="0.3" />
+      <path d="M 20 0 L 20 40 M 0 20 L 40 20" fill="none" stroke="#162740" stroke-width="0.3" stroke-dasharray="2 4" />
+    </pattern>
+
+    <!-- Arrow Marker -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#00f2fe" />
+    </marker>
+    <marker id="arrow-magenta" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#ff007f" />
+    </marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#4a5568" />
+    </marker>
+  </defs>
+
+  <!-- Background Layer -->
+  <rect width="800" height="600" fill="url(#grid-grad)" />
+  <rect width="800" height="600" fill="url(#blueprint-grid)" />
+
+  <!-- Blueprint Title & Spec Box -->
+  <rect x="25" y="25" width="280" height="85" fill="#070c14" fill-opacity="0.8" stroke="#1e3a8a" stroke-width="1.5" />
+  <text x="40" y="50" font-family="monospace" font-size="16" font-weight="bold" fill="#00f2fe" letter-spacing="1">ACTHUR-OS CORE SPEC</text>
+  <text x="40" y="70" font-family="monospace" font-size="10" fill="#a0aec0">SYS-REF: RING-MODEL-SYS-ABI</text>
+  <text x="40" y="85" font-family="monospace" font-size="10" fill="#a0aec0">STATUS: ACTIVE // VER 3.0</text>
+  <path d="M 25 25 L 45 25 M 25 25 L 25 45 M 305 110 L 285 110 M 305 110 L 305 90" stroke="#00f2fe" stroke-width="2" fill="none" />
+
+  <!-- Outer HUD Boundary Circle -->
+  <circle cx="450" cy="300" r="270" fill="none" stroke="#162740" stroke-width="1" />
+  <circle cx="450" cy="300" r="275" fill="none" stroke="#00f2fe" stroke-width="1" stroke-dasharray="4 8" opacity="0.3" />
+
+  <!-- RINGS SYSTEM (Centered at 450, 300) -->
+
+  <!-- Layer 4: Plugins (Ring 4) -->
+  <circle cx="450" cy="300" r="230" fill="none" stroke="url(#magenta-grad)" stroke-width="2" stroke-dasharray="10 8" filter="url(#purple-glow)" opacity="0.7" />
+  <text x="450" y="82" text-anchor="middle" font-family="monospace" font-size="9" fill="#ff007f" font-weight="bold" letter-spacing="2">L4: PLUGINS (LOADABLE MODULES)</text>
+
+  <!-- Layer 3: Contracts (Ring 3) -->
+  <circle cx="450" cy="300" r="170" fill="none" stroke="#7000ff" stroke-width="1.5" opacity="0.8" />
+  <text x="450" y="142" text-anchor="middle" font-family="monospace" font-size="9" fill="#7000ff" font-weight="bold" letter-spacing="2">L3: CONTRACTS (SYS-ABI)</text>
+
+  <!-- Layer 2: Adapters (Ring 2) -->
+  <circle cx="450" cy="300" r="110" fill="none" stroke="url(#teal-grad)" stroke-width="2" stroke-dasharray="15 5" filter="url(#teal-glow)" />
+  <text x="450" y="202" text-anchor="middle" font-family="monospace" font-size="9" fill="#00f2fe" font-weight="bold" letter-spacing="2">L2: ADAPTERS (DRIVERS)</text>
+
+  <!-- Ring 0: Graph (Ring 0) -->
+  <circle cx="450" cy="300" r="50" fill="#070c14" stroke="#ffffff" stroke-width="2" filter="url(#teal-glow)" />
+  <text x="450" y="303" text-anchor="middle" font-family="monospace" font-size="10" fill="#ffffff" font-weight="bold" letter-spacing="1">RING 0</text>
+  <text x="450" y="315" text-anchor="middle" font-family="monospace" font-size="7" fill="#a0aec0">GRAPH CORE</text>
+
+  <!-- Graph Core DAG Nodes inside Ring 0 -->
+  <circle cx="450" cy="270" r="4" fill="#00f2fe" />
+  <circle cx="430" cy="290" r="4" fill="#7000ff" />
+  <circle cx="470" cy="290" r="4" fill="#7000ff" />
+  <path d="M 450 270 L 430 290 M 450 270 L 470 290 M 430 290 L 470 290" stroke="#a0aec0" stroke-width="0.8" />
+
+  <!-- Communication Law Lines & Arrows -->
+  
+  <!-- 1. Graph -> Calls -> Adapters (Outward, Teal) -->
+  <path d="M 450 240 Q 400 170 370 190" fill="none" stroke="#00f2fe" stroke-width="2" marker-end="url(#arrow)" filter="url(#teal-glow)" />
+  <text x="360" y="175" font-family="sans-serif" font-size="9" font-weight="bold" fill="#00f2fe">CALLS DRIVER</text>
+
+  <!-- 2. Plugins -> Mutate -> Graph (Inward, Magenta) -->
+  <path d="M 230 330 Q 300 370 395 330" fill="none" stroke="#ff007f" stroke-width="2" marker-end="url(#arrow-magenta)" filter="url(#purple-glow)" />
+  <text x="260" y="380" font-family="sans-serif" font-size="9" font-weight="bold" fill="#ff007f">MUTATES GRAPH</text>
+
+  <!-- 3. Contracts -> Enforce -> Edges (Passive law, dashed purple) -->
+  <path d="M 580 230 C 530 180 480 180 470 240" fill="none" stroke="#7000ff" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arrow-gray)" />
+  <text x="540" y="195" font-family="sans-serif" font-size="9" font-weight="bold" fill="#7000ff">ENFORCES EDGES</text>
+
+  <!-- 4. Plugins -> Register -> Kernel API (Inward, Magenta) -->
+  <path d="M 680 300 L 620 300" fill="none" stroke="#ff007f" stroke-width="2" marker-end="url(#arrow-magenta)" stroke-dasharray="5 2" />
+  <text x="640" y="292" font-family="sans-serif" font-size="8" fill="#ff007f" font-weight="bold">REGISTER</text>
+
+  <!-- Component Callout Boxes (Tech HUD style) -->
+
+  <!-- L4 Plugins Details -->
+  <g transform="translate(40, 160)">
+    <rect x="0" y="0" width="180" height="90" fill="#0b0f19" fill-opacity="0.8" stroke="#ff007f" stroke-width="1" />
+    <path d="M 0 0 L 15 0 M 0 0 L 0 15" stroke="#ffffff" stroke-width="1.5" />
+    <text x="12" y="20" font-family="monospace" font-size="10" font-weight="bold" fill="#ff007f">MODULES (L4)</text>
+    <text x="12" y="38" font-family="sans-serif" font-size="9" fill="#e2e8f0">• Event Bus Subscriptions</text>
+    <text x="12" y="52" font-family="sans-serif" font-size="9" fill="#e2e8f0">• KernelAPI Hooks</text>
+    <text x="12" y="66" font-family="sans-serif" font-size="9" fill="#e2e8f0">• Auth, RBAC, Migrations</text>
+    <!-- Connection lines back to diagram -->
+    <line x1="180" y1="45" x2="220" y2="45" stroke="#ff007f" stroke-width="1" stroke-dasharray="3 3" />
+    <circle cx="220" cy="45" r="3" fill="#ff007f" />
+  </g>
+
+  <!-- L2 Adapters Details -->
+  <g transform="translate(580, 420)">
+    <rect x="0" y="0" width="180" height="90" fill="#0b0f19" fill-opacity="0.8" stroke="#00f2fe" stroke-width="1" />
+    <path d="M 180 90 L 165 90 M 180 90 L 180 75" stroke="#ffffff" stroke-width="1.5" />
+    <text x="12" y="20" font-family="monospace" font-size="10" font-weight="bold" fill="#00f2fe">ADAPTERS (L2)</text>
+    <text x="12" y="38" font-family="sans-serif" font-size="9" fill="#e2e8f0">• 8-Method Driver Model</text>
+    <text x="12" y="52" font-family="sans-serif" font-size="9" fill="#e2e8f0">• go:fiber reference</text>
+    <text x="12" y="66" font-family="sans-serif" font-size="9" fill="#e2e8f0">• Database coordinates</text>
+    <!-- Connection lines back to diagram -->
+    <line x1="0" y1="45" x2="-35" y2="45" stroke="#00f2fe" stroke-width="1" stroke-dasharray="3 3" />
+    <circle cx="-35" cy="45" r="3" fill="#00f2fe" />
+  </g>
+
+  <!-- L3 Contracts Details -->
+  <g transform="translate(40, 450)">
+    <rect x="0" y="0" width="180" height="90" fill="#0b0f19" fill-opacity="0.8" stroke="#7000ff" stroke-width="1" />
+    <path d="M 0 90 L 15 90 M 0 90 L 0 75" stroke="#ffffff" stroke-width="1.5" />
+    <text x="12" y="20" font-family="monospace" font-size="10" font-weight="bold" fill="#7000ff">CONTRACTS (L3)</text>
+    <text x="12" y="38" font-family="sans-serif" font-size="9" fill="#e2e8f0">• ABI Compatibility Checking</text>
+    <text x="12" y="52" font-family="sans-serif" font-size="9" fill="#e2e8f0">• Diff Engine (Breaking/Safe)</text>
+    <text x="12" y="66" font-family="sans-serif" font-size="9" fill="#e2e8f0">• http, grpc, queue, graphql</text>
+    <!-- Connection lines back to diagram -->
+    <line x1="180" y1="45" x2="300" y2="45" stroke="#7000ff" stroke-width="1" stroke-dasharray="3 3" />
+    <circle cx="300" cy="45" r="3" fill="#7000ff" />
+  </g>
+
+  <!-- Technical Spec details footer -->
+  <text x="25" y="570" font-family="monospace" font-size="9" fill="#4a5568">SCALE: 1:1 UNIT: GRAPH RESOLUTION</text>
+  <text x="775" y="570" text-anchor="end" font-family="monospace" font-size="9" fill="#4a5568">ENGINEERING SCHEMATIC MODEL: ACTHUR-CORE-R0</text>
+  <line x1="25" y1="580" x2="775" y2="580" stroke="#162740" stroke-width="1" />
+</svg>
