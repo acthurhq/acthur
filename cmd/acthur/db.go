@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/acthur/acthur/internal/deploy"
 )
@@ -104,11 +105,14 @@ func runDbStudio(databaseURL string, run deploy.Runner, port int, onReady func(u
 	return nil
 }
 
-// waitForInterrupt blocks until the process receives SIGINT (Ctrl+C) — the
+// waitForInterrupt blocks until the process receives SIGINT (Ctrl+C) or
+// SIGTERM (sent by process managers, CI, and `docker stop`) — the
 // production `wait` for runDbStudio, keeping `acthur db studio` in the
-// foreground until the user stops it.
+// foreground until told to stop. Without also catching SIGTERM, a manager
+// that terminates the process without a Ctrl+C would skip the deferred
+// `docker stop` in runDbStudio and leak the studio container.
 func waitForInterrupt() {
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	<-ch
 }

@@ -2,9 +2,41 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+// TestWaitForInterrupt_ReturnsOnSIGTERM: a process manager or CI runner that
+// stops `acthur db studio` sends SIGTERM, not SIGINT (Ctrl+C) — if
+// waitForInterrupt only caught SIGINT, that path would skip the deferred
+// `docker stop` in runDbStudio and leak the studio container.
+func TestWaitForInterrupt_ReturnsOnSIGTERM(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		waitForInterrupt()
+		close(done)
+	}()
+	// Give the goroutine time to reach signal.Notify before we send —
+	// otherwise the signal could arrive before it's being listened for.
+	time.Sleep(100 * time.Millisecond)
+
+	proc, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("find self process: %v", err)
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitForInterrupt did not return after SIGTERM")
+	}
+}
 
 // TestParseStudioTarget_ExtractsPortUserDB: adminer's login form needs the
 // port, user, and database name pre-filled from DATABASE_URL — never the
