@@ -6,7 +6,6 @@ import (
 	"os"
 	"runtime"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -403,8 +402,8 @@ func TestProcess_StopTerminatesWholeProcessTree(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond)
 
-	if err := syscall.Kill(pid, 0); err == nil {
-		_ = syscall.Kill(pid, syscall.SIGKILL)  // clean up
+	if pidAlive(pid) {
+		forceKill(pid) // clean up
 		t.Fatalf("grandchild %d survived Stop — process tree not terminated", pid)
 	}
 }
@@ -443,7 +442,7 @@ func TestProcess_RestartReapsOrphanedGrandchildren(t *testing.T) {
 	}
 
 	// Simulate a hard crash of the supervised process itself.
-	_ = syscall.Kill(p.Pid(), syscall.SIGKILL)
+	forceKill(p.Pid())
 	time.Sleep(200 * time.Millisecond)
 
 	if err := p.Restart(ctx); err != nil {
@@ -452,8 +451,8 @@ func TestProcess_RestartReapsOrphanedGrandchildren(t *testing.T) {
 	defer func() { _ = p.Stop(5 * time.Second) }()
 	time.Sleep(200 * time.Millisecond)
 
-	if err := syscall.Kill(pid, 0); err == nil {
-		_ = syscall.Kill(pid, syscall.SIGKILL)  // clean up
+	if pidAlive(pid) {
+		forceKill(pid) // clean up
 		t.Fatalf("orphaned grandchild %d survived restart", pid)
 	}
 }
