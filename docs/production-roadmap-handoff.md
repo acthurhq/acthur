@@ -2,11 +2,11 @@
 
 **Date:** 2026-07-14
 **Repository:** `acthurhq/acthur`
-**Working branch:** `dev`; latest validated release-code candidate `04973e2`
+**Working branch:** `dev`; latest validated release-code candidate `04973e2`; latest staged ledger head `cb75b05`
 **Promotion path:** `dev` → `staging` → `main` (live)
 **Primary tracking issue:** [#69 — Production readiness and first release](https://github.com/acthurhq/acthur/issues/69)
 
-## Authoritative Current Status — 2026-07-14 16:40 UTC
+## Authoritative Current Status — 2026-07-14 18:20 UTC
 
 This section supersedes every repository, CI, pull-request, and blocker status
 in the historical audit below. The old findings remain only to explain why the
@@ -14,9 +14,9 @@ hardening work was undertaken.
 
 | Area | Current evidence | Release qualification |
 |---|---|---|
-| Branch promotion | PR #75 merged the current validated release-code candidate into `staging`; `staging` is `04973e2`. `main` remains deliberately held at `5467d48` pending the remote witness. Later docs-only ledger refreshes do not change the release-code candidate. | Promotion flow is established and the current candidate is staged; production promotion remains blocked. |
-| Pull requests | PRs #66, #70, #71, #72, #73, #74, and #75 are merged. No pull requests are open; scratch PRs #67 and #68 were closed without merging. | Clean; the final reviewed `staging` → `main` promotion follows the remote witness. |
-| CI/process runtime | Dev PR run 29349700819, dev push run 29349708194, and staging push run 29350110378 passed lint/vet, installers, snapshot build, release dry run, and the supported Linux, Windows, and macOS Intel Go 1.22/1.23 race matrix. The staged candidate includes the service-log shutdown drain fix from PR #74 and the evidence-ledger refresh from PR #75. | The historical process-output, native Windows, action runtime, generated-project dependency, concurrent logging, and service-log shutdown-drain failures are resolved with pushed CI evidence. |
+| Branch promotion | PR #75 merged the current validated release-code candidate into `staging`; PR #76 then merged a docs-only evidence refresh. `staging` is `cb75b05`; the release-code candidate remains `04973e2`. `main` remains deliberately held at `5467d48` pending the remote witness. Later docs-only ledger refreshes do not change the release-code candidate. | Promotion flow is established and the current candidate is staged; production promotion remains blocked. |
+| Pull requests | PRs #66, #70, #71, #72, #73, #74, #75, and #76 are merged. No pull requests are open; scratch PRs #67 and #68 were closed without merging. | Clean; the final reviewed `staging` -> `main` promotion follows the remote witness. |
+| CI/process runtime | Dev push/PR runs 29356373567 and 29356397784, plus staging push run 29356840983, passed lint/vet, installers, snapshot build, release dry run, and the supported Linux, Windows, and macOS Intel Go 1.22/1.23 race matrix. The staged candidate includes the service-log shutdown drain fix from PR #74 and the evidence-ledger refreshes from PRs #75 and #76. | The historical process-output, native Windows, action runtime, generated-project dependency, concurrent logging, and service-log shutdown-drain failures are resolved with pushed CI evidence. |
 | Deploy completeness | Artifact projection and provider projection now fail closed. Fly, Railway, and Render reject infrastructure, dependency topology, and required workload environment that they cannot deliver; Coolify consumes the full Compose projection. | No graph node is silently omitted. A real remote staging witness remains required. |
 | Deploy gate | Graph, build, race-enabled tests, contract validation and compatibility baseline, generated freshness, migrations, delivered environment, and security are named checks. | Implemented; live deployment evidence remains. |
 | Release artifacts | GoReleaser/Syft dry runs produce five platform archives, SPDX SBOMs, and a checksum manifest; native installer integrity tests pass on Linux, macOS Intel, and Windows. | Dry-run qualification is green. Keyless signing, provenance, publication, and installation of actual public artifacts remain tag-stage evidence. |
