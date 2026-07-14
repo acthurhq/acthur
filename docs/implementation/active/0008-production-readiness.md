@@ -246,6 +246,13 @@ In-flight
   on Go 1.22 and 1.23 across Ubuntu, macOS Intel, and Windows, installer
   integrity tests on all three operating systems, snapshot binaries, and the
   GoReleaser/Syft release dry run.
+- 2026-07-14 — main agent — promoted the reviewed candidate through the
+  required `dev` → `staging` tier in PR #71. The pull-request run
+  29342222528 and post-merge `staging` push run 29342678221 are fully green,
+  including lint/vet, the complete race-enabled supported OS/Go matrix,
+  native installer integrity tests, snapshot binaries, and the
+  GoReleaser/Syft release dry run. `main` and a release tag remain deliberately
+  unchanged until the real remote staging witness succeeds.
 
 ## Current Decisions
 
