@@ -55,15 +55,23 @@ function Invoke-WebRequest {
         New-Item -ItemType Directory -Path $caseRoot | Out-Null
         Set-Content -Path $checksums -Value $Manifest
 
-        $stdout = Join-Path $caseRoot 'stdout.txt'
-        $stderr = Join-Path $caseRoot 'stderr.txt'
-        $child = Start-Process -FilePath (Get-Process -Id $PID).Path `
-            -ArgumentList @('-NoProfile', '-File', $wrapper, $Installer, $appData, $archive, $checksums) `
-            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        $passed = $child.ExitCode -eq 0
+        $output = Join-Path $caseRoot 'output.txt'
+        $previousErrorPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
+            $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+        & (Get-Process -Id $PID).Path -NoProfile -File $wrapper $Installer $appData $archive $checksums *> $output
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorPreference
+        if (Test-Path variable:previousNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+        }
+        $passed = $exitCode -eq 0
         if ($passed -ne $ShouldPass) {
-            Get-Content $stdout, $stderr | Write-Error
-            Fail "$Name returned exit code $($child.ExitCode)"
+            $details = (Get-Content $output -ErrorAction SilentlyContinue) -join "`n"
+            Fail "$Name returned exit code $exitCode`n$details"
         }
         return Join-Path $appData 'acthur\bin\acthur.exe'
     }
