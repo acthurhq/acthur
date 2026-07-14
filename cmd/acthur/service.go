@@ -63,6 +63,9 @@ func runServiceLogs(path string, out io.Writer, stop <-chan struct{}, pollInterv
 	for {
 		select {
 		case <-stop:
+			if _, err := io.Copy(out, f); err != nil {
+				return fmt.Errorf("read %s: %w", path, err)
+			}
 			return nil
 		case <-ticker.C:
 			if _, err := io.Copy(out, f); err != nil {
