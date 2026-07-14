@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,10 +54,11 @@ func NewHTTPStrategy() *HTTPStrategy {
 func (s *HTTPStrategy) Name() string { return "http" }
 
 func (s *HTTPStrategy) Check(ctx context.Context, node *graph.Node) error {
-	if node.Port == 0 {
+	port := ResolvePort(node)
+	if port == 0 {
 		return fmt.Errorf("node %q has no port configured", node.ID)
 	}
-	url := fmt.Sprintf("http://localhost:%d/health", node.Port)
+	url := fmt.Sprintf("http://localhost:%d/health", port)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -66,7 +67,7 @@ func (s *HTTPStrategy) Check(ctx context.Context, node *graph.Node) error {
 	if err != nil {
 		return fmt.Errorf("not ready: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("not healthy: status %d", resp.StatusCode)
 	}
@@ -84,17 +85,18 @@ type TCPStrategy struct{}
 func (s *TCPStrategy) Name() string { return "tcp" }
 
 func (s *TCPStrategy) Check(ctx context.Context, node *graph.Node) error {
-	if node.Port == 0 {
+	port := ResolvePort(node)
+	if port == 0 {
 		return fmt.Errorf("node %q has no port configured", node.ID)
 	}
-	addr := fmt.Sprintf("localhost:%d", node.Port)
+	addr := fmt.Sprintf("localhost:%d", port)
 
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("TCP connect to %s failed: %w", addr, err)
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 

@@ -1,0 +1,39 @@
+package middleware
+
+import (
+	"net/http"
+	"time"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
+)
+
+var log, _ = zap.NewProduction()
+
+// Logger returns a structured request logging middleware.
+// Logs: method, path, status, latency, request_id, ip.
+// Format: JSON in production, human-readable in development.
+func Logger() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+			next.ServeHTTP(ww, r)
+			latency := time.Since(start)
+
+			status := ww.Status()
+			if status == 0 {
+				status = http.StatusOK
+			}
+
+			log.Info("request",
+				zap.String("method", r.Method),
+				zap.String("path", r.URL.Path),
+				zap.Int("status", status),
+				zap.Duration("latency", latency),
+				zap.String("request_id", chimw.GetReqID(r.Context())),
+				zap.String("ip", r.RemoteAddr),
+			)
+		})
+	}
+}

@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ type GeneratedFile struct {
 	Path        string
 	Content     []byte
 	Mode        uint32
-	Overwrite   bool // if false, skip if file already exists
+	Overwrite   bool   // if false, skip if file already exists
 	MergeMarker string // if set, merge at this marker rather than overwrite
 }
 
@@ -186,27 +187,27 @@ const (
 type Event string
 
 const (
-	EventBeforeGraphBuild    Event = "kernel:graph:before_build"
-	EventAfterGraphBuild     Event = "kernel:graph:after_build"
-	EventBeforeNodeStart     Event = "kernel:node:before_start"
-	EventAfterNodeStart      Event = "kernel:node:after_start"
-	EventAfterNodeHealthy    Event = "kernel:node:after_healthy"
-	EventBeforeNodeStop      Event = "kernel:node:before_stop"
-	EventAfterNodeStop       Event = "kernel:node:after_stop"
-	EventOnNodeFailure       Event = "kernel:node:on_failure"
-	EventBeforeProxyRequest  Event = "kernel:proxy:before_request"
-	EventAfterProxyRequest   Event = "kernel:proxy:after_request"
-	EventBeforeMigrateRun    Event = "kernel:db:before_migrate"
-	EventAfterMigrateRun     Event = "kernel:db:after_migrate"
-	EventBeforeSeedRun       Event = "kernel:db:before_seed"
-	EventAfterSeedRun        Event = "kernel:db:after_seed"
-	EventBeforeDeploy        Event = "kernel:deploy:before"
-	EventAfterDeploy         Event = "kernel:deploy:after"
-	EventDeployPreflight     Event = "kernel:deploy:preflight"
-	EventContractRegistered  Event = "kernel:contract:registered"
-	EventContractViolated    Event = "kernel:contract:violated"
-	EventPluginLoaded        Event = "kernel:plugin:loaded"
-	EventPluginError         Event = "kernel:plugin:error"
+	EventBeforeGraphBuild   Event = "kernel:graph:before_build"
+	EventAfterGraphBuild    Event = "kernel:graph:after_build"
+	EventBeforeNodeStart    Event = "kernel:node:before_start"
+	EventAfterNodeStart     Event = "kernel:node:after_start"
+	EventAfterNodeHealthy   Event = "kernel:node:after_healthy"
+	EventBeforeNodeStop     Event = "kernel:node:before_stop"
+	EventAfterNodeStop      Event = "kernel:node:after_stop"
+	EventOnNodeFailure      Event = "kernel:node:on_failure"
+	EventBeforeProxyRequest Event = "kernel:proxy:before_request"
+	EventAfterProxyRequest  Event = "kernel:proxy:after_request"
+	EventBeforeMigrateRun   Event = "kernel:db:before_migrate"
+	EventAfterMigrateRun    Event = "kernel:db:after_migrate"
+	EventBeforeSeedRun      Event = "kernel:db:before_seed"
+	EventAfterSeedRun       Event = "kernel:db:after_seed"
+	EventBeforeDeploy       Event = "kernel:deploy:before"
+	EventAfterDeploy        Event = "kernel:deploy:after"
+	EventDeployPreflight    Event = "kernel:deploy:preflight"
+	EventContractRegistered Event = "kernel:contract:registered"
+	EventContractViolated   Event = "kernel:contract:violated"
+	EventPluginLoaded       Event = "kernel:plugin:loaded"
+	EventPluginError        Event = "kernel:plugin:error"
 )
 
 // EventPayload carries event-specific data to handlers.
@@ -254,7 +255,7 @@ func (b *Bus) Emit(event Event, payload EventPayload) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[kernel] event handler panic for %s: %v\n", event, r)
+					output.Warn(output.PrefixPlugin, "event handler panic for %s: %v", event, r)
 				}
 			}()
 			h(payload)
@@ -322,7 +323,7 @@ func All() []Plugin {
 
 // LoadedPlugin wraps a Plugin with its runtime state.
 type LoadedPlugin struct {
-	Plugin  Plugin
+	Plugin   Plugin
 	LoadedAt time.Time
 }
 
@@ -330,7 +331,17 @@ type LoadedPlugin struct {
 // Returns the ordered list of loaded plugins, or an error if any
 // dependency is missing or a cycle is detected.
 func Load(names []string, bus *Bus, k KernelAPI) ([]*LoadedPlugin, error) {
-	ordered, err := resolveOrder(names)
+	return LoadDelta(names, nil, bus, k)
+}
+
+// LoadDelta loads names like Load, but treats the plugins in satisfied as
+// already loaded in this process: a DependsOn pointing at one of them is met
+// without re-loading it. Used when plugins are added to a process that has
+// already loaded the project's plugin list (e.g. `acthur add` after CLI
+// bootstrap) — re-loading an existing plugin would double-register its
+// hooks and commands.
+func LoadDelta(names, satisfied []string, bus *Bus, k KernelAPI) ([]*LoadedPlugin, error) {
+	ordered, err := resolveOrder(names, satisfied)
 	if err != nil {
 		return nil, err
 	}
@@ -360,17 +371,30 @@ func Load(names []string, bus *Bus, k KernelAPI) ([]*LoadedPlugin, error) {
 }
 
 // resolveOrder returns plugins in topological order based on DependsOn().
-func resolveOrder(names []string) ([]string, error) {
-	// Build dependency graph
+// A dependency present in satisfied is treated as already loaded: it meets
+// the requirement without appearing in names, and is excluded from the sort.
+func resolveOrder(names, satisfied []string) ([]string, error) {
+	already := make(map[string]bool, len(satisfied))
+	for _, s := range satisfied {
+		already[s] = true
+	}
+
+	// Build dependency graph over names only; satisfied deps drop out.
 	deps := make(map[string][]string)
 	for _, name := range names {
 		p, err := Resolve(name)
 		if err != nil {
 			return nil, err
 		}
-		deps[name] = p.DependsOn()
-		// Verify all declared dependencies are in the names list
+		var pending []string
 		for _, dep := range p.DependsOn() {
+			if !already[dep] {
+				pending = append(pending, dep)
+			}
+		}
+		deps[name] = pending
+		// Verify all unmet dependencies are in the names list
+		for _, dep := range pending {
 			found := false
 			for _, n := range names {
 				if n == dep {

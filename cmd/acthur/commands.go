@@ -1,21 +1,48 @@
 // Package cmd wires all cobra commands for the Acthur CLI.
-// Every command is defined here. Commands that are not yet implemented
-// return a clear "coming in Phase N" message rather than silently failing.
+// Every command is defined here.
 package main
 
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"sort"
+	"strings"
+	"syscall"
+	"time"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber"
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/doctor"
-	"github.com/acthur/acthur/internal/engine"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/chi"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/fastify"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gin"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/rustaxum"
+	_ "github.com/acthurhq/acthur/internal/adapter/frontend/astro"
+	_ "github.com/acthurhq/acthur/internal/adapter/frontend/next"
+	_ "github.com/acthurhq/acthur/internal/adapter/infra/postgres"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/deploy"
+	"github.com/acthurhq/acthur/internal/doctor"
+	"github.com/acthurhq/acthur/internal/engine"
+	"github.com/acthurhq/acthur/internal/flags"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/health"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/plugin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/admin"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/auth"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/featureflags"
+	devhttps "github.com/acthurhq/acthur/internal/plugin/builtin/https"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/migrations"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/multitenancy"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/observability"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/rbac"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/security"
+	_ "github.com/acthurhq/acthur/internal/plugin/builtin/testplugin"
+	"github.com/acthurhq/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +71,40 @@ func (registryResolver) Adapter(key string) (adapter.Adapter, bool) {
 		return nil, false
 	}
 	return a, true
+}
+
+// ---------------------------------------------------------------------------
+// contractPathResolver — wires internal/contract's project-relative loading
+// convention (contracts/<name>.contract.yml) to the graph.ContractResolver
+// interface. Assembled at the CLI entrypoint so the graph engine never
+// imports internal/contract (ADR 0005, same pattern as registryResolver).
+// ---------------------------------------------------------------------------
+
+type contractPathResolver struct {
+	root string
+}
+
+func (r contractPathResolver) Resolve(name string) (string, bool) {
+	path := contractFilePath(r.root, name)
+	if _, err := contract.ParseFile(path); err != nil {
+		return path, false
+	}
+	return path, true
+}
+
+// contractFilePath computes the expected file path for a data_flow edge's
+// contract entry. A bare name (e.g. "users") resolves to
+// contracts/users.contract.yml under root, per the Phase 4 convention.
+// An entry that already looks like a path (contains a '/' or already ends
+// in .contract.yml/.contract.yaml) is treated as relative-to-root as-is —
+// this keeps existing fixtures authored with full paths working.
+func contractFilePath(root, name string) string {
+	if strings.Contains(name, "/") ||
+		strings.HasSuffix(name, ".contract.yml") ||
+		strings.HasSuffix(name, ".contract.yaml") {
+		return filepath.Join(root, name)
+	}
+	return filepath.Join(root, "contracts", name+".contract.yml")
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +167,42 @@ func init() {
 }
 
 // Execute runs the root command. Called from main().
+// bootstrapPlugins makes plugin-registered commands dispatchable: cobra
+// resolves the command word before any RunE runs, so when the working
+// directory holds a project with a plugins list, plugins are loaded (and
+// their commands attached to Root) before Execute. Failures are deliberately
+// silent here — commands that need the graph re-load it and surface pointed
+// errors themselves; a bare `acthur --help` outside a project must not fail.
+func bootstrapPlugins() {
+	cfg, err := config.Load(".")
+	if err != nil || len(cfg.Plugins) == 0 {
+		return
+	}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		return
+	}
+	if err := loadPlugins(cfg, g); err != nil {
+		return
+	}
+	g.Freeze()
+	bootstrapped = bootstrapResult{cfg: cfg, g: g, ok: true}
+}
+
+// bootstrapResult caches the config+graph assembled by bootstrapPlugins so
+// loadGraph can reuse them: plugins register hooks/commands on process-global
+// state (kernelBus, Root), so loading them a second time in the same process
+// would double every registration.
+type bootstrapResult struct {
+	cfg *config.Config
+	g   *graph.Graph
+	ok  bool
+}
+
+var bootstrapped bootstrapResult
+
 func Execute() {
+	bootstrapPlugins()
 	if err := Root.Execute(); err != nil {
 		output.Error("", "%s", err)
 		os.Exit(1)
@@ -142,8 +238,18 @@ func loadConfig() *config.Config {
 	return cfg
 }
 
-// loadGraph loads acthur.yml and builds the graph.
+// loadGraph loads acthur.yml, builds the graph, and loads cfg.Plugins
+// through the real KernelAPI (ADR 0005 resolver-injection pattern) before
+// sealing the graph (ADR 0003 two-phase lifecycle). Plugins may mutate the
+// graph (AddNode/AddEdge) only during this window — Freeze() below ends it.
 func loadGraph() (*config.Config, *graph.Graph) {
+	// bootstrapPlugins already assembled and sealed this project's graph
+	// (plugins loaded exactly once); reuse it rather than re-registering
+	// every plugin hook/command on the process-global bus and Root.
+	if bootstrapped.ok {
+		return bootstrapped.cfg, bootstrapped.g
+	}
+
 	cfg := loadConfig()
 	g, err := graph.Build(cfg)
 	if err != nil {
@@ -155,47 +261,216 @@ func loadGraph() (*config.Config, *graph.Graph) {
 			DocsURL: "https://acthur.dev/docs/graph",
 		})
 	}
+
+	if err := loadPlugins(cfg, g); err != nil {
+		output.Fatal(&output.ActhurError{
+			Code:    output.ExitPluginError,
+			Message: "plugin loading failed",
+			Problem: err.Error(),
+			Fix:     "Run 'acthur plugin list' to see available plugins, or remove the offending entry from acthur.yml's plugins list.",
+		})
+	}
+
+	g.Freeze()
 	return cfg, g
 }
 
-// notImplemented prints a "coming soon" message for Phase N commands.
-func notImplemented(phase int) error {
-	output.Warn("", "this command is coming in Phase %d", phase)
-	output.Info("", "track progress at: https://github.com/acthur/acthur")
+// ---------------------------------------------------------------------------
+// Plugin loading — CLI assembly wiring for internal/plugin (Phase 5, ADR 0005/0003)
+// ---------------------------------------------------------------------------
+
+// kernelBus is the single kernel event bus shared by every plugin loaded
+// during this process's lifetime. Constructed once at CLI assembly.
+var kernelBus = plugin.NewBus()
+
+// kernelAPI is the KernelAPI handed to plugins by the most recent
+// loadPlugins call; later phases (and `acthur generate`) consume its
+// generator/schema/middleware registries.
+var kernelAPI *plugin.KernelAPIImpl
+
+// loadedPlugins holds the result of the most recent loadPlugins call, used
+// by `acthur plugin list` to show which plugins are active for this project.
+var loadedPlugins []*plugin.LoadedPlugin
+
+// loadPlugins resolves cfg.Plugins against the plugin registry and loads
+// them, in dependency order, against a real KernelAPI bound to g and Root.
+// An unknown plugin name fails before anything is loaded or started, with a
+// pointed error naming the plugin and listing every registered plugin.
+//
+// Graph mutation via the KernelAPI (AddNode/AddEdge) is only valid here —
+// the caller must seal g (Freeze) immediately after this returns.
+func loadPlugins(cfg *config.Config, g *graph.Graph) error {
+	loadedPlugins = nil
+	if len(cfg.Plugins) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(cfg.Plugins))
+	for i, p := range cfg.Plugins {
+		names[i] = p.Name
+	}
+
+	if err := checkPluginsKnown(names); err != nil {
+		return err
+	}
+
+	k := plugin.NewKernelAPI(kernelBus, g, registerPluginCommand, pluginLog)
+	kernelAPI = k
+
+	loaded, err := plugin.Load(names, kernelBus, k)
+	if err != nil {
+		return err
+	}
+	loadedPlugins = loaded
 	return nil
+}
+
+// checkPluginsKnown returns a pointed error naming the first unknown plugin
+// in names and listing every plugin registered in the plugin registry.
+func checkPluginsKnown(names []string) error {
+	available := plugin.All()
+	known := make(map[string]bool, len(available))
+	availableNames := make([]string, 0, len(available))
+	for _, p := range available {
+		known[p.Name()] = true
+		availableNames = append(availableNames, p.Name())
+	}
+	sort.Strings(availableNames)
+
+	for _, name := range names {
+		if known[name] {
+			continue
+		}
+		if len(availableNames) == 0 {
+			return fmt.Errorf("unknown plugin %q — no plugins are registered in this build", name)
+		}
+		return fmt.Errorf("unknown plugin %q — available plugins: %s", name, strings.Join(availableNames, ", "))
+	}
+	return nil
+}
+
+// registerPluginCommand adapts a plugin.CLICommand into a *cobra.Command
+// and attaches it to Root, so it appears in `acthur --help` and is runnable.
+func registerPluginCommand(cmd plugin.CLICommand) {
+	cc := &cobra.Command{
+		Use:   cmd.Use,
+		Short: cmd.Short,
+		Long:  cmd.Long,
+		RunE: func(_ *cobra.Command, args []string) error {
+			if cmd.Run == nil {
+				return nil
+			}
+			return cmd.Run(args)
+		},
+	}
+	for _, f := range cmd.Flags {
+		cc.Flags().StringP(f.Name, f.Short, f.Default, f.Usage)
+	}
+	Root.AddCommand(cc)
+}
+
+// pluginLog routes plugin.KernelAPI.Log calls through the kernel's output
+// system, scoped under the "plugin" prefix.
+func pluginLog(level plugin.LogLevel, format string, args ...any) {
+	switch level {
+	case plugin.LogWarn:
+		output.Warn(output.PrefixPlugin, format, args...)
+	case plugin.LogError:
+		output.Error(output.PrefixPlugin, format, args...)
+	case plugin.LogDebug:
+		output.Debug(output.PrefixPlugin, format, args...)
+	default:
+		output.Info(output.PrefixPlugin, format, args...)
+	}
 }
 
 // ---------------------------------------------------------------------------
 // acthur new
 // ---------------------------------------------------------------------------
 
+var (
+	newAdapter string
+	newDB      bool
+	newModule  string
+)
+
 var newCmd = &cobra.Command{
 	Use:   "new <project-name>",
 	Short: "Create a new Acthur project with the interactive wizard",
-	Long: `Launches the interactive project wizard to select your stack,
-plugins, and deployment target, then scaffolds a complete project.`,
-	Args: cobra.MaximumNArgs(1),
+	Long: `Launches the interactive project wizard to select your backend
+adapter, whether to include a database, and your Go module prefix, then
+scaffolds a complete project into a new <project-name>/ directory.
+
+Pass --adapter, --db, and --module to skip the wizard entirely — required
+when stdin is not a terminal (CI, scripts, tests).`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.Banner()
-		// Phase 9 — wizard implementation
-		return notImplemented(9)
+		wi := wizardInput{
+			Adapter:    newAdapter,
+			AdapterSet: cmd.Flags().Changed("adapter"),
+			DB:         newDB,
+			DBSet:      cmd.Flags().Changed("db"),
+			Module:     newModule,
+			ModuleSet:  cmd.Flags().Changed("module"),
+		}
+		result, err := runNew(mustCwd(), args[0], wi, cmd.InOrStdin(), cmd.OutOrStdout(), isInteractive())
+		if err != nil {
+			return err
+		}
+		printScaffoldResult(result)
+		return nil
 	},
+}
+
+func init() {
+	newCmd.Flags().StringVar(&newAdapter, "adapter", "", "backend adapter to scaffold (e.g. go:fiber)")
+	newCmd.Flags().BoolVar(&newDB, "db", false, "include a db:postgres infra node")
+	newCmd.Flags().StringVar(&newModule, "module", "", "Go module prefix for scaffolded code (defaults to the project name)")
 }
 
 // ---------------------------------------------------------------------------
 // acthur init
 // ---------------------------------------------------------------------------
 
+var (
+	initAdapter string
+	initDB      bool
+	initModule  string
+)
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Adopt an existing project into Acthur (non-destructive)",
-	Long: `Scans the current directory to detect your stack, confirms the
-detected configuration, and writes acthur.yml without modifying any
-existing files.`,
+	Long: `Scaffolds an Acthur project into the current directory — the same
+wizard as 'acthur new', targeting cwd instead of a new subdirectory. Refuses
+to run if acthur.yml already exists here.
+
+Pass --adapter, --db, and --module to skip the wizard entirely — required
+when stdin is not a terminal (CI, scripts, tests).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.Banner()
-		return notImplemented(9)
+		wi := wizardInput{
+			Adapter:    initAdapter,
+			AdapterSet: cmd.Flags().Changed("adapter"),
+			DB:         initDB,
+			DBSet:      cmd.Flags().Changed("db"),
+			Module:     initModule,
+			ModuleSet:  cmd.Flags().Changed("module"),
+		}
+		result, err := runInit(mustCwd(), wi, cmd.InOrStdin(), cmd.OutOrStdout(), isInteractive())
+		if err != nil {
+			return err
+		}
+		printScaffoldResult(result)
+		return nil
 	},
+}
+
+func init() {
+	initCmd.Flags().StringVar(&initAdapter, "adapter", "", "backend adapter to scaffold (e.g. go:fiber)")
+	initCmd.Flags().BoolVar(&initDB, "db", false, "include a db:postgres infra node")
+	initCmd.Flags().StringVar(&initModule, "module", "", "Go module prefix for scaffolded code (defaults to the directory name)")
 }
 
 // ---------------------------------------------------------------------------
@@ -203,18 +478,56 @@ existing files.`,
 // ---------------------------------------------------------------------------
 
 var (
-	devDocker bool
-	devEnv    string
+	devDocker     bool
+	devEnv        string
+	devStrict     bool
+	devSkipDoctor bool
+	devWriteHosts bool
 )
 
 var devCmd = &cobra.Command{
 	Use:   "dev",
 	Short: "Start the development environment",
 	Long: `Starts all services defined in acthur.yml in the correct order,
-manages their processes, starts the unified dev proxy, and enables hot reload.`,
+manages their processes, starts the unified dev proxy, and enables hot reload.
+
+Before starting anything, acthur dev runs the same checks as acthur doctor
+and aborts with a pointed message if a required tool is missing. Pass
+--skip-doctor to bypass this preflight.
+
+With --strict, the dev proxy blocks (422) any data_flow request that
+violates its edge's contract, and blocks (502) any backend response that
+violates the contract's Output schema, instead of logging the violation
+and forwarding it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, g := loadGraph()
-		eng := engine.NewDevEngine(cfg, g, registryResolver{})
+		cfg := loadConfig()
+
+		if !devSkipDoctor {
+			if err := runDevDoctorPreflight(cfg); err != nil {
+				return err
+			}
+		}
+
+		_, g := loadGraph()
+		reg, err := contract.LoadDir(cfg.RootDir)
+		if err != nil {
+			return fmt.Errorf("loading contracts: %w", err)
+		}
+		opts := []engine.DevEngineOption{
+			engine.WithStrict(devStrict),
+			engine.WithContractRegistry(reg),
+			engine.WithBus(kernelBus),
+			engine.WithWriteHosts(devWriteHosts),
+		}
+		if cfg.Dev.HTTPS {
+			paths, err := devhttps.EnsureDevCert(cfg.RootDir, cfg.Dev.Domain)
+			if err != nil {
+				return fmt.Errorf("https: %w", err)
+			}
+			output.Info("dev", "TLS enabled — serving on https://localhost:%d (cert: %s)", cfg.Dev.Port, paths.CertFile)
+			opts = append(opts, engine.WithTLS(paths.CertFile, paths.KeyFile))
+		}
+		eng := engine.NewDevEngine(cfg, g, registryResolver{}, opts...)
 		return eng.Start()
 	},
 }
@@ -222,6 +535,30 @@ manages their processes, starts the unified dev proxy, and enables hot reload.`,
 func init() {
 	devCmd.Flags().BoolVar(&devDocker, "docker", false, "run all services in Docker (full containerization)")
 	devCmd.Flags().StringVar(&devEnv, "env", "dev", "environment name from acthur.yml")
+	devCmd.Flags().BoolVar(&devStrict, "strict", false, "block (422 requests / 502 responses) data_flow traffic that violates its contract instead of logging and forwarding")
+	devCmd.Flags().BoolVar(&devSkipDoctor, "skip-doctor", false, "skip the doctor preflight check")
+	devCmd.Flags().BoolVar(&devWriteHosts, "write-hosts", false, "write missing dev domains to /etc/hosts (requires permission to write it)")
+}
+
+// runDevDoctorPreflight runs the same checks as `acthur doctor` against cfg
+// and aborts with a pointed message if any required tool is missing or
+// failed. Extracted from devCmd.RunE so it's directly testable without
+// spinning up the full dev engine.
+func runDevDoctorPreflight(cfg *config.Config) error {
+	return devDoctorPreflight(cfg, doctor.Run)
+}
+
+// devDoctorPreflight is runDevDoctorPreflight with the doctor.Run call
+// injected, so tests can assert the abort/pass decision against a canned
+// *doctor.Result without depending on which tools happen to be installed on
+// the machine running the test.
+func devDoctorPreflight(cfg *config.Config, run func(*config.Config) *doctor.Result) error {
+	r := run(cfg)
+	if !doctor.HasBlockingFailures(r) {
+		return nil
+	}
+	doctor.Print(r)
+	return fmt.Errorf("environment checks failed — fix the issues above (or run 'acthur doctor --fix'), or pass --skip-doctor to bypass")
 }
 
 // ---------------------------------------------------------------------------
@@ -232,8 +569,12 @@ var buildCmd = &cobra.Command{
 	Use:   "build",
 	Short: "Build all services for production",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(8)
+		_, g := loadGraph()
+		if err := runBuild(mustCwd(), g, os.Stdout); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "build complete")
+		return nil
 	},
 }
 
@@ -253,8 +594,13 @@ var deployCmd = &cobra.Command{
 	Long: `Runs pre-deploy checks, builds all services, generates deploy manifests
 from the graph, and ships to the configured target.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(8)
+		plan, err := runDeploy(mustCwd(), deployEnv, deployTarget, deployDryRun, deploy.DockerRunner)
+		if deployDryRun && err == nil {
+			for _, line := range plan {
+				output.Info("deploy", "%s", line)
+			}
+		}
+		return err
 	},
 }
 
@@ -268,15 +614,48 @@ func init() {
 // acthur add
 // ---------------------------------------------------------------------------
 
+var addNodeFlag string
+
 var addCmd = &cobra.Command{
 	Use:   "add <plugin>",
 	Short: "Install a plugin and generate its code",
 	Long:  `Installs a plugin, runs its generators for your current adapter, and updates acthur.yml.`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		summary, err := runAdd(mustCwd(), args[0], addNodeFlag)
+		if err != nil {
+			return err
+		}
+		printAddSummary(summary)
+		return nil
 	},
+}
+
+func init() {
+	addCmd.Flags().StringVar(&addNodeFlag, "node", "", "target a specific node instead of every go:fiber service node")
+}
+
+// printAddSummary reports what runAdd did: whether the plugin was newly
+// added to acthur.yml, and the written/skipped/merged status of every file
+// its generator produced.
+func printAddSummary(s *addSummary) {
+	if s.AlreadyHad {
+		output.Info(output.PrefixPlugin, "%q is already in acthur.yml's plugins list", s.Plugin)
+	} else {
+		output.Success(output.PrefixPlugin, "added %q to acthur.yml's plugins list", s.Plugin)
+	}
+
+	output.Header(fmt.Sprintf("Generated by %s", s.Plugin))
+	for _, r := range s.Results {
+		switch r.Status {
+		case addFileWritten:
+			output.Success(output.PrefixPlugin, "%-10s %s (%s)", "written", r.Path, r.NodeID)
+		case addFileMerged:
+			output.Info(output.PrefixPlugin, "%-10s %s (%s)", "merged", r.Path, r.NodeID)
+		case addFileSkipped:
+			output.Warn(output.PrefixPlugin, "%-10s %s (%s) — already exists", "skipped", r.Path, r.NodeID)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -288,52 +667,86 @@ var generateCmd = &cobra.Command{
 	Short: "Generate code, config, or context files",
 }
 
+var generateNodeFlag string
+
 var generateFromContractCmd = &cobra.Command{
 	Use:   "from-contract <file>",
 	Short: "Generate full stack code from a contract file",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(7)
+		results, err := runGenerateFromContract(mustCwd(), args[0], generateNodeFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
 
 var generateModelCmd = &cobra.Command{
-	Use:   "model <Name>",
-	Short: "Generate a model, migration, and basic CRUD",
-	Args:  cobra.ExactArgs(1),
+	Use:   "model <Name> [field:type ...]",
+	Short: "Generate a model, migration, and test",
+	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(7)
+		results, err := runGenerateModel(mustCwd(), args[0], args[1:], generateNodeFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
+
+func init() {
+	generateFromContractCmd.Flags().StringVar(&generateNodeFlag, "node", "", "target a specific node instead of every go:fiber service node")
+	generateModelCmd.Flags().StringVar(&generateNodeFlag, "node", "", "target a specific node instead of every go:fiber service node")
+}
+
+var generateAIContextTool string
 
 var generateAIContextCmd = &cobra.Command{
 	Use:   "ai-context",
 	Short: "Generate AI coding tool context files and skills",
-	Long: `Presents an interactive tool selector and generates context files
-and skill files for your chosen AI coding tool (Claude Code, Cursor, etc.).`,
+	Long: `Generates a context file describing the live project graph — nodes,
+adapters, edges, contracts, and plugins — for your chosen AI coding tool.
+Re-run after changing the graph; the file is derived, not hand-authored.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateAIContext(mustCwd(), generateAIContextTool)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
+
+var generateCITargetFlag string
 
 var generateCICmd = &cobra.Command{
 	Use:   "ci",
 	Short: "Generate CI/CD pipeline configuration",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateCI(mustCwd(), generateCITargetFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
+
+var generateDocsTargetFlag string
 
 var generateDocsCmd = &cobra.Command{
 	Use:   "docs",
 	Short: "Generate living documentation from contracts and graph",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateDocs(mustCwd(), generateDocsTargetFlag)
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
 
@@ -342,15 +755,20 @@ var generateSkillCmd = &cobra.Command{
 	Short: "Generate a custom AI skill file",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		results, err := runGenerateSkill(mustCwd(), args[0])
+		if err != nil {
+			return err
+		}
+		printGenerateResults(results)
+		return nil
 	},
 }
 
 func init() {
 	generateModelCmd.Flags().String("fields", "", "comma-separated field definitions e.g. \"name:string,age:int\"")
-	generateCICmd.Flags().String("target", "github-actions", "CI target: github-actions | gitlab-ci | circleci")
-	generateDocsCmd.Flags().String("target", "astro", "docs target: astro | nextra | readme | openapi")
+	generateAIContextCmd.Flags().StringVar(&generateAIContextTool, "tool", "claude", "AI tool to generate context for: claude | cursor")
+	generateCICmd.Flags().StringVar(&generateCITargetFlag, "target", "github-actions", "CI target: github-actions | gitlab-ci | circleci")
+	generateDocsCmd.Flags().StringVar(&generateDocsTargetFlag, "target", "markdown", "docs target (only markdown is implemented; nextra/readme/openapi are tracked but not yet supported)")
 
 	generateCmd.AddCommand(generateFromContractCmd)
 	generateCmd.AddCommand(generateModelCmd)
@@ -373,36 +791,136 @@ var dbMigrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Run pending database migrations",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		if err := migrations.Migrate(mustCwd(), url); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "migrations applied")
+		return nil
 	},
+}
+
+var dbRollbackCmd = &cobra.Command{
+	Use:   "rollback",
+	Short: "Roll back the most recently applied migration",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		if err := migrations.Rollback(mustCwd(), url); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "rolled back one migration")
+		return nil
+	},
+}
+
+var dbStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show the current migration version and dirty state",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		version, dirty, err := migrations.Status(mustCwd(), url)
+		if err != nil {
+			return err
+		}
+		if version == 0 {
+			output.Info(output.PrefixKernel, "no migrations applied yet")
+			return nil
+		}
+		state := "clean"
+		if dirty {
+			state = "dirty"
+		}
+		output.Info(output.PrefixKernel, "version %d (%s)", version, state)
+		return nil
+	},
+}
+
+// runDbCreate is the shared implementation of `db create <name>` and
+// `db migrate:create <name>` — the PRD lists both spellings (§19.4) as the
+// same operation (write the next-numbered empty up/down migration pair), so
+// both cobra commands share this one RunE rather than duplicating it.
+func runDbCreate(cmd *cobra.Command, args []string) error {
+	up, down, err := migrations.CreateNext(mustCwd(), args[0])
+	if err != nil {
+		return err
+	}
+	output.Success(output.PrefixKernel, "created %s", up)
+	output.Success(output.PrefixKernel, "created %s", down)
+	return nil
+}
+
+var dbCreateCmd = &cobra.Command{
+	Use:   "create <name>",
+	Short: "Write a new numbered empty migration up/down pair",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDbCreate,
 }
 
 var dbMigrateCreateCmd = &cobra.Command{
 	Use:   "migrate:create <name>",
-	Short: "Create a new migration file",
+	Short: "Create a new migration file (alias of `db create`)",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
-	},
+	RunE:  runDbCreate,
 }
+
+var dbSeedFile string
 
 var dbSeedCmd = &cobra.Command{
 	Use:   "seed",
 	Short: "Run database seeders",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		root := mustCwd()
+		if dbSeedFile != "" {
+			if err := migrations.SeedFile(root, url, dbSeedFile); err != nil {
+				return err
+			}
+			output.Success(output.PrefixKernel, "ran seed file %s", dbSeedFile)
+			return nil
+		}
+		if err := migrations.Seed(root, url); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "database seeded")
+		return nil
 	},
 }
+
+var dbResetYes bool
 
 var dbResetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Drop, migrate, and seed the database",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		if !dbResetYes {
+			return fmt.Errorf("acthur db reset is destructive (rolls back every migration before re-applying and seeding) — re-run with --yes to confirm")
+		}
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		if err := migrations.Reset(mustCwd(), url, migrations.ResetSteps{}); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "database reset (migrations reapplied + seeded)")
+		return nil
 	},
 }
 
@@ -410,14 +928,30 @@ var dbStudioCmd = &cobra.Command{
 	Use:   "studio",
 	Short: "Open the database studio UI in the browser",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		_, g := loadGraph()
+		url, err := migrations.DatabaseURL(g)
+		if err != nil {
+			return err
+		}
+		port, err := freeLocalPort()
+		if err != nil {
+			return err
+		}
+		return runDbStudio(url, deploy.DockerRunner, port, func(studioURL string) {
+			output.Success(output.PrefixKernel, "db studio running at %s", studioURL)
+			output.Info(output.PrefixKernel, "press Ctrl+C to stop")
+		}, waitForInterrupt)
 	},
 }
 
 func init() {
 	dbMigrateCmd.Flags().String("env", "dev", "environment to migrate")
+	dbSeedCmd.Flags().StringVar(&dbSeedFile, "file", "", "run exactly one seed file instead of the whole seeds/ directory")
+	dbResetCmd.Flags().BoolVar(&dbResetYes, "yes", false, "confirm the destructive reset")
 	dbCmd.AddCommand(dbMigrateCmd)
+	dbCmd.AddCommand(dbRollbackCmd)
+	dbCmd.AddCommand(dbStatusCmd)
+	dbCmd.AddCommand(dbCreateCmd)
 	dbCmd.AddCommand(dbMigrateCreateCmd)
 	dbCmd.AddCommand(dbSeedCmd)
 	dbCmd.AddCommand(dbResetCmd)
@@ -437,18 +971,10 @@ var contractValidateCmd = &cobra.Command{
 	Use:   "validate",
 	Short: "Validate all contract files structurally",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(4)
-	},
-}
-
-var contractDiffCmd = &cobra.Command{
-	Use:   "diff <contract-name>",
-	Short: "Show changes vs last committed version and flag breaking changes",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(4)
+		if code := runContractValidate(mustCwd()); code != 0 {
+			os.Exit(code)
+		}
+		return nil
 	},
 }
 
@@ -456,16 +982,159 @@ var contractListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all registered contracts with endpoint summary",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(4)
+		if code := runContractList(mustCwd()); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	},
+}
+
+var contractShowCmd = &cobra.Command{
+	Use:   "show <name>",
+	Short: "Show endpoint detail for a single contract",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if code := runContractShow(mustCwd(), args[0]); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	},
+}
+
+var contractDiffCmd = &cobra.Command{
+	Use:   "diff <old-file> <new-file>",
+	Short: "Diff two contract files and flag breaking changes",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if code := runContractDiff(args[0], args[1]); code != 0 {
+			os.Exit(code)
+		}
+		return nil
 	},
 }
 
 func init() {
-	contractDiffCmd.Flags().Bool("fail-on-breaking", false, "exit non-zero if any breaking changes exist")
 	contractCmd.AddCommand(contractValidateCmd)
 	contractCmd.AddCommand(contractDiffCmd)
 	contractCmd.AddCommand(contractListCmd)
+	contractCmd.AddCommand(contractShowCmd)
+}
+
+// runContractValidate loads and structurally validates every contract under
+// contracts/ in root (LoadDir folds structural Validate() into Register(),
+// so a load error already means "invalid"). Returns 0 on success — including
+// the "no contracts found" case, since an optional contracts/ dir is not a
+// failure — or output.ExitContractError on any load/parse/structural error.
+func runContractValidate(root string) int {
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	all := reg.All()
+	if len(all) == 0 {
+		output.Warn(output.PrefixContract, "no contracts found under %s", filepath.Join(root, "contracts"))
+		return 0
+	}
+
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	for _, c := range all {
+		output.Success(output.PrefixContract, "%s@%s is valid (%d endpoint(s), %s)", c.Name, c.Version, len(c.Endpoints), c.Transport)
+	}
+	return 0
+}
+
+// runContractList prints name, version, transport, and endpoint count for
+// every contract loadable from root.
+func runContractList(root string) int {
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	all := reg.All()
+	if len(all) == 0 {
+		output.Warn(output.PrefixContract, "no contracts found under %s", filepath.Join(root, "contracts"))
+		return 0
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+
+	output.Header("Contracts")
+	for _, c := range all {
+		output.Info(output.PrefixContract, "%-20s v%-6s %-8s %d endpoint(s)", c.Name, c.Version, c.Transport, len(c.Endpoints))
+	}
+	return 0
+}
+
+// runContractShow prints endpoint detail for the latest version of the
+// named contract loadable from root.
+func runContractShow(root, name string) int {
+	reg, err := contract.LoadDir(root)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	c, err := reg.GetLatest(name)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	output.Header(fmt.Sprintf("%s@%s (%s)", c.Name, c.Version, c.Transport))
+	for _, ep := range c.Endpoints {
+		output.Info(output.PrefixContract, "%-6s %-30s %s", ep.Method, ep.Path, ep.ID)
+		if ep.Auth != "" {
+			output.Info(output.PrefixContract, "  auth: %s", ep.Auth)
+		}
+		for field, typ := range ep.Input {
+			output.Info(output.PrefixContract, "  in    %s: %s", field, typ)
+		}
+		for field, typ := range ep.Output {
+			output.Info(output.PrefixContract, "  out   %s: %s", field, typ)
+		}
+	}
+	return 0
+}
+
+// runContractDiff parses two contract files and prints the classified
+// changes between them. Returns output.ExitContractBreak when any change is
+// breaking, 0 otherwise (including "no changes").
+func runContractDiff(oldPath, newPath string) int {
+	oldC, err := contract.ParseFile(oldPath)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+	newC, err := contract.ParseFile(newPath)
+	if err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+
+	result := contract.Diff(oldC, newC)
+	if len(result.Changes) == 0 {
+		output.Success(output.PrefixContract, "no changes between %s and %s", oldPath, newPath)
+		return 0
+	}
+
+	for _, ch := range result.Changes {
+		switch ch.Type {
+		case contract.ChangeBreaking:
+			output.Error(output.PrefixContract, "[breaking] %s", ch.Description)
+		case contract.ChangeNonBreaking:
+			output.Warn(output.PrefixContract, "[non-breaking] %s", ch.Description)
+		default:
+			output.Info(output.PrefixContract, "[info] %s", ch.Description)
+		}
+	}
+
+	if result.HasBreaking {
+		return int(output.ExitContractBreak)
+	}
+	return 0
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +1171,7 @@ var graphValidateCmd = &cobra.Command{
 		}
 		sp.Stop(true, "graph built")
 
-		errs := g.Validate(registryResolver{})
+		errs := g.Validate(registryResolver{}, contractPathResolver{root: mustCwd()})
 		if len(errs) == 0 {
 			output.Success("graph", "all %d nodes and %d edges are valid",
 				len(g.Nodes()), len(g.Edges()))
@@ -544,16 +1213,38 @@ var graphShowCmd = &cobra.Command{
 	},
 }
 
+var (
+	graphVisualizeFormat string
+	graphVisualizeOutput string
+)
+
 var graphVisualizeCmd = &cobra.Command{
 	Use:   "visualize",
-	Short: "Open a Mermaid graph diagram in the browser",
+	Short: "Render the graph as a Mermaid or DOT diagram",
+	Long: `Renders the project graph as a Mermaid flowchart (default) or a
+Graphviz DOT digraph (--format dot). Prints to stdout, or writes to a file
+with --output.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(9)
+		diagram, err := runGraphVisualize(mustCwd(), graphVisualizeFormat)
+		if err != nil {
+			return err
+		}
+		if graphVisualizeOutput == "" {
+			fmt.Print(diagram)
+			return nil
+		}
+		if err := os.WriteFile(graphVisualizeOutput, []byte(diagram), 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", graphVisualizeOutput, err)
+		}
+		output.Success(output.PrefixKernel, "wrote %s diagram to %s", graphVisualizeFormat, graphVisualizeOutput)
+		return nil
 	},
 }
 
 func init() {
+	graphVisualizeCmd.Flags().StringVar(&graphVisualizeFormat, "format", "mermaid", "diagram format: mermaid | dot")
+	graphVisualizeCmd.Flags().StringVar(&graphVisualizeOutput, "output", "", "write the diagram to this file instead of stdout")
+
 	graphCmd.AddCommand(graphValidateCmd)
 	graphCmd.AddCommand(graphShowCmd)
 	graphCmd.AddCommand(graphVisualizeCmd)
@@ -572,7 +1263,28 @@ var pluginListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List installed and available plugins",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return notImplemented(5)
+		_, _ = loadGraph()
+
+		output.Header("Loaded plugins")
+		if len(loadedPlugins) == 0 {
+			output.Info(output.PrefixPlugin, "no plugins loaded — add entries under 'plugins:' in acthur.yml")
+		} else {
+			for _, lp := range loadedPlugins {
+				output.Info(output.PrefixPlugin, "%-20s v%s", lp.Plugin.Name(), lp.Plugin.Version())
+			}
+		}
+
+		all := plugin.All()
+		output.Header("Available plugins")
+		if len(all) == 0 {
+			output.Info(output.PrefixPlugin, "no plugins registered in this build")
+			return nil
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].Name() < all[j].Name() })
+		for _, p := range all {
+			output.Info(output.PrefixPlugin, "%-20s v%s", p.Name(), p.Version())
+		}
+		return nil
 	},
 }
 
@@ -581,7 +1293,12 @@ var pluginRemoveCmd = &cobra.Command{
 	Short: "Remove an installed plugin",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return notImplemented(5)
+		summary, err := runPluginRemove(mustCwd(), args[0])
+		if err != nil {
+			return err
+		}
+		output.Success(output.PrefixPlugin, "removed %q from acthur.yml's plugins list", summary.Plugin)
+		return nil
 	},
 }
 
@@ -599,29 +1316,91 @@ var serviceCmd = &cobra.Command{
 	Short: "Manage individual services in the graph",
 }
 
+var serviceAddName string
+
+var serviceAddCmd = &cobra.Command{
+	Use:   "add <infra>",
+	Short: "Add an infra node to the graph",
+	Long: `Adds an infra node to acthur.yml's graph.nodes (e.g. "acthur service add
+cache:redis" adds a "redis" node using the cache:redis adapter) and rebuilds
+the graph to confirm the result is still valid. Use --name to pick a
+different node ID than the adapter's default.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := loadConfig()
+		summary, err := runServiceAdd(cfg.RootDir, args[0], serviceAddName)
+		if err != nil {
+			return err
+		}
+		if summary.AlreadyHad {
+			output.Info(summary.NodeID, "already present in the graph — nothing to do")
+			return nil
+		}
+		output.Success(summary.NodeID, "added (%s) to the graph", summary.Adapter)
+		return nil
+	},
+}
+
 func init() {
-	serviceCmd.AddCommand(&cobra.Command{
-		Use:   "add <infra>",
-		Short: "Add an infra node to the graph",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
-	})
+	serviceAddCmd.Flags().StringVar(&serviceAddName, "name", "", "node ID to use instead of the adapter's default")
+	serviceCmd.AddCommand(serviceAddCmd)
+
 	serviceCmd.AddCommand(&cobra.Command{
 		Use:   "logs <name>",
 		Short: "Stream logs from a service",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			path := process.LogPath(cfg.RootDir, args[0])
+
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+			stop := make(chan struct{})
+			go func() {
+				<-quit
+				close(stop)
+			}()
+
+			return runServiceLogs(path, cmd.OutOrStdout(), stop, 300*time.Millisecond)
+		},
 	})
+
 	serviceCmd.AddCommand(&cobra.Command{
 		Use:   "restart <name>",
 		Short: "Restart a specific service",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			return runServiceRestart(cfg.RootDir, args[0], nil)
+		},
 	})
+
 	serviceCmd.AddCommand(&cobra.Command{
-		Use:   "health",
-		Short: "Show health status of all graph nodes",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(3) },
+		Use:   "health [name]",
+		Short: "Show health status of one node, or all graph nodes",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, g := loadGraph()
+			checker := health.New()
+
+			if len(args) == 1 {
+				return runServiceHealth(g, checker, args[0])
+			}
+
+			var failed int
+			for _, node := range g.Nodes() {
+				if strings.HasPrefix(node.Adapter, "kernel:") {
+					continue
+				}
+				if err := runServiceHealth(g, checker, node.ID); err != nil {
+					failed++
+				}
+			}
+			if failed > 0 {
+				return fmt.Errorf("%d node(s) unhealthy", failed)
+			}
+			return nil
+		},
 	})
 }
 
@@ -635,8 +1414,27 @@ var testCmd = &cobra.Command{
 	Long: `Run unit tests for all services, or specify a service name.
 Use flags to run integration, contract, E2E, or load tests.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, _ = loadGraph()
-		return notImplemented(6)
+		for _, name := range []string{"integration", "contract", "e2e", "load", "coverage", "watch"} {
+			on, _ := cmd.Flags().GetBool(name)
+			if on {
+				return fmt.Errorf("acthur test --%s is not implemented yet — only unit tests (`acthur test`, `acthur test <service>`) are wired up", name)
+			}
+		}
+		_, g := loadGraph()
+		service := ""
+		if len(args) > 0 {
+			service = args[0]
+		}
+		ci, _ := cmd.Flags().GetBool("ci")
+		mode := testModeUnit
+		if ci {
+			mode = testModeCI
+		}
+		if err := runTestMode(mustCwd(), g, service, os.Stdout, mode, deploy.GoStream); err != nil {
+			return err
+		}
+		output.Success(output.PrefixKernel, "tests passed")
+		return nil
 	},
 }
 
@@ -647,6 +1445,7 @@ func init() {
 	testCmd.Flags().Bool("load", false, "run k6 load tests")
 	testCmd.Flags().Bool("coverage", false, "generate coverage report")
 	testCmd.Flags().Bool("watch", false, "re-run on file change")
+	testCmd.Flags().Bool("ci", false, "run CI-grade unit tests with race detection and no test cache")
 }
 
 // ---------------------------------------------------------------------------
@@ -718,7 +1517,13 @@ func init() {
 	mcpCmd.AddCommand(&cobra.Command{
 		Use:   "serve",
 		Short: "Start the Acthur MCP server for AI tools",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Starts a Model Context Protocol server over stdio (JSON-RPC 2.0,
+newline-delimited), exposing this project's live graph, contracts, and
+service health as read-only tools to any MCP-compatible AI tool (Claude
+Code, Cursor, and others). Runs until stdin is closed.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMCPServe(mustCwd(), os.Stdin, os.Stdout)
+		},
 	})
 }
 
@@ -735,31 +1540,56 @@ func init() {
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "explain <question>",
 		Short: "Explain part of the system",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Answers a question about the project using its full live graph and
+contract context. Requires an 'ai:' block in acthur.yml (see docs/acthur-prd.md
+§17.7) with a working API key — only the "claude" provider is implemented today.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentExplain(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "generate <feature>",
-		Short: "Generate a feature with full graph context",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Short: "Propose an implementation plan for a feature, with full graph context",
+		Long: `Proposes an implementation plan for a feature or endpoint using the
+project's real adapters/contracts/graph as context. Prints the plan — it does
+not write files itself. Requires an 'ai:' block in acthur.yml.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentGenerate(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "diagnose <problem>",
 		Short: "Diagnose a runtime problem",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Diagnoses a described runtime problem using the project's live graph and
+contract context. Requires an 'ai:' block in acthur.yml.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentDiagnose(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "review",
 		Short: "Review the current git diff",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Reviews the working tree's current 'git diff' for bugs, risks, and
+contract consistency, using the project's graph/contract context. Requires an
+'ai:' block in acthur.yml. Prints a message and does nothing else if the diff
+is empty.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentReview(agentDeps{root: mustCwd(), out: os.Stdout})
+		},
 	})
 	agentCmd.AddCommand(&cobra.Command{
 		Use:   "document <path>",
 		Short: "Generate documentation for a path",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		Long: `Generates documentation for a file (its contents, truncated to 64KB) or
+directory (a listing of its immediate entries), using the project's graph/
+contract context. Requires an 'ai:' block in acthur.yml.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentDocument(agentDeps{root: mustCwd(), out: os.Stdout}, args[0])
+		},
 	})
 }
 
@@ -769,20 +1599,103 @@ func init() {
 
 var secretsCmd = &cobra.Command{
 	Use:   "secrets",
-	Short: "Secret management commands",
+	Short: "Project secret management",
+	Long: `Manages project-scoped secrets persisted under .acthur/secrets/kv/
+as plaintext files with 0600 permissions — the local, dev-only model the
+PRD documents for Acthur's built-in secrets provider (production deploys
+should export real secrets into the deploy environment; this store is a
+convenient input for the local dev runtime only, never a vault).
+
+Every stored secret is injected into every node's process environment by
+'acthur dev'. Production deploys only accept required values exported into
+the deploy process environment, because this local store is not delivered to
+production targets.`,
 }
 
 func init() {
 	secretsCmd.AddCommand(&cobra.Command{
+		Use:   "set <KEY> [value]",
+		Short: "Set a secret's value",
+		Long: `Sets KEY to value. If value is omitted (or passed as "-"), the
+value is read from stdin instead — keeping it out of shell history and
+process listings.`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			key := args[0]
+			value, err := resolveSecretValueArg(args, cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			if err := secrets.New(cfg.RootDir).Set(key, value); err != nil {
+				return err
+			}
+			output.Success(key, "secret set")
+			return nil
+		},
+	})
+
+	secretsCmd.AddCommand(&cobra.Command{
+		Use:   "get <KEY>",
+		Short: "Print a secret's value",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			value, err := secrets.New(cfg.RootDir).Get(args[0])
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), value)
+			return nil
+		},
+	})
+
+	secretsCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List secret keys (not values)",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			keys, err := secrets.New(cfg.RootDir).List()
+			if err != nil {
+				return err
+			}
+			if len(keys) == 0 {
+				output.Info("secrets", "no secrets set — run 'acthur secrets set <KEY> <value>'")
+				return nil
+			}
+			for _, k := range keys {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), k)
+			}
+			return nil
+		},
 	})
+
 	secretsCmd.AddCommand(&cobra.Command{
-		Use:   "rotate <key>",
-		Short: "Rotate a secret and restart affected services",
+		Use:   "rm <KEY>",
+		Short: "Remove a secret",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := secrets.New(cfg.RootDir).Remove(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "secret removed")
+			return nil
+		},
+	})
+
+	secretsCmd.AddCommand(&cobra.Command{
+		Use:   "rotate <KEY>",
+		Short: "Rotate a secret to a new random value and note affected services",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if _, err := secrets.New(cfg.RootDir).Rotate(args[0], nil); err != nil {
+				return err
+			}
+			output.Success(args[0], "secret rotated — run 'acthur service restart <name>' for every service that consumes it")
+			return nil
+		},
 	})
 }
 
@@ -790,28 +1703,118 @@ func init() {
 // acthur flag
 // ---------------------------------------------------------------------------
 
+var flagCreateDescription string
+
 var flagCmd = &cobra.Command{
 	Use:   "flag",
 	Short: "Feature flag management",
+	Long: `Manages project feature flags persisted at .acthur/flags.json — the
+PRD's local, hot-reloaded provider. Every flag is exposed to service
+processes started by 'acthur dev' as ACTHUR_FLAG_<NAME>=true|false.`,
 }
 
 func init() {
-	flagCmd.AddCommand(&cobra.Command{
+	createCmd := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create a new feature flag",
+		Short: "Create a new feature flag (disabled by default)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
-	})
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Create(args[0], flagCreateDescription); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag created (disabled) — env var %s", flags.EnvKey(args[0]))
+			return nil
+		},
+	}
+	createCmd.Flags().StringVar(&flagCreateDescription, "description", "", "human-readable description of the flag")
+	flagCmd.AddCommand(createCmd)
+
 	flagCmd.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List all feature flags",
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			list, err := flags.New(cfg.RootDir).List()
+			if err != nil {
+				return err
+			}
+			if len(list) == 0 {
+				output.Info("flag", "no flags defined — run 'acthur flag create <name>'")
+				return nil
+			}
+			rows := make([][2]string, 0, len(list))
+			for _, f := range list {
+				state := "disabled"
+				if f.Enabled {
+					state = "enabled"
+				}
+				rows = append(rows, [2]string{f.Name, state})
+			}
+			output.Table(rows)
+			return nil
+		},
 	})
+
+	flagCmd.AddCommand(&cobra.Command{
+		Use:   "enable <name>",
+		Short: "Enable a feature flag",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Enable(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag enabled")
+			return nil
+		},
+	})
+
+	flagCmd.AddCommand(&cobra.Command{
+		Use:   "disable <name>",
+		Short: "Disable a feature flag",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Disable(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag disabled")
+			return nil
+		},
+	})
+
 	flagCmd.AddCommand(&cobra.Command{
 		Use:   "toggle <name>",
 		Short: "Toggle a feature flag on or off",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return notImplemented(9) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			enabled, err := flags.New(cfg.RootDir).Toggle(args[0])
+			if err != nil {
+				return err
+			}
+			state := "disabled"
+			if enabled {
+				state = "enabled"
+			}
+			output.Success(args[0], "flag %s", state)
+			return nil
+		},
+	})
+
+	flagCmd.AddCommand(&cobra.Command{
+		Use:   "retire <name>",
+		Short: "Remove a feature flag entirely",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if err := flags.New(cfg.RootDir).Remove(args[0]); err != nil {
+				return err
+			}
+			output.Success(args[0], "flag retired")
+			return nil
+		},
 	})
 }
 
@@ -819,12 +1822,40 @@ func init() {
 // acthur monitor
 // ---------------------------------------------------------------------------
 
+var monitorWatch bool
+
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
-	Short: "Open the monitoring dashboard",
+	Short: "Live status table of the running dev graph",
+	Long: `Prints a status table (node, type, adapter, health, PID) for every
+graph node by polling each node's own health check once, the same way
+'acthur service health' does, and reading its recorded PID from
+.acthur/run/<node>.pid. Use --watch to refresh continuously until
+interrupted (Ctrl+C).
+
+'acthur monitor' is a separate process from any running 'acthur dev' — it
+has no shared memory with it, so PID/health data is only meaningful while
+dev is actually running; without it, every node still gets a real
+(failing) health poll rather than a faked result.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return notImplemented(9)
+		cfg, g := loadGraph()
+		checker := health.New()
+
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+		stop := make(chan struct{})
+		go func() {
+			<-quit
+			close(stop)
+		}()
+
+		runMonitor(g, checker, cfg.RootDir, cmd.OutOrStdout(), monitorWatch, 2*time.Second, stop)
+		return nil
 	},
+}
+
+func init() {
+	monitorCmd.Flags().BoolVar(&monitorWatch, "watch", false, "continuously refresh the status table")
 }
 
 // ---------------------------------------------------------------------------
@@ -832,7 +1863,7 @@ var monitorCmd = &cobra.Command{
 // ---------------------------------------------------------------------------
 
 // Version is set at build time via ldflags:
-// go build -ldflags "-X github.com/acthur/acthur/cmd.Version=0.1.0"
+// go build -ldflags "-X main.Version=0.1.0"
 var Version = "dev"
 
 var versionCmd = &cobra.Command{
@@ -842,7 +1873,7 @@ var versionCmd = &cobra.Command{
 		output.Table([][2]string{
 			{"Version:", Version},
 			{"Docs:", "https://acthur.dev"},
-			{"Source:", "https://github.com/acthur/acthur"},
+			{"Source:", "https://github.com/acthurhq/acthur"},
 		})
 		fmt.Println()
 	},

@@ -1,10 +1,14 @@
 package plugin_test
 
 import (
+	"bytes"
+	"os"
+	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/plugin"
 )
 
 // ---------------------------------------------------------------------------
@@ -12,14 +16,14 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakePlugin struct {
-	name      string
-	version   string
-	dependsOn []string
+	name       string
+	version    string
+	dependsOn  []string
 	registered bool
 }
 
-func (p *fakePlugin) Name() string       { return p.name }
-func (p *fakePlugin) Version() string    { return p.version }
+func (p *fakePlugin) Name() string        { return p.name }
+func (p *fakePlugin) Version() string     { return p.version }
 func (p *fakePlugin) DependsOn() []string { return p.dependsOn }
 func (p *fakePlugin) Register(k plugin.KernelAPI) error {
 	p.registered = true
@@ -110,6 +114,30 @@ func TestBus_PanicInHandlerDoesNotCrash(t *testing.T) {
 	}
 }
 
+// TestBus_PanicInHandlerLogsViaOutputWarn: the recovered panic must surface
+// through internal/output.Warn (not a raw fmt.Printf) so it carries the same
+// "[plugin] ⚠" formatting as every other kernel warning.
+func TestBus_PanicInHandlerLogsViaOutputWarn(t *testing.T) {
+	var buf bytes.Buffer
+	output.SetOutput(&buf, &buf)
+	defer output.SetOutput(os.Stdout, os.Stderr)
+
+	bus := plugin.NewBus()
+	bus.On(plugin.EventAfterDeploy, func(p plugin.EventPayload) {
+		panic("boom")
+	})
+
+	bus.Emit(plugin.EventAfterDeploy, plugin.EventPayload{})
+
+	got := buf.String()
+	if !strings.Contains(got, "plugin") {
+		t.Fatalf("expected panic warning scoped to plugin, got %q", got)
+	}
+	if !strings.Contains(got, "boom") {
+		t.Fatalf("expected panic message in warning output, got %q", got)
+	}
+}
+
 func TestBus_TimestampAutoSet(t *testing.T) {
 	bus := plugin.NewBus()
 	var received plugin.EventPayload
@@ -162,6 +190,27 @@ func TestResolveOrder_MissingDependency(t *testing.T) {
 	_, err := plugin.Load([]string{"rbac"}, bus, k)
 	if err == nil {
 		t.Error("expected error for missing dependency, got nil")
+	}
+}
+
+func TestLoadDelta_SatisfiedDependency_LoadsWithoutReloadingIt(t *testing.T) {
+	auth := &fakePlugin{name: "auth", version: "1.0.0"}
+	rbac := &fakePlugin{name: "rbac", version: "1.0.0", dependsOn: []string{"auth"}}
+	cleanup := registerFakePlugins(t, auth, rbac)
+	defer cleanup()
+
+	bus := plugin.NewBus()
+	k := &nullKernelAPI{}
+	// auth is already loaded in this process; only rbac is in the delta.
+	loaded, err := plugin.LoadDelta([]string{"rbac"}, []string{"auth"}, bus, k)
+	if err != nil {
+		t.Fatalf("expected satisfied dependency to load, got: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].Plugin.Name() != "rbac" {
+		t.Fatalf("expected only rbac loaded, got %+v", loaded)
+	}
+	if auth.registered {
+		t.Error("expected auth NOT to be re-registered by the delta load")
 	}
 }
 
@@ -251,12 +300,12 @@ func registerFakePlugins(t *testing.T, plugins ...*fakePlugin) func() {
 // nullKernelAPI is a no-op KernelAPI for testing plugin loading.
 type nullKernelAPI struct{}
 
-func (k *nullKernelAPI) OnEvent(_ plugin.Event, _ func(plugin.EventPayload))        {}
-func (k *nullKernelAPI) RegisterCommand(_ plugin.CLICommand)                         {}
-func (k *nullKernelAPI) RegisterGenerator(_ string, _ plugin.Generator)              {}
-func (k *nullKernelAPI) RegisterSchema(_ string, _ plugin.SchemaDefinition)          {}
-func (k *nullKernelAPI) RegisterMiddleware(_ plugin.Middleware)                       {}
-func (k *nullKernelAPI) AddNode(_ *graph.Node)                                        {}
-func (k *nullKernelAPI) AddEdge(_ *graph.Edge)                                        {}
-func (k *nullKernelAPI) Graph() plugin.GraphReader                                    { return nil }
-func (k *nullKernelAPI) Log(_ plugin.LogLevel, _ string, _ ...any)                   {}
+func (k *nullKernelAPI) OnEvent(_ plugin.Event, _ func(plugin.EventPayload)) {}
+func (k *nullKernelAPI) RegisterCommand(_ plugin.CLICommand)                 {}
+func (k *nullKernelAPI) RegisterGenerator(_ string, _ plugin.Generator)      {}
+func (k *nullKernelAPI) RegisterSchema(_ string, _ plugin.SchemaDefinition)  {}
+func (k *nullKernelAPI) RegisterMiddleware(_ plugin.Middleware)              {}
+func (k *nullKernelAPI) AddNode(_ *graph.Node)                               {}
+func (k *nullKernelAPI) AddEdge(_ *graph.Edge)                               {}
+func (k *nullKernelAPI) Graph() plugin.GraphReader                           { return nil }
+func (k *nullKernelAPI) Log(_ plugin.LogLevel, _ string, _ ...any)           {}

@@ -3,8 +3,8 @@ package scaffold_test
 import (
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/scaffold"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/scaffold"
 )
 
 func TestResolveScaffoldContext_UsesConfiguredModulePrefix(t *testing.T) {

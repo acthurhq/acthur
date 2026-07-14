@@ -1,6 +1,6 @@
 # Acthur — Claude Code Project Config
 
-Acthur is a runtime graph operating system written in Go (module: `github.com/acthur/acthur`, Go 1.22). It treats backend services, frontends, and infra as first-class nodes in a live directed acyclic graph (DAG). The kernel is structured as four layers: Graph (Ring 0) → Adapters → Contracts → Plugins.
+Acthur is a runtime graph operating system written in Go (module: `github.com/acthurhq/acthur`, Go 1.22). It treats backend services, frontends, and infra as first-class nodes in a live directed acyclic graph (DAG). The kernel is structured as four layers: Graph (Ring 0) → Adapters → Contracts → Plugins.
 
 ## Agent skills
 
@@ -15,3 +15,7 @@ Default label strings — five canonical triage roles mapped 1:1. See `docs/agen
 ### Domain docs
 
 Single-context repo — `CONTEXT.md` at root + `docs/adr/`. See `docs/agents/domain.md`.
+
+### Implementations in-flight
+
+Before changing architecture or implementing a feature, check `docs/implementation/active/`. If an active note overlaps your task, read it after the relevant context docs. Every non-trivial effort gets a status note there (moved to `completed/` or `paused/` when it ends), and **subagents working a slice must append their result to the note before committing**. Convention: `docs/implementation/README.md`.

@@ -8,19 +8,42 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/acthur/acthur/internal/adapter"
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/container"
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/health"
-	"github.com/acthur/acthur/internal/output"
-	"github.com/acthur/acthur/internal/process"
-	"github.com/acthur/acthur/internal/proxy"
+	"github.com/acthurhq/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/container"
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/dns"
+	"github.com/acthurhq/acthur/internal/flags"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/health"
+	"github.com/acthurhq/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/plugin"
+	"github.com/acthurhq/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/proxy"
+	"github.com/acthurhq/acthur/internal/secrets"
+	"github.com/acthurhq/acthur/internal/watcher"
 )
+
+// projectSecretStore is the project-scoped secret store seam (internal/secrets.Store
+// in production) — every stored key/value pair is injected into every node's
+// process environment. Separate from the per-(node,key) secretStore interface
+// above, which only ever synthesizes adapter-declared Generate secrets.
+type projectSecretStore interface {
+	All() (map[string]string, error)
+}
+
+// projectFlagStore is the project feature-flag store seam (internal/flags.Store
+// in production) — every flag is exposed to every node process as
+// ACTHUR_FLAG_<NAME>=true|false (PRD §37).
+type projectFlagStore interface {
+	List() ([]flags.Flag, error)
+}
 
 // ---------------------------------------------------------------------------
 // DevEngine
@@ -36,6 +59,7 @@ type AdapterResolver interface {
 
 type processManager interface {
 	Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*process.Process, error)
+	Restart(nodeID string) error
 	StopAll(nodeIDs []string)
 }
 
@@ -53,22 +77,148 @@ type DevEngine struct {
 	pm       processManager
 	checker  healthChecker
 	proxy    *proxy.Proxy
+	secrets  secretStore
 	ctx      context.Context
 	cancel   context.CancelFunc
+
+	// projectSecrets and projectFlags back `acthur secrets`/`acthur flag`
+	// injection into every node process. Nil when cfg.RootDir is empty (unit
+	// tests that construct a DevEngine without a real project root) — no
+	// project-level env is merged in that case, matching the pre-existing
+	// per-node secretStore's own nil-rootDir handling.
+	projectSecrets projectSecretStore
+	projectFlags   projectFlagStore
+
+	// bus is the optional kernel event bus. Nil means no emission — plugins
+	// are entirely absent from this phase's callers (cmd/acthur, tests that
+	// don't need it) and lifecycle emission must cost nothing when unused.
+	bus *plugin.Bus
+
+	// registry is the optional contract registry consulted by the proxy to
+	// enforce contracts on data_flow flow routes. Nil means no enforcement.
+	registry *contract.Registry
+	// strict switches proxy contract enforcement from dev mode (log +
+	// forward) to strict mode (422 + block). Plumbed from `acthur dev --strict`.
+	strict bool
+
+	// runDocker executes a docker CLI command to completion. Seam for tests;
+	// used at shutdown to stop containers the engine started (killing the
+	// docker-run client alone leaves the container running).
+	runDocker func(args ...string) error
+	// containers records node IDs whose containers the engine started,
+	// so shutdown stops exactly what it created.
+	containers []string
+
+	// writeHosts, when true, makes checkDNS attempt to append missing dev
+	// hostnames directly to hostsPath instead of only printing instructions.
+	// Wired from `acthur dev --write-hosts`.
+	writeHosts bool
+	// hostsPath is the hosts file checkDNS writes to when writeHosts is set.
+	// Defaults to /etc/hosts; overridable in tests.
+	hostsPath string
+	// dnsLookup resolves a hostname for checkDNS. Defaults to dns.DefaultLookup;
+	// overridable in tests so DNS behavior never depends on the test machine's
+	// real resolver or /etc/hosts contents.
+	dnsLookup dns.LookupFunc
+
+	// watcher polls each service node's directory for file changes and fires
+	// handleFileChange. Nil until Start() constructs it (no rootDir to watch
+	// in unit tests that call startNode/startInfraNode directly).
+	watcher *watcher.Watcher
+
+	// tlsCertFile/tlsKeyFile, when both set, make the dev proxy serve HTTPS
+	// (see WithTLS). Empty means plain HTTP, the pre-existing default.
+	tlsCertFile, tlsKeyFile string
+}
+
+// DevEngineOption configures optional DevEngine behavior at construction time.
+type DevEngineOption func(*DevEngine)
+
+// WithStrict enables strict contract enforcement: the proxy blocks (422)
+// data_flow requests that violate their edge's contract instead of logging
+// and forwarding them. Wired from the `acthur dev --strict` flag.
+func WithStrict(strict bool) DevEngineOption {
+	return func(e *DevEngine) { e.strict = strict }
+}
+
+// WithContractRegistry configures the contract registry the proxy consults
+// to enforce contracts on data_flow flow routes. Without this option the
+// proxy still serves flow routes, but never checks a contract.
+func WithContractRegistry(r *contract.Registry) DevEngineOption {
+	return func(e *DevEngine) { e.registry = r }
+}
+
+// WithBus attaches a kernel event bus. The engine emits node lifecycle
+// events (kernel:node:*) synchronously through it as nodes start, become
+// healthy, fail, and stop. Without this option (nil bus) emission is a
+// no-op — zero overhead, and every existing caller that doesn't know about
+// plugins keeps working unchanged.
+func WithBus(bus *plugin.Bus) DevEngineOption {
+	return func(e *DevEngine) { e.bus = bus }
+}
+
+// WithWriteHosts makes the DNS preflight attempt to append missing dev
+// hostnames straight to /etc/hosts instead of only printing copy-pastable
+// instructions. Wired from `acthur dev --write-hosts`. The engine still
+// never escalates privileges — if the process lacks permission to write
+// /etc/hosts, it falls back to printing the same instructions.
+func WithWriteHosts(writeHosts bool) DevEngineOption {
+	return func(e *DevEngine) { e.writeHosts = writeHosts }
+}
+
+// WithTLS makes the dev proxy serve HTTPS using the given cert/key file
+// pair instead of plain HTTP. Wired from `acthur dev` when dev.https is set
+// in acthur.yml — the https plugin (internal/plugin/builtin/https) owns
+// generating that cert pair; the engine only ever consumes file paths, so
+// it has no dependency on the plugin package itself (keeping the
+// Graph→Adapters→Contracts→Plugins layering intact).
+func WithTLS(certFile, keyFile string) DevEngineOption {
+	return func(e *DevEngine) {
+		e.tlsCertFile = certFile
+		e.tlsKeyFile = keyFile
+	}
 }
 
 // NewDevEngine creates a DevEngine. Call Start() to begin.
-func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver) *DevEngine {
+func NewDevEngine(cfg *config.Config, g *graph.Graph, resolver AdapterResolver, opts ...DevEngineOption) *DevEngine {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &DevEngine{
+	pm := process.NewManager()
+
+	// Durable per-node log files under .acthur/logs/<node>.log — the seam
+	// `acthur service logs` reads from. Only wired when there's a real
+	// project root to write under (cfg.RootDir == "" in most unit tests,
+	// which must never touch disk).
+	if cfg.RootDir != "" {
+		if sink, err := process.FileLogSink(cfg.RootDir); err == nil {
+			pm.SetLogSink(sink)
+		} else {
+			output.Warn("", "could not set up .acthur/logs: %v", err)
+		}
+	}
+
+	e := &DevEngine{
 		cfg:      cfg,
 		graph:    g,
 		resolver: resolver,
-		pm:       process.NewManager(),
+		pm:       pm,
 		checker:  health.New(),
+		secrets:  fileSecretStore{rootDir: cfg.RootDir},
 		ctx:      ctx,
 		cancel:   cancel,
+		runDocker: func(args ...string) error {
+			return exec.Command("docker", args...).Run()
+		},
+		hostsPath: "/etc/hosts",
+		dnsLookup: dns.DefaultLookup,
 	}
+	if cfg.RootDir != "" {
+		e.projectSecrets = secrets.New(cfg.RootDir)
+		e.projectFlags = flags.New(cfg.RootDir)
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // Start runs the full startup sequence and blocks until shutdown.
@@ -112,8 +262,17 @@ func (e *DevEngine) Start() error {
 		}
 	}
 
+	// DNS preflight — check whether the dev domain and each service's
+	// subdomain resolve to 127.0.0.1. Never blocks startup: localhost:<port>
+	// URLs still work even if the friendly hostnames don't resolve yet.
+	e.checkDNS()
+
 	// Start proxy
-	p, err := proxy.New(e.graph, e.cfg.Dev.Port)
+	p, err := proxy.New(e.graph, e.cfg.Dev.Port,
+		proxy.WithContractRegistry(e.registry),
+		proxy.WithStrict(e.strict),
+		proxy.WithTLS(e.tlsCertFile, e.tlsKeyFile),
+	)
 	if err != nil {
 		e.shutdown(order)
 		return fmt.Errorf("proxy setup failed: %w", err)
@@ -124,6 +283,13 @@ func (e *DevEngine) Start() error {
 		return fmt.Errorf("proxy start failed: %w", err)
 	}
 
+	// Start the file watcher / hot reload cascade. It restarts a node's
+	// process on a file change in its directory, unless the node's adapter
+	// hot-reloads itself (e.g. air) — see handleFileChange.
+	e.watcher = watcher.New(e.graph, e.cfg.RootDir, 0)
+	e.watcher.OnChange(e.handleFileChange)
+	e.watcher.Start()
+
 	// Print ready message
 	e.printReady()
 
@@ -132,8 +298,11 @@ func (e *DevEngine) Start() error {
 
 	// Graceful shutdown
 	output.Info("", "shutting down...")
+	if e.watcher != nil {
+		e.watcher.Stop()
+	}
 	if e.proxy != nil {
-		e.proxy.Stop()
+		_ = e.proxy.Stop()
 	}
 	e.shutdown(order)
 	output.Success("", "all services stopped")
@@ -142,6 +311,12 @@ func (e *DevEngine) Start() error {
 
 // startNode starts a single graph node according to its type.
 func (e *DevEngine) startNode(node *graph.Node) error {
+	// kernel:* nodes are materialized and run by the kernel itself (the proxy
+	// is started by the engine after all graph nodes) — they never resolve
+	// through the adapter registry, mirroring the graph validation exemption.
+	if strings.HasPrefix(node.Adapter, "kernel:") {
+		return nil
+	}
 	switch node.Type {
 	case config.NodeTypeInfra:
 		return e.startInfraNode(node)
@@ -156,41 +331,55 @@ func (e *DevEngine) startNode(node *graph.Node) error {
 func (e *DevEngine) startInfraNode(node *graph.Node) error {
 	e.graph.SetState(node.ID, graph.StateStarting)
 	output.Info(node.ID, "starting %s (%s)...", node.ID, node.Adapter)
+	e.emit(plugin.EventBeforeNodeStart, node, nil)
 
 	a, ok := e.resolver.Adapter(node.Adapter)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q not found", node.Adapter)
+		err := fmt.Errorf("adapter %q not found", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 	c, ok := a.(adapter.Containerized)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q does not support the Container capability", node.Adapter)
+		err := fmt.Errorf("adapter %q does not support the Container capability", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 	spec := c.Container(adapter.ContainerContext{
+		Project: e.cfg.Project,
 		NodeID:  node.ID,
 		Version: node.Config.Version,
 	})
 	if len(spec.Ports) == 0 {
 		// File-based infra (sqlite) — nothing to start
 		e.graph.SetState(node.ID, graph.StateHealthy)
+		e.emit(plugin.EventAfterNodeStart, node, nil)
+		e.emit(plugin.EventAfterNodeHealthy, node, nil)
 		return nil
 	}
-	args := container.ToRunArgs(spec, node.ID)
+	args := container.ToRunArgs(spec, container.Name(e.cfg.Project, node.ID))
 
-	_, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
+	p, err := e.pm.Spawn(node.ID, "docker", args, nil, "")
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
+	e.containers = append(e.containers, node.ID)
+	e.writePIDFile(node.ID, p)
+	e.emit(plugin.EventAfterNodeStart, node, nil)
 
-	strategy := health.InfraStrategy("acthur-"+node.ID, spec.Healthcheck.Test, nil)
+	strategy := health.InfraStrategy(container.Name(e.cfg.Project, node.ID), spec.Healthcheck.Test, nil)
 	if err := e.checker.WaitForStrategy(e.ctx, node, strategy, 60*time.Second); err != nil {
 		e.graph.SetState(node.ID, graph.StateDegraded)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 
 	e.graph.SetState(node.ID, graph.StateHealthy)
+	e.emit(plugin.EventAfterNodeHealthy, node, nil)
 	return nil
 }
 
@@ -198,58 +387,209 @@ func (e *DevEngine) startInfraNode(node *graph.Node) error {
 func (e *DevEngine) startServiceNode(node *graph.Node) error {
 	e.graph.SetState(node.ID, graph.StateStarting)
 	output.Info(node.ID, "starting %s (%s)...", node.ID, node.Adapter)
+	e.emit(plugin.EventBeforeNodeStart, node, nil)
 
 	a, ok := e.resolver.Adapter(node.Adapter)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q not found", node.Adapter)
+		err := fmt.Errorf("adapter %q not found", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 
 	// Build env for this node
-	env := e.buildEnv(node)
+	env, err := e.buildEnv(node)
+	if err != nil {
+		e.graph.SetState(node.ID, graph.StateFailed)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
+	}
 	r, ok := a.(adapter.Runnable)
 	if !ok {
 		e.graph.SetState(node.ID, graph.StateFailed)
-		return fmt.Errorf("adapter %q does not support the Runnable capability", node.Adapter)
+		err := fmt.Errorf("adapter %q does not support the Runnable capability", node.Adapter)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
+		return err
 	}
 	cmd := r.DevCommand(env)
 
 	nodeDir := nodeDirectory(e.cfg.RootDir, node)
-	_, err := e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
+	p, err := e.pm.Spawn(node.ID, cmd.Bin, cmd.Args, cmd.Env, nodeDir)
 	if err != nil {
 		e.graph.SetState(node.ID, graph.StateFailed)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
+	e.writePIDFile(node.ID, p)
+	e.emit(plugin.EventAfterNodeStart, node, nil)
 
 	// Wait for HTTP health
 	// Give the service time to start before health-checking
 	time.Sleep(500 * time.Millisecond)
 	if err := e.checker.WaitFor(e.ctx, node, 120*time.Second); err != nil {
 		e.graph.SetState(node.ID, graph.StateDegraded)
+		e.emit(plugin.EventOnNodeFailure, node, map[string]any{"error": err.Error()})
 		return err
 	}
 
 	e.graph.SetState(node.ID, graph.StateHealthy)
+	e.emit(plugin.EventAfterNodeHealthy, node, nil)
 	return nil
 }
 
-// shutdown stops all processes in reverse order.
+// writePIDFile records p's OS PID under .acthur/run/<node>.pid so a separate
+// `acthur service restart <node>` invocation — a different OS process with
+// no shared memory with this one — can find and signal it. p is nil in
+// tests that use a fake processManager, and Pid() is 0 before the process
+// has actually started; both are silently skipped rather than treated as
+// errors, since a missing pidfile only degrades `service restart`, not dev.
+func (e *DevEngine) writePIDFile(nodeID string, p *process.Process) {
+	if e.cfg.RootDir == "" || p == nil {
+		return
+	}
+	pid := p.Pid()
+	if pid == 0 {
+		return
+	}
+	if err := process.WritePIDFile(e.cfg.RootDir, nodeID, pid); err != nil {
+		output.Warn(nodeID, "could not write pidfile: %v", err)
+	}
+}
+
+// shutdown stops all processes in reverse order. Containers the engine
+// started are stopped through the container runtime first — stopping only
+// the docker-run client process would leave them running.
 func (e *DevEngine) shutdown(order []*graph.Node) {
 	e.cancel()
+	if e.cfg.RootDir != "" {
+		for _, n := range order {
+			_ = process.RemovePIDFile(e.cfg.RootDir, n.ID)
+		}
+	}
+	for i := len(e.containers) - 1; i >= 0; i-- {
+		nodeID := e.containers[i]
+		if err := e.runDocker(container.ToStopArgs(container.Name(e.cfg.Project, nodeID))...); err != nil {
+			output.Warn(nodeID, "container stop error: %v", err)
+		}
+	}
+	e.containers = nil
+
+	for i := len(order) - 1; i >= 0; i-- {
+		if n := order[i]; isLifecycleNode(n) {
+			e.emit(plugin.EventBeforeNodeStop, n, nil)
+		}
+	}
+
 	ids := make([]string, len(order))
 	for i, n := range order {
 		ids[i] = n.ID
 	}
 	e.pm.StopAll(ids)
+
+	for i := len(order) - 1; i >= 0; i-- {
+		if n := order[i]; isLifecycleNode(n) {
+			e.emit(plugin.EventAfterNodeStop, n, nil)
+		}
+	}
+}
+
+// isLifecycleNode reports whether node participates in kernel:node:* event
+// emission. kernel-materialized nodes (e.g. the proxy) are run by the engine
+// itself, never resolved through the adapter registry, and never emit —
+// mirroring the exemption already applied in startNode.
+func isLifecycleNode(node *graph.Node) bool {
+	return !strings.HasPrefix(node.Adapter, "kernel:")
+}
+
+// emit publishes a node lifecycle event on the engine's bus, if one is
+// configured. A nil bus makes this a no-op — plugins are entirely optional.
+func (e *DevEngine) emit(event plugin.Event, node *graph.Node, extra map[string]any) {
+	if e.bus == nil {
+		return
+	}
+	data := map[string]any{"node_type": string(node.Type)}
+	if e.cfg != nil && e.cfg.RootDir != "" {
+		// root_dir lets plugin hooks reach project-scoped state (e.g. the
+		// feature-flags plugin reading .acthur/flags.json) without the
+		// kernel exposing filesystem internals directly.
+		data["root_dir"] = e.cfg.RootDir
+	}
+	for k, v := range extra {
+		data[k] = v
+	}
+	e.bus.Emit(event, plugin.EventPayload{NodeID: node.ID, Data: data})
 }
 
 // buildEnv constructs the environment for a node.
-// Injects service discovery URLs from data_flow edges.
-func (e *DevEngine) buildEnv(node *graph.Node) map[string]string {
-	return resolveNodeEnv(e.graph, e.resolver, node)
+// Injects service discovery URLs from data_flow and depends_on edges, then
+// merges in every project-scoped secret (acthur secrets set/get/list/rm) and
+// feature flag (acthur flag create/enable/disable/list) so both are visible
+// to the node's process without it knowing where they came from.
+func (e *DevEngine) buildEnv(node *graph.Node) (map[string]string, error) {
+	env, err := resolveNodeEnv(e.graph, e.resolver, node, e.secrets, e.cfg.Dev.Port)
+	if err != nil {
+		return nil, err
+	}
+	if err := mergeProjectSecrets(env, e.projectSecrets); err != nil {
+		return nil, fmt.Errorf("resolve project secrets for %q: %w", node.ID, err)
+	}
+	if err := mergeProjectFlags(env, e.projectFlags); err != nil {
+		return nil, fmt.Errorf("resolve feature flags for %q: %w", node.ID, err)
+	}
+	return env, nil
 }
 
-func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node) map[string]string {
+// mergeProjectSecrets copies every key/value the project secret store holds
+// into env, unless the key is already set — engine-owned keys (PORT) and
+// adapter/edge-injected keys always win over a same-named project secret.
+// A nil store (no project root, e.g. most unit tests) is a no-op.
+func mergeProjectSecrets(env map[string]string, store projectSecretStore) error {
+	if store == nil {
+		return nil
+	}
+	all, err := store.All()
+	if err != nil {
+		return err
+	}
+	for k, v := range all {
+		if _, exists := env[k]; exists {
+			continue
+		}
+		env[k] = v
+	}
+	return nil
+}
+
+// mergeProjectFlags exposes every project feature flag to env as
+// ACTHUR_FLAG_<NAME>=true|false. Flags live in their own namespace, so they
+// always overwrite (there is no legitimate collision to defer to). A nil
+// store is a no-op.
+func mergeProjectFlags(env map[string]string, store projectFlagStore) error {
+	if store == nil {
+		return nil
+	}
+	all, err := store.List()
+	if err != nil {
+		return err
+	}
+	for _, f := range all {
+		env[flags.EnvKey(f.Name)] = flags.EnvValue(f.Enabled)
+	}
+	return nil
+}
+
+// resolveNodeEnv builds the environment for node, injecting a discovery URL
+// along each outgoing edge. The two edge kinds diverge (ADR 0012):
+//
+//   - data_flow: contract-governed traffic. The target's discovery URL points
+//     at the dev proxy's flow route (http://localhost:<devPort>/_flow/<from>/<to>)
+//     so the proxy is the single east-west interception point where the
+//     edge's contract is enforced. No Connectable env is injected here —
+//     that is an infra-connection concern, not a data_flow concern.
+//   - depends_on: an infra dependency. It keeps today's direct node-port URL
+//     plus whatever Connectable env the target's adapter exports
+//     (DATABASE_URL, etc.) — contracts do not apply to depends_on.
+func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node, secrets secretStore, devPort int) (map[string]string, error) {
 	env := make(map[string]string)
 
 	// Port
@@ -258,13 +598,47 @@ func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node) 
 		env["APP_PORT"] = fmt.Sprintf("%d", node.Port)
 	}
 
-	// Service discovery: inject URLs for nodes this one calls
-	for _, edge := range g.EdgesFrom(node.ID) {
-		if edge.Type == config.EdgeDataFlow || edge.Type == config.EdgeDependsOn {
-			target := g.Node(edge.To)
-			if target == nil {
+	// Apply this node's own adapter EnvVars: defaults, and synthesized values
+	// for Generate-marked secrets. Engine-set keys (PORT) and edge-injected
+	// keys (DATABASE_URL) take precedence, so we never overwrite what's set.
+	if a, ok := resolver.Adapter(node.Adapter); ok {
+		for _, ev := range a.EnvVars() {
+			if _, exists := env[ev.Key]; exists {
 				continue
 			}
+			switch {
+			case ev.Default != "":
+				env[ev.Key] = ev.Default
+			case ev.Generate:
+				value, err := secrets.Secret(node.ID, ev.Key)
+				if err != nil {
+					return nil, fmt.Errorf("synthesize %s for %q: %w", ev.Key, node.ID, err)
+				}
+				env[ev.Key] = value
+			}
+		}
+	}
+
+	// Service discovery: inject URLs for nodes this one calls
+	for _, edge := range g.EdgesFrom(node.ID) {
+		target := g.Node(edge.To)
+		if target == nil {
+			continue
+		}
+
+		switch edge.Type {
+		case config.EdgeDataFlow:
+			if target.Port != 0 {
+				// Contract-governed traffic is routed through the dev proxy's
+				// flow route so the proxy can enforce the edge's contract —
+				// e.g. web → API_URL=http://localhost:4000/_flow/web/api
+				envKey := envKeyFor(edge.To) + "_URL"
+				env[envKey] = fmt.Sprintf("http://localhost:%d/_flow/%s/%s", devPort, node.ID, edge.To)
+			}
+			// data_flow edges carry no Connectable env — contracts, not
+			// connection credentials, govern this traffic.
+
+		case config.EdgeDependsOn:
 			if target.Port != 0 {
 				// e.g. api → USER_SERVICE_URL=http://localhost:8081
 				envKey := envKeyFor(edge.To) + "_URL"
@@ -283,7 +657,7 @@ func resolveNodeEnv(g *graph.Graph, resolver AdapterResolver, node *graph.Node) 
 		}
 	}
 
-	return env
+	return env, nil
 }
 
 // printReady outputs the final "ready" message with all service URLs.
@@ -299,6 +673,67 @@ func (e *DevEngine) printReady() {
 		}
 	}
 	output.Ready(e.cfg.Project, urls)
+}
+
+// handleFileChange is the watcher.Handler the dev engine registers to react
+// to file changes in a service node's directory. A contract file change or a
+// change the watcher couldn't attribute to a node never restarts anything —
+// only a real service node's own directory triggers a restart, and only when
+// its adapter doesn't already reload itself (see adapter.SelfReloader).
+func (e *DevEngine) handleFileChange(ev watcher.Event) {
+	if ev.NodeID == "" || ev.NodeID == "__unknown__" || ev.NodeID == "__contracts__" {
+		return
+	}
+	node := e.graph.Node(ev.NodeID)
+	if node == nil || !node.IsService() {
+		return
+	}
+	a, ok := e.resolver.Adapter(node.Adapter)
+	if !ok {
+		return
+	}
+	if sr, ok := a.(adapter.SelfReloader); ok && sr.SelfReloads() {
+		output.Debug(node.ID, "file change — adapter self-reloads, skipping restart")
+		return
+	}
+
+	output.Info(node.ID, "file change detected — restarting...")
+	if err := e.pm.Restart(node.ID); err != nil {
+		output.Warn(node.ID, "restart failed: %v", err)
+		return
+	}
+	output.Success(node.ID, "restarted")
+}
+
+// checkDNS reports whether the project's dev domain and each service node's
+// subdomain resolve to 127.0.0.1. It never blocks or aborts startup — it
+// only prints copy-pastable /etc/hosts instructions (or, with --write-hosts,
+// attempts to append them itself, still without ever running sudo).
+func (e *DevEngine) checkDNS() {
+	if e.cfg.Dev.Domain == "" {
+		return
+	}
+	var nodeIDs []string
+	for _, node := range e.graph.NodesByType(config.NodeTypeService) {
+		nodeIDs = append(nodeIDs, node.ID)
+	}
+	hosts := dns.Hostnames(e.cfg.Dev.Domain, nodeIDs)
+	missing := dns.Missing(e.dnsLookup, hosts)
+	if len(missing) == 0 {
+		return
+	}
+
+	if e.writeHosts {
+		if err := dns.WriteHostsEntries(e.hostsPath, missing); err == nil {
+			output.Success("dns", "wrote %d hostname(s) to %s", len(missing), e.hostsPath)
+			return
+		} else {
+			output.Warn("dns", "could not write %s: %v", e.hostsPath, err)
+		}
+	}
+
+	output.Warn("dns", "%d dev hostname(s) don't resolve to 127.0.0.1 yet", len(missing))
+	fmt.Print(dns.Instructions(missing))
 }
 
 // waitForShutdown blocks until SIGINT or SIGTERM is received.

@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acthur/acthur/internal/graph"
-	"github.com/acthur/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ func (w *Watcher) check() {
 }
 
 func (w *Watcher) walkDir(dir, nodeID string, into map[string]fileSnapshot) {
-	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}

@@ -4,7 +4,9 @@
 package postgres
 
 import (
-	"github.com/acthur/acthur/internal/adapter"
+	"fmt"
+
+	"github.com/acthurhq/acthur/internal/adapter"
 )
 
 // Adapter implements adapter.Adapter (core) and adapter.Containerized for db:postgres.
@@ -38,7 +40,7 @@ func (a *Adapter) Container(ctx adapter.ContainerContext) adapter.ContainerSpec 
 		Ports: []int{5432},
 		Volumes: []adapter.Volume{
 			{
-				Name:      ctx.NodeID + "-data",
+				Name:      volumeName(ctx),
 				MountPath: "/var/lib/postgresql/data",
 			},
 		},
@@ -57,12 +59,32 @@ func (a *Adapter) Container(ctx adapter.ContainerContext) adapter.ContainerSpec 
 }
 
 // ConnectionEnv returns the connection variables exported to dependent nodes.
+// In the local dev context Postgres runs without TLS, so the URL declares
+// sslmode=disable to keep drivers from negotiating a connection the container
+// can't satisfy. The host port is read from the spec rather than hardcoded.
 func (a *Adapter) ConnectionEnv(ctx adapter.ContainerContext) map[string]string {
 	spec := a.Container(ctx)
-	return map[string]string{
-		"DATABASE_URL": "postgres://" +
-			spec.Env["POSTGRES_USER"] + ":" +
-			spec.Env["POSTGRES_PASSWORD"] + "@localhost:5432/" +
-			spec.Env["POSTGRES_DB"],
+	port := 5432
+	if len(spec.Ports) > 0 {
+		port = spec.Ports[0]
 	}
+	return map[string]string{
+		"DATABASE_URL": fmt.Sprintf(
+			"postgres://%s:%s@localhost:%d/%s?sslmode=disable",
+			spec.Env["POSTGRES_USER"],
+			spec.Env["POSTGRES_PASSWORD"],
+			port,
+			spec.Env["POSTGRES_DB"],
+		),
+	}
+}
+
+// volumeName scopes the data volume by project: a host running two acthur
+// projects must never share database state (witnessed live — a stale
+// schema_migrations version from another project broke db migrate).
+func volumeName(ctx adapter.ContainerContext) string {
+	if ctx.Project == "" {
+		return ctx.NodeID + "-data"
+	}
+	return ctx.Project + "-" + ctx.NodeID + "-data"
 }

@@ -1,0 +1,131 @@
+package auth
+
+import (
+	"errors"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"{{.ModulePath}}/internal/ids"
+)
+
+// Strategy selects how Mount issues credentials on successful login: "jwt"
+// (default, a bearer access token) or "session" (a DB-backed session
+// cookie). Set at generation time from acthur.yml plugins.auth.strategy.
+const Strategy = "{{.Strategy}}"
+
+type registerRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// Mount attaches the auth routes to app, backed by db:
+//
+//	POST /auth/register
+//	POST /auth/login
+//	POST /auth/logout
+//	GET  /auth/me      (requires RequireAuth)
+func Mount(app *fiber.App, db *pgxpool.Pool) {
+	sessions := NewSessionStore(db)
+
+	group := app.Group("/auth")
+	group.Post("/register", handleRegister(db))
+	group.Post("/login", handleLogin(db, sessions))
+	group.Post("/logout", handleLogout(sessions))
+	group.Get("/me", RequireAuth, handleMe(db))
+}
+
+func handleRegister(db *pgxpool.Pool) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req registerRequest
+		if err := c.BodyParser(&req); err != nil || req.Email == "" || req.Password == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "email and password are required")
+		}
+		hash, err := HashPassword(req.Password)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to hash password")
+		}
+		id := ids.New()
+		_, err = db.Exec(c.Context(),
+			`INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)`,
+			id, req.Email, hash,
+		)
+		if err != nil {
+			return fiber.NewError(fiber.StatusConflict, "user already exists or invalid data")
+		}
+		token, err := IssueJWT(id)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to issue token")
+		}
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"token": token})
+	}
+}
+
+func handleLogin(db *pgxpool.Pool, sessions *SessionStore) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req loginRequest
+		if err := c.BodyParser(&req); err != nil || req.Email == "" || req.Password == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "email and password are required")
+		}
+		var id, hash string
+		err := db.QueryRow(c.Context(),
+			`SELECT id, password_hash FROM users WHERE email = $1`, req.Email,
+		).Scan(&id, &hash)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
+			}
+			return fiber.NewError(fiber.StatusInternalServerError, "login failed")
+		}
+		if !CheckPassword(hash, req.Password) {
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
+		}
+
+		if Strategy == "session" {
+			sess, err := sessions.Create(c.Context(), id)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "failed to create session")
+			}
+			c.Cookie(&fiber.Cookie{Name: "session_token", Value: sess.Token, HTTPOnly: true})
+			return c.JSON(fiber.Map{"session_token": sess.Token})
+		}
+
+		token, err := IssueJWT(id)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to issue token")
+		}
+		return c.JSON(fiber.Map{"token": token})
+	}
+}
+
+func handleLogout(sessions *SessionStore) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		token := c.Cookies("session_token")
+		if token != "" {
+			_ = sessions.Delete(c.Context(), token)
+			c.ClearCookie("session_token")
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	}
+}
+
+func handleMe(db *pgxpool.Pool) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		userID, ok := UserID(c)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "not authenticated")
+		}
+		var email string
+		err := db.QueryRow(c.Context(), `SELECT email FROM users WHERE id = $1`, userID).Scan(&email)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "user not found")
+		}
+		return c.JSON(fiber.Map{"id": userID, "email": email})
+	}
+}

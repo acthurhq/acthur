@@ -9,9 +9,10 @@
 //
 // Every adapter implements the core Adapter interface (Name, Category, Detect,
 // EnvVars). Optional capabilities are expressed as separate interfaces
-// (Scaffolder, Runnable, Containerized, Connectable, Migratable, Deployable). The kernel
-// type-asserts against these at call sites. CapabilitiesOf is the single source
-// of truth for what a concrete adapter supports.
+// (Scaffolder, Runnable, Containerized, Connectable, Migratable, Deployable,
+// Dockerizable). The kernel type-asserts against these at call sites.
+// CapabilitiesOf is the single source of truth for what a concrete adapter
+// supports.
 package adapter
 
 import (
@@ -67,6 +68,10 @@ type EnvVar struct {
 	Required    bool
 	Default     string
 	Secret      bool // should be in secrets provider, not .env
+	// Generate marks a value the kernel synthesizes when it is otherwise unset
+	// (e.g. a dev APP_SECRET). The kernel persists it for stable local dev.
+	// Only meaningful for Required Secret vars that have no Default.
+	Generate bool
 }
 
 // File represents a file that an adapter will scaffold into the project.
@@ -97,6 +102,7 @@ type ScaffoldContext struct {
 
 // ContainerContext carries node-level facts the adapter needs to build a spec.
 type ContainerContext struct {
+	Project string // project name — scopes host-shared resources (volumes)
 	NodeID  string
 	Version string // from node's version: field in acthur.yml
 	Env     map[string]string
@@ -142,6 +148,7 @@ const (
 	CapabilityConnectable Capability = "Connectable"
 	CapabilityMigrate     Capability = "Migrate"
 	CapabilityDeploy      Capability = "Deploy"
+	CapabilityDockerize   Capability = "Dockerize"
 )
 
 // ---------------------------------------------------------------------------
@@ -207,6 +214,52 @@ type Deployable interface {
 	DeployCommand(env map[string]string) Command
 }
 
+// SelfReloader is implemented by Runnable adapters whose DevCommand already
+// performs its own hot reload on file change (e.g. go:fiber's `air`, which
+// rebuilds and restarts the compiled binary itself). The dev engine's file
+// watcher consults this before restarting a node's process: restarting a
+// node that already reloads itself would just race the adapter's own
+// rebuild for the same port.
+//
+// An adapter with no SelfReloader implementation is assumed NOT to
+// self-reload — the watcher restarts its process on every file change,
+// which is the correct (if slightly more disruptive) default for a plain
+// `go run`-style DevCommand.
+type SelfReloader interface {
+	SelfReloads() bool
+}
+
+// DockerfileContext carries the node-level facts a Dockerizable adapter
+// needs to render a production Dockerfile. It is deliberately narrower than
+// ScaffoldContext (project scaffolding, run once at `acthur add`) and
+// ContainerContext (declarative container spec for infra resources) — a
+// production Dockerfile only ever needs the node's identity and the port
+// it serves on.
+type DockerfileContext struct {
+	NodeID string
+	// Port is the node's configured port. Zero means the node has no
+	// listening port (e.g. a queue-worker service) — the adapter must omit
+	// EXPOSE and HEALTHCHECK in that case rather than guess one.
+	Port int
+	// GoVersion is the node's actual go.mod `go` directive (major.minor,
+	// e.g. "1.23"), when the caller could read one. A Go-toolchain-based
+	// adapter must use this (falling back to its own floor only when
+	// empty) rather than a version baked into the template at codegen
+	// time — a plugin's dependency (e.g. observability's
+	// prometheus/client_golang) can bump go.mod's directive via `go mod
+	// tidy` well after scaffolding, and a stale hardcoded builder image
+	// then fails `go mod download` with "go.mod requires go >= X".
+	// Non-Go adapters ignore this field.
+	GoVersion string
+}
+
+// Dockerizable can render a production-ready, multi-stage Dockerfile for a
+// service node. Infra adapters (e.g. db:postgres) do not implement this —
+// they run from official upstream images, not a project-owned build.
+type Dockerizable interface {
+	DockerfileFor(ctx DockerfileContext) ([]byte, error)
+}
+
 // ---------------------------------------------------------------------------
 // CapabilitiesOf — single source of truth
 // ---------------------------------------------------------------------------
@@ -233,6 +286,9 @@ func CapabilitiesOf(a Adapter) []Capability {
 	}
 	if _, ok := a.(Deployable); ok {
 		caps = append(caps, CapabilityDeploy)
+	}
+	if _, ok := a.(Dockerizable); ok {
+		caps = append(caps, CapabilityDockerize)
 	}
 	return caps
 }

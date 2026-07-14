@@ -3,9 +3,10 @@ package contract_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/contract"
 )
 
 // ---------------------------------------------------------------------------
@@ -246,8 +247,8 @@ func TestValidate_GRPCEndpointNoMethodRequired(t *testing.T) {
 func TestRegistry_Register(t *testing.T) {
 	reg := contract.NewRegistry()
 	c := &contract.Contract{
-		Name:    "users",
-		Version: "1",
+		Name:      "users",
+		Version:   "1",
 		Transport: contract.TransportHTTP,
 	}
 	if err := reg.Register(c); err != nil {
@@ -277,7 +278,7 @@ endpoints:
 
 func TestRegistry_Get_Registered(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP})
 
 	c, err := reg.Get("users", "1")
 	if err != nil {
@@ -298,8 +299,8 @@ func TestRegistry_Get_NotRegistered(t *testing.T) {
 
 func TestRegistry_GetLatest(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
-	reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
 
 	c, err := reg.GetLatest("users")
 	if err != nil {
@@ -326,7 +327,7 @@ func TestRegistry_IdempotentRegister(t *testing.T) {
 
 func TestRegistry_DuplicateVersionDifferentChecksum(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1",
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1",
 		Transport: contract.TransportHTTP, Checksum: "aaa"})
 
 	err := reg.Register(&contract.Contract{Name: "users", Version: "1",
@@ -338,9 +339,9 @@ func TestRegistry_DuplicateVersionDifferentChecksum(t *testing.T) {
 
 func TestRegistry_All(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users",        Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
-	reg.Register(&contract.Contract{Name: "appointments", Version: "1", Transport: contract.TransportHTTP, Checksum: "b"})
-	reg.Register(&contract.Contract{Name: "vets",         Version: "1", Transport: contract.TransportHTTP, Checksum: "c"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
+	_ = reg.Register(&contract.Contract{Name: "appointments", Version: "1", Transport: contract.TransportHTTP, Checksum: "b"})
+	_ = reg.Register(&contract.Contract{Name: "vets", Version: "1", Transport: contract.TransportHTTP, Checksum: "c"})
 
 	all := reg.All()
 	if len(all) != 3 {
@@ -350,9 +351,9 @@ func TestRegistry_All(t *testing.T) {
 
 func TestRegistry_Versions(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
-	reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
-	reg.Register(&contract.Contract{Name: "users", Version: "3", Transport: contract.TransportHTTP, Checksum: "c"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "1", Transport: contract.TransportHTTP, Checksum: "a"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "2", Transport: contract.TransportHTTP, Checksum: "b"})
+	_ = reg.Register(&contract.Contract{Name: "users", Version: "3", Transport: contract.TransportHTTP, Checksum: "c"})
 
 	versions := reg.Versions("users")
 	if len(versions) != 3 {
@@ -414,7 +415,7 @@ func TestDiff_AddedEndpoint_IsNonBreaking(t *testing.T) {
 	next := &contract.Contract{
 		Name: "users", Version: "2", Transport: contract.TransportHTTP,
 		Endpoints: []contract.Endpoint{
-			{ID: "get_user",   Method: "GET", Path: "/api/v1/users/:id"},
+			{ID: "get_user", Method: "GET", Path: "/api/v1/users/:id"},
 			{ID: "list_users", Method: "GET", Path: "/api/v1/users"},
 		},
 	}
@@ -574,12 +575,361 @@ func TestDiff_AuthAdded_IsBreaking(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// §11.5 Contract Diff Rules — one table row per rule
+// ---------------------------------------------------------------------------
+//
+// docs/acthur-prd.md §11.5 lists the exact rule set. Each row below builds a
+// minimal old/new contract pair for one rule and asserts the resulting
+// DiffResult classification (HasBreaking + presence of the right Change),
+// not Diff's internals.
+
+func TestDiff_Section11_5Rules(t *testing.T) {
+	tests := []struct {
+		name        string
+		old, next   *contract.Contract
+		wantBreak   bool
+		wantChgType contract.ChangeType
+		wantField   string // substring expected in the matching Change.Field
+	}{
+		// --- BREAKING -------------------------------------------------
+		{
+			name: "output field removed",
+			old: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+				Output: map[string]string{"id": "ulid", "email": "email"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+				Output: map[string]string{"id": "ulid"}, // email removed
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "output.email",
+		},
+		{
+			name: "field renamed",
+			// A rename is a removal of the old name plus an addition of a
+			// new (non-optional) name — both classify breaking under the
+			// existing added/removed rules, so a rename is breaking overall.
+			old: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+				Output: map[string]string{"id": "ulid", "email": "email"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+				Output: map[string]string{"id": "ulid", "email_address": "email"}, // renamed
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "output.email",
+		},
+		{
+			name: "required input field added",
+			old: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{"name": "string(required)"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{
+					"name": "string(required)",
+					"role": "string(required)", // new required field
+				},
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "input.role",
+		},
+		{
+			name: "endpoint path changed",
+			old: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v2/users/:id",
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "get_user.path",
+		},
+		{
+			name: "HTTP method changed",
+			old: ep(t, contract.Endpoint{
+				ID: "update_user", Method: "PUT", Path: "/api/v1/users/:id",
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "update_user", Method: "PATCH", Path: "/api/v1/users/:id",
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "update_user.method",
+		},
+		{
+			name: "stricter validation constraint (max:200 -> max:100)",
+			old: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{"bio": "string(required,max:200)"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{"bio": "string(required,max:100)"},
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "input.bio.max",
+		},
+		{
+			name: "auth requirement added (none -> required)",
+			old: ep(t, contract.Endpoint{
+				ID: "get_data", Method: "GET", Path: "/api/v1/data", Auth: "none",
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "get_data", Method: "GET", Path: "/api/v1/data", Auth: "required",
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "get_data.auth",
+		},
+		{
+			name: "auth requirement added (optional -> required)",
+			old: ep(t, contract.Endpoint{
+				ID: "get_data", Method: "GET", Path: "/api/v1/data", Auth: "optional",
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "get_data", Method: "GET", Path: "/api/v1/data", Auth: "required",
+			}),
+			wantBreak: true, wantChgType: contract.ChangeBreaking, wantField: "get_data.auth",
+		},
+
+		// --- NON-BREAKING ----------------------------------------------
+		{
+			name: "new optional output field added",
+			old: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+				Output: map[string]string{"id": "ulid"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+				Output: map[string]string{"id": "ulid", "avatar_url": "url?"},
+			}),
+			wantBreak: false, wantChgType: contract.ChangeNonBreaking, wantField: "output.avatar_url",
+		},
+		{
+			name: "new optional input field added",
+			old: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{"name": "string(required)"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{
+					"name":      "string(required)",
+					"nick_name": "string",
+				},
+			}),
+			wantBreak: false, wantChgType: contract.ChangeNonBreaking, wantField: "input.nick_name",
+		},
+		{
+			name: "new endpoint added",
+			old: ep(t, contract.Endpoint{
+				ID: "get_user", Method: "GET", Path: "/api/v1/users/:id",
+			}),
+			next: multiEP(t,
+				contract.Endpoint{ID: "get_user", Method: "GET", Path: "/api/v1/users/:id"},
+				contract.Endpoint{ID: "list_users", Method: "GET", Path: "/api/v1/users"},
+			),
+			wantBreak: false, wantChgType: contract.ChangeNonBreaking, wantField: "list_users",
+		},
+		{
+			name: "looser validation constraint (max:100 -> max:200)",
+			old: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{"bio": "string(required,max:100)"},
+			}),
+			next: ep(t, contract.Endpoint{
+				ID: "create_user", Method: "POST", Path: "/api/v1/users",
+				Input: map[string]string{"bio": "string(required,max:200)"},
+			}),
+			wantBreak: false, wantChgType: contract.ChangeNonBreaking, wantField: "input.bio.max",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := contract.Diff(tt.old, tt.next)
+			if result.HasBreaking != tt.wantBreak {
+				t.Errorf("HasBreaking = %v, want %v (changes: %+v)", result.HasBreaking, tt.wantBreak, result.Changes)
+			}
+			assertHasChange(t, result.Changes, tt.wantField, tt.wantChgType)
+		})
+	}
+}
+
+// min: stricter/looser semantics: raising a "min" bound is stricter
+// (harder for callers to satisfy); lowering it is looser. Kept as a
+// separate, explicit test since §11.5 only spells out the "max" example.
+func TestDiff_MinConstraint_StricterAndLooser(t *testing.T) {
+	stricter := contract.Diff(
+		ep(t, contract.Endpoint{
+			ID: "create_user", Method: "POST", Path: "/api/v1/users",
+			Input: map[string]string{"age": "int(required,min:0)"},
+		}),
+		ep(t, contract.Endpoint{
+			ID: "create_user", Method: "POST", Path: "/api/v1/users",
+			Input: map[string]string{"age": "int(required,min:18)"},
+		}),
+	)
+	if !stricter.HasBreaking {
+		t.Errorf("raising min:0 -> min:18 should be breaking (stricter), changes: %+v", stricter.Changes)
+	}
+
+	looser := contract.Diff(
+		ep(t, contract.Endpoint{
+			ID: "create_user", Method: "POST", Path: "/api/v1/users",
+			Input: map[string]string{"age": "int(required,min:18)"},
+		}),
+		ep(t, contract.Endpoint{
+			ID: "create_user", Method: "POST", Path: "/api/v1/users",
+			Input: map[string]string{"age": "int(required,min:0)"},
+		}),
+	)
+	if looser.HasBreaking {
+		t.Errorf("lowering min:18 -> min:0 should be non-breaking (looser), changes: %+v", looser.Changes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Importer tests — .proto / .graphql / .openapi.yml import to an equivalent
+// native Contract (docs/audit.md Phase 4 gap; issue #55). Fixtures live under
+// testdata/contract-import/<format>/.
+// ---------------------------------------------------------------------------
+
+func TestParseFile_OpenAPIImport(t *testing.T) {
+	c, err := contract.ParseFile("../../testdata/contract-import/openapi/users.openapi.yml")
+	if err != nil {
+		t.Fatalf("ParseFile(openapi): %v", err)
+	}
+	if c.Name != "users" {
+		t.Errorf("Name = %q, want %q", c.Name, "users")
+	}
+	if c.Transport != contract.TransportHTTP {
+		t.Errorf("Transport = %q, want http", c.Transport)
+	}
+	if _, ok := c.Types["User"]; !ok {
+		t.Fatalf("expected type %q to be imported, got types: %+v", "User", c.Types)
+	}
+
+	var createUser, listUsers *contract.Endpoint
+	for i := range c.Endpoints {
+		switch c.Endpoints[i].ID {
+		case "create_user":
+			createUser = &c.Endpoints[i]
+		case "list_users":
+			listUsers = &c.Endpoints[i]
+		}
+	}
+	if createUser == nil {
+		t.Fatalf("expected endpoint %q, got: %+v", "create_user", c.Endpoints)
+	}
+	if createUser.Method != "POST" || createUser.Path != "/api/v1/users" {
+		t.Errorf("create_user method/path = %s %s, want POST /api/v1/users", createUser.Method, createUser.Path)
+	}
+	if createUser.Auth != "required" {
+		t.Errorf("create_user.Auth = %q, want required", createUser.Auth)
+	}
+	if !strings.Contains(createUser.Input["name"], "required") {
+		t.Errorf("create_user.Input[name] = %q, want it to contain required", createUser.Input["name"])
+	}
+	if len(createUser.Errors) == 0 {
+		t.Errorf("expected create_user to carry imported error responses")
+	}
+
+	if listUsers == nil {
+		t.Fatalf("expected endpoint %q, got: %+v", "list_users", c.Endpoints)
+	}
+	if listUsers.Method != "GET" {
+		t.Errorf("list_users.Method = %q, want GET", listUsers.Method)
+	}
+}
+
+func TestParseFile_ProtoImport(t *testing.T) {
+	c, err := contract.ParseFile("../../testdata/contract-import/proto/users.proto")
+	if err != nil {
+		t.Fatalf("ParseFile(proto): %v", err)
+	}
+	if c.Name != "users" {
+		t.Errorf("Name = %q, want %q", c.Name, "users")
+	}
+	if c.Transport != contract.TransportGRPC {
+		t.Errorf("Transport = %q, want grpc", c.Transport)
+	}
+	if _, ok := c.Types["User"]; !ok {
+		t.Fatalf("expected message %q to import as a type, got types: %+v", "User", c.Types)
+	}
+
+	var createUser, listUsers *contract.Endpoint
+	for i := range c.Endpoints {
+		switch c.Endpoints[i].ID {
+		case "CreateUser":
+			createUser = &c.Endpoints[i]
+		case "ListUsers":
+			listUsers = &c.Endpoints[i]
+		}
+	}
+	if createUser == nil {
+		t.Fatalf("expected rpc %q, got: %+v", "CreateUser", c.Endpoints)
+	}
+	if createUser.Input["name"] == "" {
+		t.Errorf("expected CreateUser.Input to include request message fields, got: %+v", createUser.Input)
+	}
+	if createUser.Output["user"] == "" {
+		t.Errorf("expected CreateUser.Output to include response message fields, got: %+v", createUser.Output)
+	}
+	if listUsers == nil {
+		t.Fatalf("expected rpc %q, got: %+v", "ListUsers", c.Endpoints)
+	}
+}
+
+func TestParseFile_GraphQLImport(t *testing.T) {
+	c, err := contract.ParseFile("../../testdata/contract-import/graphql/users.graphql")
+	if err != nil {
+		t.Fatalf("ParseFile(graphql): %v", err)
+	}
+	if c.Transport != contract.TransportGraphQL {
+		t.Errorf("Transport = %q, want graphql", c.Transport)
+	}
+	if _, ok := c.Types["User"]; !ok {
+		t.Fatalf("expected type %q to be imported, got types: %+v", "User", c.Types)
+	}
+	// Types render plain shape only (bare = required, "?" suffix = optional),
+	// matching the OpenAPI importer's Types convention — not the
+	// "(required)" constraint syntax used for Input fields.
+	if got := c.Types["User"].Fields["name"]; got != "string" {
+		t.Errorf("User.name should be a required (non-optional) string, got: %q", got)
+	}
+	if got := c.Types["User"].Fields["role"]; got != "enum(Role)?" {
+		t.Errorf("User.role should be an optional enum reference, got: %q", got)
+	}
+
+	var getUser, createUser *contract.Endpoint
+	for i := range c.Endpoints {
+		switch c.Endpoints[i].ID {
+		case "getUser":
+			getUser = &c.Endpoints[i]
+		case "createUser":
+			createUser = &c.Endpoints[i]
+		}
+	}
+	if getUser == nil {
+		t.Fatalf("expected query %q to import as an endpoint, got: %+v", "getUser", c.Endpoints)
+	}
+	if getUser.Method != "QUERY" {
+		t.Errorf("getUser.Method = %q, want QUERY", getUser.Method)
+	}
+	if createUser == nil {
+		t.Fatalf("expected mutation %q to import as an endpoint, got: %+v", "createUser", c.Endpoints)
+	}
+	if createUser.Method != "MUTATION" {
+		t.Errorf("createUser.Method = %q, want MUTATION", createUser.Method)
+	}
+	if !strings.Contains(createUser.Input["name"], "required") {
+		t.Errorf("createUser.Input[name] = %q, want it to contain required", createUser.Input["name"])
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Validator tests
 // ---------------------------------------------------------------------------
 
 func TestValidator_ValidRequest(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{
+	_ = reg.Register(&contract.Contract{
 		Name:      "users",
 		Version:   "1",
 		Transport: contract.TransportHTTP,
@@ -605,16 +955,16 @@ func TestValidator_ValidRequest(t *testing.T) {
 
 func TestValidator_MissingRequiredField(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{
+	_ = reg.Register(&contract.Contract{
 		Name:      "users",
 		Version:   "1",
 		Transport: contract.TransportHTTP,
 		Endpoints: []contract.Endpoint{
 			{
-				ID:    "create_user",
+				ID:     "create_user",
 				Method: "POST",
-				Path:  "/api/v1/users",
-				Input: map[string]string{"name": "string(required)", "email": "email(required)"},
+				Path:   "/api/v1/users",
+				Input:  map[string]string{"name": "string(required)", "email": "email(required)"},
 			},
 		},
 	})
@@ -635,7 +985,7 @@ func TestValidator_MissingRequiredField(t *testing.T) {
 
 func TestValidator_MissingAuthHeader(t *testing.T) {
 	reg := contract.NewRegistry()
-	reg.Register(&contract.Contract{
+	_ = reg.Register(&contract.Contract{
 		Name:      "users",
 		Version:   "1",
 		Transport: contract.TransportHTTP,
@@ -676,6 +1026,31 @@ func writeContract(t *testing.T, content string) string {
 		t.Fatalf("failed to write contract: %v", err)
 	}
 	return path
+}
+
+// ep builds a minimal single-endpoint HTTP contract for §11.5 diff table
+// rows. Both sides of a row use the same contract name/version/transport so
+// the diff isolates the one behavior under test.
+func ep(t *testing.T, e contract.Endpoint) *contract.Contract {
+	t.Helper()
+	return &contract.Contract{
+		Name:      "svc",
+		Version:   "1",
+		Transport: contract.TransportHTTP,
+		Endpoints: []contract.Endpoint{e},
+	}
+}
+
+// multiEP builds a contract with several endpoints, for the "new endpoint
+// added" row.
+func multiEP(t *testing.T, es ...contract.Endpoint) *contract.Contract {
+	t.Helper()
+	return &contract.Contract{
+		Name:      "svc",
+		Version:   "1",
+		Transport: contract.TransportHTTP,
+		Endpoints: es,
+	}
 }
 
 func assertHasChange(t *testing.T, changes []contract.Change, field string, ct contract.ChangeType) {

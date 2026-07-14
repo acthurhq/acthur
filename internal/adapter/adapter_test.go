@@ -12,9 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/acthur/acthur/internal/adapter"
-	_ "github.com/acthur/acthur/internal/adapter/backend/gofiber" // register go:fiber
-	_ "github.com/acthur/acthur/internal/adapter/infra/postgres"  // register db:postgres
+	"github.com/acthurhq/acthur/internal/adapter"
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/chi"     // register go:chi
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gin"     // register go:gin
+	_ "github.com/acthurhq/acthur/internal/adapter/backend/gofiber" // register go:fiber
+	_ "github.com/acthurhq/acthur/internal/adapter/infra/postgres"  // register db:postgres
 )
 
 // ---------------------------------------------------------------------------
@@ -70,7 +72,7 @@ func TestRegistry_DuplicatePanics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber core interface tests
+// The go:fiber core interface tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_Name(t *testing.T) {
@@ -142,7 +144,7 @@ func TestGoFiber_EnvVars_ContainsDatabaseURL(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber Runnable capability tests
+// The go:fiber Runnable capability tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_DevCommand(t *testing.T) {
@@ -185,7 +187,7 @@ func TestGoFiber_TestCommand(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// go:fiber Scaffolder capability tests
+// The go:fiber Scaffolder capability tests
 // ---------------------------------------------------------------------------
 
 func TestGoFiber_Scaffold_ProducesFiles(t *testing.T) {
@@ -278,17 +280,123 @@ func TestGoFiber_Scaffold_FilesHaveContent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// The go:fiber Dockerizable capability tests (Phase 8 slice 1, #51)
+// ---------------------------------------------------------------------------
+
+func TestGoFiber_SatisfiesDockerizable(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	if _, ok := a.(adapter.Dockerizable); !ok {
+		t.Error("go:fiber does not satisfy Dockerizable")
+	}
+}
+
+func TestGoFiber_DockerfileFor_MultiStageBuild(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	content := string(out)
+	if !strings.Contains(content, "FROM golang:1.22-alpine AS builder") {
+		t.Error("expected a golang:1.22-alpine builder stage matching go.mod's go 1.22")
+	}
+	if !strings.Contains(content, "FROM alpine:3.20") {
+		t.Error("expected an alpine runtime stage")
+	}
+	if strings.Count(content, "FROM ") < 2 {
+		t.Error("expected a multi-stage build (at least two FROM stages)")
+	}
+}
+
+func TestGoFiber_DockerfileFor_NonRootUser(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	if !strings.Contains(string(out), "USER acthur") {
+		t.Error("expected the runtime stage to drop to a non-root user")
+	}
+}
+
+func TestGoFiber_DockerfileFor_ExposesNodePort(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 9090})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	if !strings.Contains(string(out), "EXPOSE 9090") {
+		t.Errorf("expected EXPOSE 9090 derived from the node's port, got:\n%s", out)
+	}
+}
+
+func TestGoFiber_DockerfileFor_HealthcheckAgainstHealthPath(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	content := string(out)
+	if !strings.Contains(content, "HEALTHCHECK") {
+		t.Error("expected a HEALTHCHECK instruction")
+	}
+	// 127.0.0.1, not localhost: alpine resolves localhost to ::1 while the
+	// app listens on IPv4 only (caught live by the Phase 8 witness).
+	if !strings.Contains(content, "http://127.0.0.1:8080/health") {
+		t.Error("expected the healthcheck to probe the adapter's /health path on the node's port via 127.0.0.1")
+	}
+}
+
+// TestGoFiber_DockerfileFor_NoPort_OmitsExposeAndHealthcheck: a queue-worker
+// service node has no listening port. EXPOSE/HEALTHCHECK must be omitted
+// rather than guessed — a fabricated port would silently break the image.
+func TestGoFiber_DockerfileFor_NoPort_OmitsExposeAndHealthcheck(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	out, err := a.DockerfileFor(adapter.DockerfileContext{NodeID: "worker", Port: 0})
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	content := string(out)
+	if strings.Contains(content, "EXPOSE") {
+		t.Error("expected no EXPOSE for a portless node")
+	}
+	if strings.Contains(content, "HEALTHCHECK") {
+		t.Error("expected no HEALTHCHECK for a portless node")
+	}
+}
+
+func TestGoFiber_DockerfileFor_Deterministic(t *testing.T) {
+	a := mustResolve(t, "go:fiber").(adapter.Dockerizable)
+	ctx := adapter.DockerfileContext{NodeID: "api", Port: 8080}
+	out1, err := a.DockerfileFor(ctx)
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	out2, err := a.DockerfileFor(ctx)
+	if err != nil {
+		t.Fatalf("DockerfileFor error: %v", err)
+	}
+	if !bytes.Equal(out1, out2) {
+		t.Error("expected DockerfileFor to be deterministic across identical calls")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Capability model tests
 // ---------------------------------------------------------------------------
 
-// Behavior 1: CapabilitiesOf(go:fiber) returns exactly {Scaffold, Run}.
-func TestCapabilitiesOf_GoFiber_ExactlyScaffoldAndRun(t *testing.T) {
+// Behavior 1: CapabilitiesOf(go:fiber) returns exactly {Scaffold, Run, Dockerize}.
+// Phase 8 slice 1 (#51) added the Dockerizable capability to go:fiber for
+// production Dockerfile generation — distinct from the scaffold-time
+// Dockerfile the Scaffolder already writes into the project.
+func TestCapabilitiesOf_GoFiber_ExactlyScaffoldRunAndDockerize(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
 	caps := adapter.CapabilitiesOf(a)
 
 	want := map[adapter.Capability]bool{
-		adapter.CapabilityScaffold: true,
-		adapter.CapabilityRun:      true,
+		adapter.CapabilityScaffold:  true,
+		adapter.CapabilityRun:       true,
+		adapter.CapabilityDockerize: true,
 	}
 	notWant := []adapter.Capability{
 		adapter.CapabilityContainer,
@@ -296,8 +404,8 @@ func TestCapabilitiesOf_GoFiber_ExactlyScaffoldAndRun(t *testing.T) {
 		adapter.CapabilityDeploy,
 	}
 
-	if len(caps) != 2 {
-		t.Errorf("expected exactly 2 capabilities, got %d: %v", len(caps), caps)
+	if len(caps) != 3 {
+		t.Errorf("expected exactly 3 capabilities, got %d: %v", len(caps), caps)
 	}
 	for _, c := range caps {
 		if !want[c] {
@@ -339,11 +447,14 @@ func TestGoFiber_DoesNotExposeGeneratorTargets(t *testing.T) {
 	}
 }
 
-// Behavior 5: go:fiber leaves Dockerfile ownership to scaffolded files.
+// Behavior 5: go:fiber does not expose a bare "Dockerfile" method — the
+// scaffold-time Dockerfile stays owned by Scaffolder, and the Phase 8
+// production-Dockerfile capability is named DockerfileFor (Dockerizable) so
+// the two concerns never collide under the same method name.
 func TestGoFiber_DoesNotExposeDockerfileMethod(t *testing.T) {
 	a := mustResolve(t, "go:fiber")
 	if _, ok := reflect.TypeOf(a).MethodByName("Dockerfile"); ok {
-		t.Error("go:fiber should not expose a Dockerfile method")
+		t.Error("go:fiber should not expose a bare Dockerfile method")
 	}
 }
 
@@ -730,4 +841,517 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestGoFiber_Scaffold_ServesHealthThroughProxyPrefix: the dev proxy routes
+// /api/* to the api service without stripping the prefix, so the scaffolded
+// service must expose health under its /api prefix as well as at /health
+// (the kernel checker's contract). Found by the #33 live witness:
+// curl localhost:4000/api/health 404'd through the proxy.
+func TestGoFiber_Scaffold_ServesHealthThroughProxyPrefix(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "testproject",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if f.Path != "internal/server/routes.go" {
+			continue
+		}
+		content := string(f.Content)
+		if !strings.Contains(content, `app.Get("/health", health.Handler)`) {
+			t.Error("expected kernel health contract route /health")
+		}
+		if !strings.Contains(content, `app.Get("/api/health", health.Handler)`) {
+			t.Error("expected through-proxy health route /api/health")
+		}
+		return
+	}
+	t.Fatal("internal/server/routes.go not in scaffolded files")
+}
+
+// TestGoFiber_Scaffold_LoggerReportsErrorStatus: the logger middleware runs
+// before Fiber's error handler writes the response, so on an error path
+// c.Response().StatusCode() is still the default 200. The scaffolded logger
+// must derive the status from the returned *fiber.Error (the #33 witness
+// showed 404 responses logged as status 200).
+func TestGoFiber_Scaffold_LoggerReportsErrorStatus(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "testproject",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if f.Path != "internal/middleware/logger.go" {
+			continue
+		}
+		content := string(f.Content)
+		if !strings.Contains(content, "*fiber.Error") {
+			t.Error("expected logger to derive status from the returned *fiber.Error on error paths")
+		}
+		return
+	}
+	t.Fatal("internal/middleware/logger.go not in scaffolded files")
+}
+
+// TestGoFiber_Scaffold_AirRerunsCrashedBinary: when the service binary exits
+// (panic, or a transient bind failure during a supervised restart), air must
+// rerun it rather than give up until the next file change — otherwise a
+// crashed service stays down with air alive, invisible to the supervisor
+// (found by the #33 live witness).
+func TestGoFiber_Scaffold_AirRerunsCrashedBinary(t *testing.T) {
+	a := mustResolve(t, "go:fiber")
+	s, ok := a.(adapter.Scaffolder)
+	if !ok {
+		t.Fatal("go:fiber does not implement Scaffolder")
+	}
+	files, err := s.Scaffold(adapter.ScaffoldContext{
+		ProjectName: "testproject",
+		NodeID:      "api",
+		ModulePath:  "github.com/testorg/api",
+		IDStrategy:  "ulid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected scaffold error: %v", err)
+	}
+	for _, f := range files {
+		if f.Path != ".air.toml" {
+			continue
+		}
+		content := string(f.Content)
+		if !strings.Contains(content, "rerun = true") {
+			t.Error("expected air rerun = true so a crashed binary is rerun")
+		}
+		if !strings.Contains(content, "rerun_delay") {
+			t.Error("expected rerun_delay so a persistently-failing binary does not spin")
+		}
+		return
+	}
+	t.Fatal(".air.toml not in scaffolded files")
+}
+
+// ---------------------------------------------------------------------------
+// The go:chi / go:gin adapter tests (issue #58) — same parity contract as
+// The go:fiber: Scaffolder, Runnable (with air self-reload), Dockerizable.
+// Shared assertions are parametrized over both adapters; a couple of
+// adapter-specific checks (Detect signature, per-framework import) follow.
+// ---------------------------------------------------------------------------
+
+// backendAdapterCase describes one go:<framework> backend adapter under test.
+type backendAdapterCase struct {
+	name           string // adapter registry key, e.g. "go:chi"
+	detectImport   string // an import string that should appear in that framework's go.mod
+	otherDetect    string // an import string from a *different* framework (Detect must return false for it)
+	routerFile     string // path (within Scaffold output) of the file registering routes
+	frameworkToken string // a token expected to appear in routerFile's content
+}
+
+func backendAdapterCases() []backendAdapterCase {
+	return []backendAdapterCase{
+		{
+			name:           "go:chi",
+			detectImport:   "github.com/go-chi/chi/v5",
+			otherDetect:    "github.com/gin-gonic/gin",
+			routerFile:     "internal/server/routes.go",
+			frameworkToken: "chi.Router",
+		},
+		{
+			name:           "go:gin",
+			detectImport:   "github.com/gin-gonic/gin",
+			otherDetect:    "github.com/go-chi/chi/v5",
+			routerFile:     "internal/server/routes.go",
+			frameworkToken: "gin.Engine",
+		},
+	}
+}
+
+func TestBackendAdapters_RegisteredAndCore(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			if a.Name() != tc.name {
+				t.Errorf("expected name %q, got %q", tc.name, a.Name())
+			}
+			if a.Category() != adapter.CategoryBackend {
+				t.Errorf("expected CategoryBackend, got %q", a.Category())
+			}
+			envVars := a.EnvVars()
+			if len(envVars) == 0 {
+				t.Error("expected env vars, got empty list")
+			}
+			found := false
+			for _, e := range envVars {
+				if e.Key == "DATABASE_URL" {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("expected DATABASE_URL in env vars")
+			}
+		})
+	}
+}
+
+func TestBackendAdapters_Detect(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+
+			dirTrue := t.TempDir()
+			writeFile(t, filepath.Join(dirTrue, "go.mod"), "module example.com/app\n\ngo 1.22\n\nrequire "+tc.detectImport+" v1.0.0\n")
+			if !a.Detect(dirTrue) {
+				t.Errorf("expected Detect to return true for go.mod containing %q", tc.detectImport)
+			}
+
+			dirFalse := t.TempDir()
+			writeFile(t, filepath.Join(dirFalse, "go.mod"), "module example.com/app\n\ngo 1.22\n\nrequire "+tc.otherDetect+" v1.0.0\n")
+			if a.Detect(dirFalse) {
+				t.Errorf("expected Detect to return false for go.mod without %q", tc.detectImport)
+			}
+
+			dirNone := t.TempDir()
+			if a.Detect(dirNone) {
+				t.Error("expected Detect to return false when no go.mod exists")
+			}
+		})
+	}
+}
+
+func TestBackendAdapters_Runnable(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			r, ok := a.(adapter.Runnable)
+			if !ok {
+				t.Fatalf("%s does not implement Runnable", tc.name)
+			}
+			dev := r.DevCommand(nil)
+			if dev.Bin != "air" {
+				t.Errorf("expected dev command bin=air, got %q", dev.Bin)
+			}
+			if len(dev.Args) == 0 {
+				t.Error("expected air to have arguments (-c .air.toml)")
+			}
+			build := r.BuildCommand(nil)
+			if build.Bin != "go" {
+				t.Errorf("expected build command bin=go, got %q", build.Bin)
+			}
+			test := r.TestCommand(nil)
+			if test.Bin != "go" {
+				t.Errorf("expected test command bin=go, got %q", test.Bin)
+			}
+
+			sr, ok := a.(adapter.SelfReloader)
+			if !ok {
+				t.Fatalf("%s does not implement SelfReloader", tc.name)
+			}
+			if !sr.SelfReloads() {
+				t.Errorf("expected %s to self-reload via air", tc.name)
+			}
+		})
+	}
+}
+
+func TestBackendAdapters_Scaffold_ProducesExpectedFiles(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			s, ok := a.(adapter.Scaffolder)
+			if !ok {
+				t.Fatalf("%s does not implement Scaffolder", tc.name)
+			}
+			files, err := s.Scaffold(adapter.ScaffoldContext{
+				ProjectName: "testproject",
+				NodeID:      "api",
+				ModulePath:  "github.com/testorg/api",
+				IDStrategy:  "ulid",
+			})
+			if err != nil {
+				t.Fatalf("unexpected scaffold error: %v", err)
+			}
+			if len(files) == 0 {
+				t.Fatal("expected scaffold to produce files")
+			}
+			byPath := map[string][]byte{}
+			for _, f := range files {
+				if len(f.Content) == 0 {
+					t.Errorf("file %q has empty content", f.Path)
+				}
+				byPath[f.Path] = f.Content
+			}
+			for _, want := range []string{"main.go", "Dockerfile", ".air.toml", ".env.example", ".gitignore", "go.mod", tc.routerFile} {
+				if _, ok := byPath[want]; !ok {
+					t.Errorf("expected %q in scaffolded files", want)
+				}
+			}
+			if content, ok := byPath[tc.routerFile]; ok {
+				if !containsStr(string(content), tc.frameworkToken) {
+					t.Errorf("%s does not reference %q; content:\n%s", tc.routerFile, tc.frameworkToken, content)
+				}
+				if !containsStr(string(content), `"/health"`) {
+					t.Errorf("%s does not register the kernel health contract route /health", tc.routerFile)
+				}
+				if !containsStr(string(content), `/api/health`) {
+					t.Errorf("%s does not register the through-proxy health route /api/health", tc.routerFile)
+				}
+			}
+			// air must rerun a crashed binary rather than wait for the next file change.
+			if content, ok := byPath[".air.toml"]; ok {
+				if !containsStr(string(content), "rerun = true") {
+					t.Error("expected air rerun = true so a crashed binary is rerun")
+				}
+				if !containsStr(string(content), "rerun_delay") {
+					t.Error("expected rerun_delay so a persistently-failing binary does not spin")
+				}
+			}
+		})
+	}
+}
+
+func TestBackendAdapters_Scaffold_ModulePathConsistent(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			sc := a.(adapter.Scaffolder)
+			const modulePath = "github.com/acthurtest/myservice"
+			files, err := sc.Scaffold(adapter.ScaffoldContext{
+				ProjectName: "myservice",
+				NodeID:      "myservice",
+				ModulePath:  modulePath,
+				IDStrategy:  "ulid",
+			})
+			if err != nil {
+				t.Fatalf("scaffold error: %v", err)
+			}
+			var goModPath string
+			for _, f := range files {
+				if f.Path == "go.mod" {
+					scanner := bufio.NewScanner(bytes.NewReader(f.Content))
+					for scanner.Scan() {
+						line := strings.TrimSpace(scanner.Text())
+						if strings.HasPrefix(line, "module ") {
+							goModPath = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+							break
+						}
+					}
+				}
+			}
+			if goModPath != modulePath {
+				t.Errorf("go.mod module path = %q, want %q", goModPath, modulePath)
+			}
+			for _, f := range files {
+				if !strings.HasSuffix(f.Path, ".go") {
+					continue
+				}
+				if strings.Contains(string(f.Content), "\"github.com/yourorg") {
+					t.Errorf("file %q still contains hardcoded 'yourorg' import", f.Path)
+				}
+			}
+		})
+	}
+}
+
+func TestBackendAdapters_Scaffold_IDStrategy(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		for _, strategy := range []struct {
+			name  string
+			token string
+		}{
+			{"ulid", "ulid"},
+			{"uuid-v4", "uuid"},
+		} {
+			t.Run(tc.name+"/"+strategy.name, func(t *testing.T) {
+				a := mustResolve(t, tc.name)
+				sc := a.(adapter.Scaffolder)
+				files, err := sc.Scaffold(adapter.ScaffoldContext{
+					ProjectName: "p",
+					NodeID:      "api",
+					ModulePath:  "github.com/testorg/api",
+					IDStrategy:  strategy.name,
+				})
+				if err != nil {
+					t.Fatalf("scaffold error: %v", err)
+				}
+				for _, f := range files {
+					if strings.HasSuffix(f.Path, "ids/ids.go") {
+						if !containsStr(string(f.Content), strategy.token) {
+							t.Errorf("ids.go does not reference %q for strategy=%s; content:\n%s", strategy.token, strategy.name, f.Content)
+						}
+						return
+					}
+				}
+				t.Error("ids.go not found in scaffold output")
+			})
+		}
+	}
+}
+
+func TestBackendAdapters_Dockerizable(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			d, ok := a.(adapter.Dockerizable)
+			if !ok {
+				t.Fatalf("%s does not satisfy Dockerizable", tc.name)
+			}
+
+			out, err := d.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+			if err != nil {
+				t.Fatalf("DockerfileFor error: %v", err)
+			}
+			content := string(out)
+			if !strings.Contains(content, "FROM golang:1.22-alpine AS builder") {
+				t.Error("expected a golang:1.22-alpine builder stage matching go.mod's go 1.22")
+			}
+			if !strings.Contains(content, "FROM alpine:3.20") {
+				t.Error("expected an alpine runtime stage")
+			}
+			if strings.Count(content, "FROM ") < 2 {
+				t.Error("expected a multi-stage build (at least two FROM stages)")
+			}
+			if !strings.Contains(content, "USER acthur") {
+				t.Error("expected the runtime stage to drop to a non-root user")
+			}
+			if !strings.Contains(content, "EXPOSE 8080") {
+				t.Error("expected EXPOSE 8080 derived from the node's port")
+			}
+			if !strings.Contains(content, "HEALTHCHECK") {
+				t.Error("expected a HEALTHCHECK instruction")
+			}
+			// 127.0.0.1, not localhost: alpine resolves localhost to ::1 while the
+			// app listens on IPv4 only (the same bug the Phase 8 go:fiber witness caught).
+			if !strings.Contains(content, "http://127.0.0.1:8080/health") {
+				t.Error("expected the healthcheck to probe /health on the node's port via 127.0.0.1")
+			}
+			// The prod Dockerfile builds the root package "." (not ./...).
+			if !strings.Contains(content, "-o /build/app \\\n    .\n") && !strings.Contains(content, "-o /build/app \\\n    .") {
+				t.Error("expected the build stage to build the root package '.' not './...'")
+			}
+
+			noPort, err := d.DockerfileFor(adapter.DockerfileContext{NodeID: "worker", Port: 0})
+			if err != nil {
+				t.Fatalf("DockerfileFor error: %v", err)
+			}
+			if strings.Contains(string(noPort), "EXPOSE") {
+				t.Error("expected no EXPOSE for a portless node")
+			}
+			if strings.Contains(string(noPort), "HEALTHCHECK") {
+				t.Error("expected no HEALTHCHECK for a portless node")
+			}
+
+			out2, err := d.DockerfileFor(adapter.DockerfileContext{NodeID: "api", Port: 8080})
+			if err != nil {
+				t.Fatalf("DockerfileFor error: %v", err)
+			}
+			if !bytes.Equal(out, out2) {
+				t.Error("expected DockerfileFor to be deterministic across identical calls")
+			}
+		})
+	}
+}
+
+func TestBackendAdapters_CapabilitiesOf_ExactlyScaffoldRunAndDockerize(t *testing.T) {
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			caps := adapter.CapabilitiesOf(a)
+			want := map[adapter.Capability]bool{
+				adapter.CapabilityScaffold:  true,
+				adapter.CapabilityRun:       true,
+				adapter.CapabilityDockerize: true,
+			}
+			if len(caps) != 3 {
+				t.Errorf("expected exactly 3 capabilities, got %d: %v", len(caps), caps)
+			}
+			for _, c := range caps {
+				if !want[c] {
+					t.Errorf("unexpected capability %q in CapabilitiesOf(%s)", c, tc.name)
+				}
+			}
+			if _, ok := a.(adapter.Connectable); ok {
+				t.Errorf("%s should not satisfy Connectable", tc.name)
+			}
+			if _, ok := a.(adapter.Containerized); ok {
+				t.Errorf("%s should not satisfy Containerized", tc.name)
+			}
+		})
+	}
+}
+
+// TestBackendAdapters_Scaffold_CompilesWithGoBuild is the tracer-bullet
+// verification the issue calls for: scaffold each adapter into a temp dir
+// and prove `go build ./...` actually succeeds on the generated code —
+// compilation is the strongest assertion available (it kills module-path
+// mismatches, missing imports, and framework-API drift all at once).
+func TestBackendAdapters_Scaffold_CompilesWithGoBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping compilation test in short mode")
+	}
+	for _, tc := range backendAdapterCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := mustResolve(t, tc.name)
+			sc, ok := a.(adapter.Scaffolder)
+			if !ok {
+				t.Fatalf("%s does not implement Scaffolder", tc.name)
+			}
+			dir := t.TempDir()
+			ctx := adapter.ScaffoldContext{
+				ProjectName: "testapi",
+				NodeID:      "api",
+				ModulePath:  "github.com/acthurtest/api",
+				IDStrategy:  "ulid",
+				RootDir:     dir,
+			}
+			files, err := sc.Scaffold(ctx)
+			if err != nil {
+				t.Fatalf("scaffold error: %v", err)
+			}
+			for _, f := range files {
+				path := filepath.Join(dir, f.Path)
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+				}
+				mode := fs.FileMode(f.Mode)
+				if mode == 0 {
+					mode = 0644
+				}
+				if err := os.WriteFile(path, f.Content, mode); err != nil {
+					t.Fatalf("write %s: %v", path, err)
+				}
+			}
+			tidy := exec.Command("go", "mod", "tidy")
+			tidy.Dir = dir
+			if out, err := tidy.CombinedOutput(); err != nil {
+				t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+			}
+			build := exec.Command("go", "build", "./...")
+			build.Dir = dir
+			if out, err := build.CombinedOutput(); err != nil {
+				t.Fatalf("go build failed: %v\n%s", err, out)
+			}
+			vetCmd := exec.Command("go", "vet", "./...")
+			vetCmd.Dir = dir
+			if out, err := vetCmd.CombinedOutput(); err != nil {
+				t.Fatalf("go vet failed: %v\n%s", err, out)
+			}
+		})
+	}
 }

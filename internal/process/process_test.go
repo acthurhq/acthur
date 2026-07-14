@@ -2,11 +2,14 @@ package process_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/acthur/acthur/internal/process"
+	"github.com/acthurhq/acthur/internal/process"
 )
 
 // ---------------------------------------------------------------------------
@@ -53,9 +56,9 @@ func TestProcess_StateTransitions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	p.Start(ctx)
+	_ = p.Start(ctx)
 	time.Sleep(100 * time.Millisecond)
-	p.Stop(5 * time.Second)
+	_ = p.Stop(5 * time.Second)
 
 	// Should have seen: Running, Stopping, Stopped
 	sawRunning := false
@@ -90,9 +93,9 @@ func TestProcess_OutputCapture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	p.Start(ctx)
+	_ = p.Start(ctx)
 	time.Sleep(500 * time.Millisecond) // give it time to output
-	p.Stop(2 * time.Second)
+	_ = p.Stop(2 * time.Second)
 
 	found := false
 	for _, l := range lines {
@@ -184,7 +187,7 @@ func TestManager_SpawnAndGet(t *testing.T) {
 		t.Error("expected Get to return the spawned process")
 	}
 
-	m.Stop("test-node")
+	_ = m.Stop("test-node")
 }
 
 func TestManager_SpawnDuplicate(t *testing.T) {
@@ -193,12 +196,12 @@ func TestManager_SpawnDuplicate(t *testing.T) {
 	}
 
 	m := process.NewManager()
-	m.Spawn("dup-node", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("dup-node", sleepCmd(), sleepArgs(), nil, "")
 	_, err := m.Spawn("dup-node", sleepCmd(), sleepArgs(), nil, "")
 	if err == nil {
 		t.Error("expected error spawning duplicate node, got nil")
 	}
-	m.Stop("dup-node")
+	_ = m.Stop("dup-node")
 }
 
 func TestManager_GetNonExistent(t *testing.T) {
@@ -223,9 +226,9 @@ func TestManager_All(t *testing.T) {
 	}
 
 	m := process.NewManager()
-	m.Spawn("node-a", sleepCmd(), sleepArgs(), nil, "")
-	m.Spawn("node-b", sleepCmd(), sleepArgs(), nil, "")
-	m.Spawn("node-c", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("node-a", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("node-b", sleepCmd(), sleepArgs(), nil, "")
+	_, _ = m.Spawn("node-c", sleepCmd(), sleepArgs(), nil, "")
 
 	all := m.All()
 	if len(all) != 3 {
@@ -235,6 +238,60 @@ func TestManager_All(t *testing.T) {
 	m.StopAll([]string{"node-a", "node-b", "node-c"})
 }
 
+// TestManager_LogSinkReceivesOutputLines asserts that a LogSink registered
+// via SetLogSink receives every output line from every process the manager
+// spawns afterward, alongside the default output.ServiceLog routing. This is
+// the seam `acthur service logs` depends on to persist per-node log files.
+func TestManager_LogSinkReceivesOutputLines(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping manager test in short mode")
+	}
+
+	m := process.NewManager()
+
+	type line struct{ nodeID, text string }
+	var mu sync.Mutex
+	var got []line
+	m.SetLogSink(func(nodeID, text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, line{nodeID, text})
+	})
+
+	_, err := m.Spawn("logged-node", echoCmd(), echoArgs("hello-from-sink"), nil, "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	_ = m.Stop("logged-node")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("expected log sink to receive at least one line")
+	}
+	found := false
+	for _, l := range got {
+		if l.nodeID == "logged-node" && containsStr(l.text, "hello-from-sink") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a line containing the echoed text, got %#v", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OS-specific helpers
 // ---------------------------------------------------------------------------
@@ -242,7 +299,7 @@ func TestManager_All(t *testing.T) {
 // sleepCmd returns the platform-appropriate sleep command binary.
 func sleepCmd() string {
 	if runtime.GOOS == "windows" {
-		return "timeout"
+		return "ping"
 	}
 	return "sleep"
 }
@@ -250,7 +307,9 @@ func sleepCmd() string {
 // sleepArgs returns args for a 10-second sleep.
 func sleepArgs() []string {
 	if runtime.GOOS == "windows" {
-		return []string{"/t", "10"}
+		// Unlike `timeout`, ping does not fail when exec.Cmd redirects stdin.
+		// Eleven loopback probes take approximately ten seconds.
+		return []string{"-n", "11", "127.0.0.1"}
 	}
 	return []string{"10"}
 }
@@ -278,4 +337,124 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestProcess_StopDeliversSIGTERMBeforeKill: Stop's contract is graceful
+// termination — the child must receive SIGTERM and get a chance to clean up
+// (air kills its compiled binary, docker-run proxies the signal to the
+// container). A context-cancel SIGKILL gives the child no chance at all.
+func TestProcess_StopDeliversSIGTERMBeforeKill(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping signal test")
+	}
+
+	marker := t.TempDir() + "/got-term"
+	script := `trap 'echo yes > ` + marker + `; exit 0' TERM; while true; do sleep 0.1; done`
+	p := process.NewProcess("term-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond) // let the trap install
+
+	if err := p.Stop(5 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("expected child to observe SIGTERM (marker file missing): %v", err)
+	}
+}
+
+// TestProcess_StopTerminatesWholeProcessTree: dev tools (air) spawn the real
+// service binary as a child. Stopping only the direct child orphans the
+// grandchild, which keeps the port bound so a supervised restart can never
+// recover (found by the #33 live witness). Stop must take down the whole
+// process group.
+func TestProcess_StopTerminatesWholeProcessTree(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping process-group test")
+	}
+
+	pidFile := t.TempDir() + "/grandchild.pid"
+	script := `sleep 60 & echo $! > ` + pidFile + `; wait`
+	p := process.NewProcess("tree-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("grandchild pid never appeared")
+	}
+
+	if err := p.Stop(5 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if pidAlive(pid) {
+		forceKill(pid) // clean up
+		t.Fatalf("grandchild %d survived Stop — process tree not terminated", pid)
+	}
+}
+
+// TestProcess_RestartReapsOrphanedGrandchildren: when the supervised process
+// is killed externally (crash), its grandchildren are orphaned — the context
+// Cancel never fires because the process already exited. Restart must reap
+// the old process group before starting the replacement, or the orphan keeps
+// the port bound and the restarted service can never come up (found by the
+// #33 live witness).
+func TestProcess_RestartReapsOrphanedGrandchildren(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping process-group test")
+	}
+
+	pidFile := t.TempDir() + "/grandchild.pid"
+	script := `sleep 60 & echo $! > ` + pidFile + `; wait`
+	p := process.NewProcess("orphan-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("grandchild pid never appeared")
+	}
+
+	// Simulate a hard crash of the supervised process itself.
+	forceKill(p.Pid())
+	time.Sleep(200 * time.Millisecond)
+
+	if err := p.Restart(ctx); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	defer func() { _ = p.Stop(5 * time.Second) }()
+	time.Sleep(200 * time.Millisecond)
+
+	if pidAlive(pid) {
+		forceKill(pid) // clean up
+		t.Fatalf("orphaned grandchild %d survived restart", pid)
+	}
 }

@@ -1,0 +1,48 @@
+package tenant
+
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ErrNotFound is returned when no tenant matches the requested slug or ID.
+var ErrNotFound = errors.New("tenant: not found")
+
+// Store looks up tenants against the public.tenants table. It always
+// queries through the "public" schema regardless of the connection's
+// current search_path, since tenant records themselves are shared,
+// unscoped data — they exist to resolve which schema a request belongs to.
+type Store struct {
+	Pool *pgxpool.Pool
+}
+
+// NewStore builds a Store backed by pool.
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{Pool: pool}
+}
+
+// BySlug looks up a tenant by its public slug (subdomain or X-Tenant-ID
+// value).
+func (s *Store) BySlug(ctx context.Context, slug string) (*Tenant, error) {
+	return s.queryOne(ctx, "SELECT id, slug, schema_name, created_at FROM public.tenants WHERE slug = $1", slug)
+}
+
+// ByID looks up a tenant by its primary key.
+func (s *Store) ByID(ctx context.Context, id string) (*Tenant, error) {
+	return s.queryOne(ctx, "SELECT id, slug, schema_name, created_at FROM public.tenants WHERE id = $1", id)
+}
+
+func (s *Store) queryOne(ctx context.Context, query, arg string) (*Tenant, error) {
+	row := s.Pool.QueryRow(ctx, query, arg)
+	var t Tenant
+	if err := row.Scan(&t.ID, &t.Slug, &t.SchemaName, &t.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &t, nil
+}

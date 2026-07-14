@@ -1,0 +1,13 @@
+# Force LF line endings on checkout for embedded Go template files,
+# regardless of the checking-out machine's platform or core.autocrlf
+# setting. These files are read via `//go:embed` (e.g.
+# internal/adapter/backend/{chi,gin,...}/templates/*.tmpl) and their
+# rendered output is asserted against byte-for-byte in tests such as
+# TestBackendAdapters_Dockerizable (internal/adapter/adapter_test.go). Git
+# for Windows commonly defaults to core.autocrlf=true, which rewrites LF to
+# CRLF on checkout for anything it classifies as text — silently breaking
+# those exact-content assertions (go:chi and go:gin failing on
+# windows-latest CI, but not other backend adapters, was traced to this).
+# `text eol=lf` keeps normal diffing/text handling but pins the checked-out
+# line ending to LF on every platform.
+*.tmpl text eol=lf

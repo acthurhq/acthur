@@ -1,0 +1,53 @@
+package rbac
+
+import (
+	"github.com/gofiber/fiber/v2"
+)
+
+// UserIDLocalsKey is the fiber locals key an upstream auth layer is expected
+// to set after authenticating a request (see the ASSUMPTION note in
+// models.go). RequireRole and RequirePermission read the user id from this
+// key; they never authenticate the request themselves.
+const UserIDLocalsKey = "user_id"
+
+// RequireRole returns fiber middleware that allows the request through only
+// if the authenticated user (see UserIDLocalsKey) holds at least one of
+// names, as reported by source. Responds 401 if no user id is present, 403
+// if the user lacks every named role.
+func RequireRole(source PolicySource, names ...string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		userID, ok := c.Locals(UserIDLocalsKey).(string)
+		if !ok || userID == "" {
+			return fiber.NewError(fiber.StatusUnauthorized, "rbac: authentication required")
+		}
+		allowed, err := source.HasRole(c.Context(), userID, names...)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "rbac: role check failed")
+		}
+		if !allowed {
+			return fiber.NewError(fiber.StatusForbidden, "rbac: insufficient role")
+		}
+		return c.Next()
+	}
+}
+
+// RequirePermission returns fiber middleware that allows the request through
+// only if the authenticated user's roles grant at least one of names, as
+// reported by source. Responds 401 if no user id is present, 403 if the
+// user's roles grant none of the named permissions.
+func RequirePermission(source PolicySource, names ...string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		userID, ok := c.Locals(UserIDLocalsKey).(string)
+		if !ok || userID == "" {
+			return fiber.NewError(fiber.StatusUnauthorized, "rbac: authentication required")
+		}
+		allowed, err := source.HasPermission(c.Context(), userID, names...)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "rbac: permission check failed")
+		}
+		if !allowed {
+			return fiber.NewError(fiber.StatusForbidden, "rbac: insufficient permission")
+		}
+		return c.Next()
+	}
+}

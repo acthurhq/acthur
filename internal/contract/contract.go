@@ -7,7 +7,7 @@ package contract
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -32,33 +32,33 @@ const (
 // Contract is the fully-parsed representation of a .contract.yml file.
 // It is the source of truth for what can flow on a data_flow graph edge.
 type Contract struct {
-	Name      string               `yaml:"contract"`
-	Version   string               `yaml:"version"`
-	Transport Transport            `yaml:"transport"`
-	Endpoints []Endpoint           `yaml:"endpoints"`
-	Events    []EventDef           `yaml:"events"`
-	Types     map[string]TypeDef   `yaml:"types"`
+	Name      string             `yaml:"contract"`
+	Version   string             `yaml:"version"`
+	Transport Transport          `yaml:"transport"`
+	Endpoints []Endpoint         `yaml:"endpoints"`
+	Events    []EventDef         `yaml:"events"`
+	Types     map[string]TypeDef `yaml:"types"`
 
 	// Runtime fields
-	FilePath  string `yaml:"-"`
-	Checksum  string `yaml:"-"`
+	FilePath string `yaml:"-"`
+	Checksum string `yaml:"-"`
 }
 
 // Endpoint defines one operation exposed by the contract.
 type Endpoint struct {
-	ID          string            `yaml:"id"`
-	Method      string            `yaml:"method"`
-	Path        string            `yaml:"path"`
-	Auth        string            `yaml:"auth"`    // "required" | "optional" | "none"
-	Roles       []string          `yaml:"roles"`
-	RateLimit   RateLimitDef      `yaml:"rate_limit"`
-	Input       map[string]string `yaml:"input"`   // field: type(constraints)
-	Output      map[string]string `yaml:"output"`  // field: type
-	Errors      []ErrorDef        `yaml:"errors"`
-	Deprecated  bool              `yaml:"deprecated"`
-	DeprecatedAt string           `yaml:"deprecated_at"`
-	SunsetAt    string            `yaml:"sunset_at"`
-	Streaming   string            `yaml:"streaming"` // for gRPC: server|client|bidirectional
+	ID           string            `yaml:"id"`
+	Method       string            `yaml:"method"`
+	Path         string            `yaml:"path"`
+	Auth         string            `yaml:"auth"` // "required" | "optional" | "none"
+	Roles        []string          `yaml:"roles"`
+	RateLimit    RateLimitDef      `yaml:"rate_limit"`
+	Input        map[string]string `yaml:"input"`  // field: type(constraints)
+	Output       map[string]string `yaml:"output"` // field: type
+	Errors       []ErrorDef        `yaml:"errors"`
+	Deprecated   bool              `yaml:"deprecated"`
+	DeprecatedAt string            `yaml:"deprecated_at"`
+	SunsetAt     string            `yaml:"sunset_at"`
+	Streaming    string            `yaml:"streaming"` // for gRPC: server|client|bidirectional
 }
 
 // RateLimitDef defines rate limiting for an endpoint.
@@ -89,27 +89,30 @@ type TypeDef struct {
 // Parser
 // ---------------------------------------------------------------------------
 
-// ParseFile reads and parses a .contract.yml file.
-// It also accepts .proto, .openapi.yml, and .graphql files — those are
-// compiled to the Contract representation before being returned.
+// ParseFile reads and parses a contract file. PRD §11.1 lists four accepted
+// formats — native .contract.yml, OpenAPI 3.x (.openapi.yml/.openapi.yaml),
+// Protocol Buffers (.proto), and GraphQL SDL (.graphql/.gql) — all compiled
+// to this package's internal Contract representation.
 func ParseFile(path string) (*Contract, error) {
+	lower := strings.ToLower(path)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read contract file %q: %w", path, err)
 	}
 
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".yml", ".yaml":
-		return parseYAML(path, data)
-	case ".proto":
-		return parseProto(path, data)
-	case ".graphql", ".gql":
-		return parseGraphQL(path, data)
-	default:
-		// Try YAML by default (e.g. .contract files)
-		return parseYAML(path, data)
+	switch {
+	case strings.HasSuffix(lower, ".openapi.yml"), strings.HasSuffix(lower, ".openapi.yaml"):
+		return importOpenAPI(path, data)
+	case strings.HasSuffix(lower, ".proto"):
+		return importProto(path, data)
+	case strings.HasSuffix(lower, ".graphql"), strings.HasSuffix(lower, ".gql"):
+		return importGraphQL(path, data)
 	}
+
+	// Everything else (.yml, .yaml, or extensionless .contract files) is
+	// parsed as the native format.
+	return parseYAML(path, data)
 }
 
 func parseYAML(path string, data []byte) (*Contract, error) {
@@ -129,26 +132,6 @@ func parseYAML(path string, data []byte) (*Contract, error) {
 	c.FilePath = path
 	c.Checksum = checksum(data)
 	return &c, nil
-}
-
-// parseProto is a stub — full implementation reads protobuf descriptors.
-func parseProto(path string, _ []byte) (*Contract, error) {
-	return &Contract{
-		Name:      filepath.Base(strings.TrimSuffix(path, filepath.Ext(path))),
-		Version:   "1",
-		Transport: TransportGRPC,
-		FilePath:  path,
-	}, nil
-}
-
-// parseGraphQL is a stub — full implementation reads GraphQL SDL.
-func parseGraphQL(path string, _ []byte) (*Contract, error) {
-	return &Contract{
-		Name:      filepath.Base(strings.TrimSuffix(path, filepath.Ext(path))),
-		Version:   "1",
-		Transport: TransportGraphQL,
-		FilePath:  path,
-	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +344,39 @@ func Diff(old, next *Contract) *DiffResult {
 				)
 			}
 		}
+
+		// Constraint changes on input fields present in both versions
+		// (stricter → breaking, looser → non-breaking; §11.5).
+		for field, newTyp := range newEP.Input {
+			oldTyp, exists := oldEP.Input[field]
+			if !exists {
+				continue // handled by the "field added" case above
+			}
+			oldConstraints := parseConstraints(oldTyp)
+			newConstraints := parseConstraints(newTyp)
+			for _, kind := range []string{"max", "min"} {
+				oldVal, oldOK := oldConstraints[kind]
+				newVal, newOK := newConstraints[kind]
+				if !oldOK || !newOK || oldVal == newVal {
+					continue
+				}
+				stricter, changed := constraintTightened(kind, oldVal, newVal)
+				if !changed {
+					continue
+				}
+				if stricter {
+					result.addBreaking(
+						fmt.Sprintf("endpoint %q: input field %q constraint %s tightened from %s to %s", id, field, kind, oldVal, newVal),
+						fmt.Sprintf("endpoints.%s.input.%s.%s", id, field, kind),
+					)
+				} else {
+					result.addNonBreaking(
+						fmt.Sprintf("endpoint %q: input field %q constraint %s loosened from %s to %s", id, field, kind, oldVal, newVal),
+						fmt.Sprintf("endpoints.%s.input.%s.%s", id, field, kind),
+					)
+				}
+			}
+		}
 	}
 
 	// Check for removed types (breaking if used in endpoint output)
@@ -371,6 +387,61 @@ func Diff(old, next *Contract) *DiffResult {
 	}
 
 	return result
+}
+
+// parseConstraints extracts the constraint list from a field type string
+// such as "string(required,max:100)" into {"required": "", "max": "100"}.
+// Bare flags (no ":") map to an empty value. Types with no parens (e.g.
+// "string" or "url?") yield an empty, non-nil map.
+func parseConstraints(typ string) map[string]string {
+	m := make(map[string]string)
+	start := strings.Index(typ, "(")
+	end := strings.LastIndex(typ, ")")
+	if start == -1 || end == -1 || end < start {
+		return m
+	}
+	inner := typ[start+1 : end]
+	for _, part := range strings.Split(inner, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if idx := strings.Index(part, ":"); idx != -1 {
+			m[strings.TrimSpace(part[:idx])] = strings.TrimSpace(part[idx+1:])
+		} else {
+			m[part] = ""
+		}
+	}
+	return m
+}
+
+// constraintTightened reports whether a constraint's value became stricter
+// (more restrictive for callers) going from oldVal to newVal.
+//
+//   - "max" bounds an upper limit (e.g. string length): a smaller max is
+//     stricter, a larger max is looser.
+//   - "min" bounds a lower limit: a larger min is stricter (harder to
+//     satisfy), a smaller min is looser.
+//
+// changed reports whether the values differ numerically at all; non-numeric
+// values are treated as changed-but-not-classifiable (stricter=false).
+func constraintTightened(kind, oldVal, newVal string) (stricter, changed bool) {
+	oldN, errOld := strconv.Atoi(oldVal)
+	newN, errNew := strconv.Atoi(newVal)
+	if errOld != nil || errNew != nil {
+		return false, oldVal != newVal
+	}
+	if oldN == newN {
+		return false, false
+	}
+	switch kind {
+	case "max":
+		return newN < oldN, true
+	case "min":
+		return newN > oldN, true
+	default:
+		return false, true
+	}
 }
 
 func (r *DiffResult) addBreaking(desc, field string) {
@@ -608,6 +679,70 @@ func (v *Validator) ValidateRequest(
 				})
 				result.Valid = false
 			}
+		}
+	}
+
+	return result
+}
+
+// ValidateResponse checks an outgoing response body against the contract's
+// Output schema for the given endpoint. Only 2xx responses carry a
+// meaningful Output contract — callers should not call this for non-2xx
+// status codes, but ValidateResponse itself only checks field presence, so
+// calling it is harmless either way.
+//
+// A response field is considered required unless its declared type ends in
+// "?" (matching the native format's optional-field convention). Extra
+// fields present in the body but not declared in Output are not flagged —
+// this is a minimal, honest check for missing/renamed fields, not full
+// schema validation.
+func (v *Validator) ValidateResponse(
+	contractName, version, endpointID string,
+	body map[string]any,
+) ValidationResult {
+	result := ValidationResult{
+		Valid:      true,
+		Contract:   contractName,
+		EndpointID: endpointID,
+	}
+
+	c, err := v.registry.Get(contractName, version)
+	if err != nil {
+		result.Violations = append(result.Violations, Violation{
+			Message:   fmt.Sprintf("contract %q@%s not found in registry", contractName, version),
+			Direction: "response",
+		})
+		result.Valid = false
+		return result
+	}
+
+	var ep *Endpoint
+	for i := range c.Endpoints {
+		if c.Endpoints[i].ID == endpointID {
+			ep = &c.Endpoints[i]
+			break
+		}
+	}
+	if ep == nil {
+		result.Violations = append(result.Violations, Violation{
+			Message:   fmt.Sprintf("endpoint %q not defined in contract %q", endpointID, contractName),
+			Direction: "response",
+		})
+		result.Valid = false
+		return result
+	}
+
+	for field, typeDef := range ep.Output {
+		if strings.HasSuffix(strings.Split(typeDef, "(")[0], "?") {
+			continue // optional output field — absence is not a violation
+		}
+		if _, exists := body[field]; !exists {
+			result.Violations = append(result.Violations, Violation{
+				Field:     field,
+				Message:   fmt.Sprintf("required field %q is missing from response body", field),
+				Direction: "response",
+			})
+			result.Valid = false
 		}
 	}
 

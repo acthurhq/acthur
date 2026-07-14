@@ -1,0 +1,10 @@
+contract: widgets
+version: "2"
+transport: http
+endpoints:
+  - id: get_widget
+    method: GET
+    path: /api/v1/widgets/:id
+    auth: required
+    output:
+      id: ulid

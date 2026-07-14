@@ -1,0 +1,71 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"{{.ModulePath}}/internal/ids"
+)
+
+// defaultSessionTTL is how long a session-strategy login stays valid.
+const defaultSessionTTL = 30 * 24 * time.Hour
+
+// ErrSessionNotFound is returned when no session row matches a token.
+var ErrSessionNotFound = errors.New("auth: session not found")
+
+// ErrSessionExpired is returned when a session row exists but has expired.
+var ErrSessionExpired = errors.New("auth: session expired")
+
+// SessionStore is a DB-backed session store over the sessions table
+// (migrations/0101_sessions.up.sql).
+type SessionStore struct {
+	db *pgxpool.Pool
+}
+
+// NewSessionStore constructs a SessionStore over db.
+func NewSessionStore(db *pgxpool.Pool) *SessionStore {
+	return &SessionStore{db: db}
+}
+
+// Create inserts a new session for userID and returns it.
+func (s *SessionStore) Create(ctx context.Context, userID string) (*Session, error) {
+	token := ids.New()
+	expiresAt := time.Now().Add(defaultSessionTTL)
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)`,
+		token, userID, expiresAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{Token: token, UserID: userID, ExpiresAt: expiresAt}, nil
+}
+
+// Get looks up a session by token, rejecting expired ones.
+func (s *SessionStore) Get(ctx context.Context, token string) (*Session, error) {
+	var sess Session
+	err := s.db.QueryRow(ctx,
+		`SELECT token, user_id, expires_at, created_at FROM sessions WHERE token = $1`,
+		token,
+	).Scan(&sess.Token, &sess.UserID, &sess.ExpiresAt, &sess.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, err
+	}
+	if time.Now().After(sess.ExpiresAt) {
+		return nil, ErrSessionExpired
+	}
+	return &sess, nil
+}
+
+// Delete removes a session by token (logout).
+func (s *SessionStore) Delete(ctx context.Context, token string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM sessions WHERE token = $1`, token)
+	return err
+}

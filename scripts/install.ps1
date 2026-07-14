@@ -10,7 +10,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ACTHUR_REPO  = "acthur/acthur"
+$ACTHUR_REPO  = "acthurhq/acthur"
 $ACTHUR_DIR   = "$env:APPDATA\acthur"
 $ACTHUR_BIN   = "$ACTHUR_DIR\bin"
 $ACTHUR_EXE   = "$ACTHUR_BIN\acthur.exe"
@@ -53,19 +53,39 @@ function Install-Acthur {
 
     $archiveName = "acthur_$($version.TrimStart('v'))_windows_$arch.zip"
     $downloadUrl = "https://github.com/$ACTHUR_REPO/releases/download/$version/$archiveName"
+    $checksumsName = "acthur_$($version.TrimStart('v'))_checksums.txt"
+    $checksumsUrl = "https://github.com/$ACTHUR_REPO/releases/download/$version/$checksumsName"
 
     Write-Info "Downloading Acthur $version for windows/$arch..."
 
     $tmpDir  = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
     $zipPath = "$tmpDir\$archiveName"
+    $checksumsPath = "$tmpDir\$checksumsName"
 
     New-Item -ItemType Directory -Path $tmpDir | Out-Null
 
     try {
         $progressPreference = 'SilentlyContinue'
         Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
+        Invoke-WebRequest -Uri $checksumsUrl -OutFile $checksumsPath -UseBasicParsing
     } catch {
-        Write-Fail "Download failed from $downloadUrl`n  Error: $_"
+        Write-Fail "Release asset download failed for $version`n  Error: $_"
+    }
+
+    $manifestEntry = Get-Content -Path $checksumsPath | ForEach-Object {
+        $fields = $_ -split '\s+', 2
+        if ($fields.Count -eq 2 -and $fields[1].TrimStart('*') -eq $archiveName) {
+            $fields[0]
+        }
+    } | Select-Object -First 1
+
+    if (-not $manifestEntry) {
+        Write-Fail "Checksum manifest has no entry for $archiveName"
+    }
+
+    $actualSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+    if ($actualSha256 -ne $manifestEntry) {
+        Write-Fail "Checksum verification failed for $archiveName"
     }
 
     # Extract
@@ -102,6 +122,10 @@ function Verify-Installation {
     param($version)
     try {
         $output = & $ACTHUR_EXE version 2>&1
+        $expectedVersion = $version.TrimStart('v')
+        if ($output -notmatch "Version:\s+v?$([regex]::Escape($expectedVersion))") {
+            Write-Fail "Installation verification failed: binary does not report requested version $version"
+        }
         Write-Success "Acthur $version installed successfully"
     } catch {
         Write-Fail "Installation verification failed: $_"

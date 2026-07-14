@@ -1,0 +1,59 @@
+package health
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+)
+
+// Response is the structured health check response.
+// Acthur's health checker polls GET /health and parses this.
+type Response struct {
+	Status  string           `json:"status"`
+	Service string           `json:"service"`
+	Uptime  float64          `json:"uptime_seconds"`
+	Checks  map[string]Check `json:"checks"`
+}
+
+// Check is a single dependency health check result.
+type Check struct {
+	Status    string `json:"status"`
+	LatencyMs int64  `json:"latency_ms,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+var startTime = time.Now()
+
+// ServiceName is reported in the health response. Set at startup by
+// config.Load(); defaults to "api".
+var ServiceName = "api"
+
+// Handler handles GET /health.
+// Returns 200 if all checks pass, 503 if any fail.
+func Handler(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]Check{
+		// Checks added here by migrations plugin, auth plugin, etc.
+		// Example (added by db:postgres adapter + migrations plugin):
+		// "database": checkDatabase(db),
+		// "redis":    checkRedis(redis),
+	}
+
+	status := "healthy"
+	httpStatus := http.StatusOK
+	for _, ch := range checks {
+		if ch.Status != "healthy" {
+			status = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+	_ = json.NewEncoder(w).Encode(Response{
+		Status:  status,
+		Service: ServiceName,
+		Uptime:  time.Since(startTime).Seconds(),
+		Checks:  checks,
+	})
+}

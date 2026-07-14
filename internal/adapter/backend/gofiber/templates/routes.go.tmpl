@@ -15,8 +15,12 @@ import (
 //  4. handler
 func registerRoutes(app *fiber.App, cfg *config.Config) {
 	_ = cfg
-	// Health check — no auth, no tenant
+	// Health check — no auth, no tenant.
+	// /health is the kernel health checker's contract (polled on the node port);
+	// /api/health is the same handler reachable through the dev proxy, which
+	// routes /api/* to this service without stripping the prefix.
 	app.Get("/health", health.Handler)
+	app.Get("/api/health", health.Handler)
 
 	// API v1 routes
 	v1 := app.Group("/api/v1")

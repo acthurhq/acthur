@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ func TestLoad_EdgeCount(t *testing.T) {
 }
 
 func TestLoad_PluginCount(t *testing.T) {
-	cfg, err := config.LoadFile(fixture("vetangle/acthur.yml"))
+	cfg, err := config.LoadFile(fixture("plugin-parse/acthur.yml"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

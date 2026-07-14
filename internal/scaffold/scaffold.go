@@ -2,8 +2,8 @@
 package scaffold
 
 import (
-	"github.com/acthur/acthur/internal/adapter"
-	"github.com/acthur/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/config"
 )
 
 // ResolveScaffoldContext assembles the config-backed context passed to adapters.

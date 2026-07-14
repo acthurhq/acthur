@@ -1,0 +1,39 @@
+package server
+
+import (
+	"net/http"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"{{.ModulePath}}/internal/config"
+	apperrors "{{.ModulePath}}/internal/errors"
+	"{{.ModulePath}}/internal/middleware"
+)
+
+// New creates and configures the gin engine.
+// Middleware is registered here in a fixed order:
+//  1. Recovery (panic -> 500, never crash the process)
+//  2. RequestID (trace correlation)
+//  3. Logger (structured request logging)
+//  4. ErrorHandler (converts *errors.AppError set on the context into JSON)
+//  5. CORS (generated from graph data_flow edges by security plugin)
+//  6. Compress
+//  7. Routes
+func New(cfg *config.Config) http.Handler {
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+
+	r.Use(gin.Recovery())
+	r.Use(middleware.RequestID())
+	r.Use(middleware.Logger())
+	r.Use(apperrors.Handler())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{cfg.CORSOrigins},
+		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Authorization", "X-Request-ID"},
+	}))
+
+	registerRoutes(r, cfg)
+
+	return r
+}

@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"text/template"
 
-	"github.com/acthur/acthur/internal/adapter"
+	"github.com/acthurhq/acthur/internal/adapter"
 )
 
 //go:embed templates/go.mod.tmpl
@@ -56,6 +56,9 @@ var tmplGitignore []byte
 //go:embed templates/dockerfile.tmpl
 var tmplDockerfile []byte
 
+//go:embed templates/dockerfile.prod.tmpl
+var tmplDockerfileProd []byte
+
 // Adapter implements adapter.Adapter for Go Fiber.
 type Adapter struct{}
 
@@ -85,6 +88,12 @@ func (a *Adapter) DevCommand(env map[string]string) adapter.Command {
 	}
 }
 
+// SelfReloads reports true: air watches this node's own source directory,
+// rebuilds, and restarts the compiled binary itself. The dev engine's file
+// watcher must not also restart this node's process — that would just race
+// air's own rebuild for the same port.
+func (a *Adapter) SelfReloads() bool { return true }
+
 // BuildCommand returns the go build command for production.
 func (a *Adapter) BuildCommand(env map[string]string) adapter.Command {
 	return adapter.Command{
@@ -108,7 +117,7 @@ func (a *Adapter) EnvVars() []adapter.EnvVar {
 	return []adapter.EnvVar{
 		{Key: "APP_ENV", Description: "application environment", Required: true, Default: "development"},
 		{Key: "APP_PORT", Description: "HTTP port", Required: true, Default: "8080"},
-		{Key: "APP_SECRET", Description: "application secret key", Required: true, Secret: true},
+		{Key: "APP_SECRET", Description: "application secret key", Required: true, Secret: true, Generate: true},
 		{Key: "DATABASE_URL", Description: "PostgreSQL connection string", Required: true, Secret: true},
 		{Key: "REDIS_URL", Description: "Redis connection string", Required: false, Default: "redis://localhost:6379"},
 	}
@@ -166,7 +175,7 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 	}
 	dockerfile, err := renderTemplate("dockerfile.tmpl", tmplDockerfile, ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Dockerfile: %w", err)
+		return nil, fmt.Errorf("rendering Dockerfile: %w", err)
 	}
 
 	return []adapter.File{
@@ -184,6 +193,16 @@ func (a *Adapter) Scaffold(ctx adapter.ScaffoldContext) ([]adapter.File, error) 
 		{Path: "internal/middleware/logger.go", Content: loggerGo},
 		{Path: "Dockerfile", Content: dockerfile},
 	}, nil
+}
+
+// DockerfileFor renders a production-ready, multi-stage Dockerfile for a
+// The go:fiber service node (Dockerizable capability). It is distinct from the
+// scaffold-time Dockerfile Scaffold() writes once into the project: this one
+// is (re)rendered by internal/deploy/artifacts on every `acthur deploy`, so
+// EXPOSE/HEALTHCHECK always reflect the node's current graph facts —
+// omitted entirely when the node has no port (e.g. a queue-worker service).
+func (a *Adapter) DockerfileFor(ctx adapter.DockerfileContext) ([]byte, error) {
+	return renderTemplate("dockerfile.prod.tmpl", tmplDockerfileProd, ctx)
 }
 
 // ---------------------------------------------------------------------------

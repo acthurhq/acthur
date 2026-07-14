@@ -1,0 +1,347 @@
+# Acthur Handoff
+
+Last updated: 2026-07-10
+Workspace: `/home/makebot360tech/projects/acthur`
+Primary audit file: `docs/audit.md`
+Primary PRD: `docs/acthur-prd.md`
+
+## Current User Goal
+
+The user wants Acthur implementation checked carefully against `docs/acthur-prd.md`, without trusting completion notes, comments, or prior audit claims. The user also wants implementation gaps, installer readiness, package/repo strategy, CLI reference drift, architecture modes, package manager/frontend support, and plugin coverage tracked clearly.
+
+The latest explicit request was to hand off the full conversation to `ai-docs/acthur-handoff`.
+
+## Hard Constraints From User
+
+- Do not edit implementation code while implementation is in progress unless explicitly asked.
+- Do not trust completion notes, comments, or previous audit reports.
+- Confirm implementation end-to-end from code/tests/commands.
+- Keep `docs/audit.md` updated when new audit findings are requested.
+- Treat dev changes as active work in progress.
+
+## Repository State At Last Check
+
+Git remote was updated from the old personal namespace to:
+
+```text
+origin git@github.com:acthurhq/acthur.git
+```
+
+Current working tree had many implementation files modified by the user/dev. These must not be reverted:
+
+```text
+cmd/acthur/generate.go
+internal/adapter/adapter_test.go
+internal/adapter/backend/chi/chi.go
+internal/adapter/backend/fastify/fastify.go
+internal/adapter/backend/fastify/fastify_test.go
+internal/adapter/backend/gin/gin.go
+internal/adapter/backend/gofiber/gofiber.go
+internal/adapter/backend/rustaxum/rustaxum.go
+internal/adapter/frontend/astro/astro.go
+internal/adapter/frontend/next/next.go
+internal/contract/contract_test.go
+internal/engine/dev_test.go
+internal/engine/dev_watcher_test.go
+internal/generate/gofiber/emit_service.go
+internal/generate/gofiber/model.go
+internal/graph/graph_test.go
+internal/output/output.go
+internal/plugin/builtin/admin/admin.go
+internal/plugin/builtin/auth/auth.go
+internal/plugin/builtin/rbac/rbac.go
+internal/proxy/proxy.go
+```
+
+Earlier assistant edits were limited to `docs/audit.md` and the git remote URL.
+
+## PRD Phase Count
+
+`docs/acthur-prd.md` contains 10 phases total:
+
+- Phase 0 through Phase 9.
+
+The user asked several times to verify phase completion independently instead of trusting notes.
+
+## Current Audit Status
+
+`docs/audit.md` is the detailed audit record. It currently includes both the earlier findings and later re-check updates.
+
+Important latest update in `docs/audit.md` says dev closed several gaps:
+
+- Phase 3 `acthur dev` wrong-container health check was fixed.
+- A live Docker/Postgres witness named `final-witness` reportedly showed `acthur dev` healthy.
+- `acthur db migrate`, `seed`, and `reset --yes` passed in that witness.
+- Phase 7 migration-range collision was fixed with regression tests.
+- Deploy Dockerfile Go version drift was fixed with regression coverage.
+- `acthur db studio` SIGTERM cleanup leak was fixed with regression coverage.
+- Boundary review found no `internal/*` imports from `cmd/*`.
+
+Remaining major issue in the audit:
+
+- Full test suite is still not fully green because `internal/process.TestProcess_OutputCapture` is intermittently flaky under full-suite load. It passes standalone/rerun.
+
+Product-decision items still not addressed:
+
+- Phase 8 deploy projection still silently skips unsupported adapters by design; changing this to hard error needs a product decision.
+- Installer/release namespace still references `github.com/acthur/acthur` in places and needs canonical namespace migration.
+- Plugin discovery outside project/plugin roots is unchanged.
+
+## Installer And Production Readiness
+
+The implementation should not be called production-ready yet.
+
+Reasons:
+
+- Installer/release path still needs canonical GitHub/module namespace decision and update.
+- `github.com/acthur/acthur` references remain while the canonical repo is now `github.com/acthurhq/acthur`.
+- Full suite still has at least one known flake.
+- Phase 9 ecosystem is incomplete.
+- README/CLI reference drift remains.
+- Generated frontend/package-manager support is incomplete.
+
+The user asked whether Acthur can be tried before the installer is complete. Answer given:
+
+```bash
+git clone https://github.com/acthurhq/acthur
+cd acthur
+go build -o ./bin/acthur ./cmd/acthur
+./bin/acthur --help
+```
+
+To try a generated project:
+
+```bash
+mkdir -p /tmp/acthur-playground
+cd /tmp/acthur-playground
+/path/to/acthur/bin/acthur new my-saas
+cd my-saas
+/path/to/acthur/bin/acthur graph validate
+cd api
+go mod tidy
+go build ./...
+```
+
+Non-interactive example:
+
+```bash
+/path/to/acthur/bin/acthur new my-saas --adapter go:fiber --db --module github.com/acthurhq/my-saas
+```
+
+Earlier caution was to avoid `acthur dev` due a health-check bug, but the current audit update says that specific bug has now been fixed and live-witnessed. Still verify locally before calling it release-ready.
+
+## Namespace And Repository Strategy
+
+The user moved toward `acthurhq` after discovering `github.com/acthur` was taken.
+
+Recommendation already given:
+
+- Prefer `github.com/acthurhq/acthur`.
+- It is clearer for a product/project home than `acthur-os` or `acthuros`.
+- User had created `ActhurOS` before, but `acthurhq` was recommended and the repo was transferred there.
+
+Separate repos created by user:
+
+- `https://github.com/samueloshio/acthur-adapters`
+- `https://github.com/samueloshio/acthur-docs`
+- `https://github.com/samueloshio/acthur-plugins`
+- `https://github.com/samueloshio/acthur-examples`
+
+Advice already given:
+
+- Keep monorepo until the extension interfaces, adapter contracts, release process, and docs build are stable.
+- Split official adapters/plugins/examples/docs after seams stabilize, ideally before broad public release.
+- Avoid splitting too early while contracts are still moving.
+
+Outstanding namespace work:
+
+- Update Go module/import paths if canonical path changes from `github.com/acthur/acthur` to `github.com/acthurhq/acthur`.
+- Update installer scripts, GoReleaser, README, docs, examples, generated module references, release artifacts, and any CI paths.
+- Decide whether official split repos should live under `acthurhq` rather than `samueloshio`.
+
+## License Recommendation
+
+Recommendation given:
+
+- Use MIT if the goal is broad open-source adoption, low friction, and easy commercial use.
+
+Notes:
+
+- Apache-2.0 is also reasonable if explicit patent grant matters.
+- AGPL/GPL were not recommended for Acthur unless the user intentionally wants strong copyleft.
+
+## Package Managers, Runtime, And Frontends
+
+User asked whether generated frontend/backend projects support:
+
+- npm
+- yarn
+- pnpm
+- bun
+
+Finding:
+
+- Current templates/adapters hard-code npm in places.
+- Package manager selection is not properly modeled in the wizard/runtime configuration.
+
+Explanation already given:
+
+- Runtime means the execution platform/language, such as Go, Node, Bun, Rust, Flutter/Dart.
+- Package manager means dependency tool, such as npm, yarn, pnpm, bun, cargo, go mod, pub.
+
+Recommended design:
+
+- Wizard asks package manager for JS-based projects.
+- Default `pnpm` for `node:*` and `ui:*`.
+- Default `bun` for `bun:*`.
+- Store selection in `acthur.yml`.
+- Use selected manager consistently in dev/build/test/Dockerfile/lockfile detection/doctor.
+
+Frontend findings added to audit:
+
+- Implemented frontends include `ui:next` and `ui:astro`.
+- Missing frontends include `ui:nuxt`, `ui:vue`, `ui:svelte`.
+- Additional likely desired frontends include Vite React + TypeScript, React Native/Expo, Flutter, and later desktop targets.
+- At time checked, template versions appeared behind latest package releases:
+  - `astro ^4.16.0`
+  - `@astrojs/node ^8.3.4`
+  - `next ^14.2.13`
+  - `react ^18.3.1`
+  - `typescript ^5.6.2`
+
+Because package versions change, re-check npm before making a current claim.
+
+## Hot Reload
+
+User asked whether backend/frontend hot reload is in place.
+
+Finding:
+
+- Code appears to include dev runtime/watcher support and adapter dev commands for supported adapters.
+- Latest audit update says `acthur dev` was live-witnessed healthy after the container health-check fix.
+- Specific frontend/backend hot reload behavior should still be separately witnessed end-to-end if the release claim depends on it.
+
+## Architecture Modes
+
+User proposed architecture mode commands:
+
+```text
+Triple   acthur new app --triple       Web + Admin + API, monorepo, Turborepo
+Double   acthur new app --double       Web + API
+Single   acthur new app --single       Go binary with go:embed frontend
+API      acthur new app --api          Go API only
+Mobile   acthur new app --mobile       API + Expo React Native
+Desktop  acthur new-desktop app        Wails + Go + React + SQLite
+```
+
+Finding:
+
+- These commands/modes are not implemented.
+- Current `acthur new` supports only narrow flags such as adapter/db/module and scaffolds a simpler project shape.
+
+Audit update:
+
+- Missing architecture modes were added to `docs/audit.md`.
+
+Product advice:
+
+- API, Double, Triple are good Phase 9 candidates.
+- Mobile can follow once Expo/React Native support is scoped.
+- Desktop should likely come later because Wails/native packaging/signing is a larger surface.
+
+## Plugin Coverage
+
+User asked about many plugins/capabilities.
+
+Found as built-in or partly implemented:
+
+- migrations
+- auth
+- rbac
+- multitenancy
+- feature flags
+- admin
+- observability
+- security
+- https
+
+Missing or not implemented as first-class plugins:
+
+- secrets
+- i18n
+- analytics
+- Stripe
+- Paystack
+- Flutterwave
+- notifications: in-app, push, SMS, email
+- video/media: upload, FFmpeg, HLS streaming
+- conference: WebRTC signaling, rooms
+
+These were added to `docs/audit.md` as Phase 9/ecosystem gaps.
+
+## README / CLI Reference Drift
+
+The root README has drift from the actual CLI/code. Findings added to audit:
+
+- README project structure overclaims `services/api`, `web`, `backoffice`, and `db/migrations`.
+- README supported runtimes overclaim Echo, Actix, Rocket, NestJS, Express, Bun Elysia/Hono, Python, and PHP.
+- README supported frontends overclaim Nuxt, Svelte, and Vue.
+- `acthur contract diff <n>` is stale; actual command expects old and new files.
+- `acthur generate model <Name> --fields` likely does not match implementation; code expects positional `field:type`.
+- `acthur init` overclaims scan/detect/non-destructive behavior.
+- README deploy target “Docker” is ambiguous/stale; actual target is `compose` plus cloud targets.
+- README plugin table overclaims `secrets`, `i18n`, `analytics`, `ci-cd`, `docs`, and `ai`.
+- README quick-start `.test` URL overclaims automatic DNS behavior.
+
+## Phase 9 Summary
+
+Phase 9 is still the main incomplete area.
+
+Likely remaining work:
+
+- Complete frontend adapter catalogue beyond Next/Astro.
+- Add package-manager selection and propagation.
+- Implement or explicitly defer architecture modes.
+- Finish plugin ecosystem or reduce claims.
+- Align README/docs with actual CLI.
+- Make installer/release path production-ready under canonical namespace.
+- Decide split-repo timing and package publishing strategy.
+- Prove deploy targets and hot reload end-to-end.
+
+## Package Publishing Question
+
+User asked whether packages need to be published later.
+
+Answer direction:
+
+- For Go CLI, releases usually publish binaries via GitHub Releases/Homebrew/Scoop/install script, not npm packages.
+- If there are JS templates, plugins, or adapters consumed independently, those may become npm packages later.
+- Official adapters/plugins can remain in-repo until APIs stabilize, then move to separate repos and publish only if there is a strong consumption story.
+- Do not publish packages before namespace/module path is finalized.
+
+## Recommended Next Actions
+
+1. Re-run a clean audit after dev says the latest fixes landed.
+2. Compare `docs/acthur-prd.md` phase-by-phase against code and tests, not notes.
+3. Update `docs/audit.md` with only verified findings.
+4. Decide canonical module path: likely `github.com/acthurhq/acthur`.
+5. Plan a namespace migration across Go module, imports, docs, generated templates, installer, GoReleaser, CI, and examples.
+6. Fix or quarantine the full-suite flake before any production-ready claim.
+7. Decide whether Phase 9 is release-blocking or should become a public roadmap.
+8. Align README claims with implemented CLI before public launch.
+
+## Suggested Skills For Future Agent
+
+- Use the `review` skill for another end-to-end review pass against the PRD and current code.
+- Use the `diagnose` skill if focusing on the full-suite `internal/process.TestProcess_OutputCapture` flake.
+- Use the `to-issues` skill if converting remaining Phase 9 gaps into implementation tickets.
+- Use the `github:yeet` skill only if the user explicitly asks to commit, push, or open a PR.
+
+## Cautions For Future Agent
+
+- Do not revert the active implementation changes in the working tree.
+- Do not assume `docs/implementation/completed/*` is accurate.
+- Do not call the installer production-ready until namespace, release artifacts, full tests, and docs are aligned.
+- Do not browse for package versions unless making a fresh current-version claim.
+- Use `rg` first for code searches.
+- Use `apply_patch` for manual edits.

@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" width="100%" height="100%">
+  <defs>
+    <!-- Glow Filters -->
+    <filter id="neon-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="subtle-glow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Gradients -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#060913" />
+      <stop offset="50%" stop-color="#0c1224" />
+      <stop offset="100%" stop-color="#141a35" />
+    </linearGradient>
+
+    <linearGradient id="cyber-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="50%" stop-color="#4facfe" />
+      <stop offset="100%" stop-color="#7000ff" />
+    </linearGradient>
+
+    <linearGradient id="magenta-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff007f" />
+      <stop offset="100%" stop-color="#7000ff" />
+    </linearGradient>
+
+    <!-- Blueprint Grid for Tech look -->
+    <pattern id="flyer-grid" width="50" height="50" patternUnits="userSpaceOnUse">
+      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#1c2c4c" stroke-width="0.8" opacity="0.4" />
+      <path d="M 25 0 L 25 50 M 0 25 L 50 25" fill="none" stroke="#1c2c4c" stroke-width="0.3" stroke-dasharray="2 6" opacity="0.3" />
+    </pattern>
+  </defs>
+
+  <!-- Background Layer -->
+  <rect width="800" height="1200" fill="url(#bg-grad)" />
+  <rect width="800" height="1200" fill="url(#flyer-grid)" />
+
+  <!-- Outer HUD Frame borders -->
+  <rect x="25" y="25" width="750" height="1150" fill="none" stroke="#162740" stroke-width="2" />
+  <!-- Corner Tech Highlights -->
+  <path d="M 25 60 L 25 25 L 60 25" fill="none" stroke="url(#cyber-grad)" stroke-width="4" />
+  <path d="M 775 60 L 775 25 L 740 25" fill="none" stroke="url(#cyber-grad)" stroke-width="4" />
+  <path d="M 25 1140 L 25 1175 L 60 1175" fill="none" stroke="url(#cyber-grad)" stroke-width="4" />
+  <path d="M 775 1140 L 775 1175 L 740 1175" fill="none" stroke="url(#cyber-grad)" stroke-width="4" />
+
+  <!-- ==================== HEADER ==================== -->
+  <g transform="translate(50, 70)">
+    <!-- Small Category Label -->
+    <text x="0" y="20" font-family="monospace" font-size="12" fill="#00f2fe" font-weight="bold" letter-spacing="4">WHITE PAPER // ARCHITECTURE RELEASE</text>
+    
+    <!-- Title -->
+    <text x="0" y="80" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="56" fill="#ffffff" letter-spacing="1">ACTHUR</text>
+    <text x="320" y="80" font-family="system-ui, -apple-system, sans-serif" font-weight="300" font-size="56" fill="#00f2fe" letter-spacing="1">GRAPH OS</text>
+    
+    <!-- Subtitle Line -->
+    <text x="0" y="115" font-family="system-ui, -apple-system, sans-serif" font-weight="500" font-size="16" fill="#a0aec0" letter-spacing="2">THE RUNTIME OPERATING SYSTEM FOR DISTRIBUTED APPLICATIONS</text>
+
+    <!-- Glowing accent bar -->
+    <line x1="0" y1="135" x2="700" y2="135" stroke="url(#cyber-grad)" stroke-width="2" filter="url(#subtle-glow)" />
+  </g>
+
+  <!-- ==================== LOGO METAPHOR DIAGRAM ==================== -->
+  <g transform="translate(400, 360)">
+    <!-- Aura grid -->
+    <circle cx="0" cy="0" r="130" fill="none" stroke="#233554" stroke-width="1" stroke-dasharray="3 3" />
+    <circle cx="0" cy="0" r="90" fill="none" stroke="#233554" stroke-width="1.5" />
+    
+    <!-- Connected DAG Graph representation -->
+    <path d="M -80 50 L 0 -80 M 0 -80 L 80 50 M -80 50 L 80 50 M 0 -80 L 0 0 M 0 0 L -80 50 M 0 0 L 80 50" stroke="url(#cyber-grad)" stroke-width="3" filter="url(#subtle-glow)" />
+
+    <!-- Nodes -->
+    <circle cx="0" cy="-80" r="12" fill="#0c1224" stroke="#00f2fe" stroke-width="3" filter="url(#subtle-glow)" />
+    <circle cx="0" cy="-80" r="4" fill="#ffffff" />
+    <text x="0" y="-100" font-family="monospace" font-size="9" fill="#00f2fe" text-anchor="middle" font-weight="bold">SERVICE (WEB)</text>
+
+    <circle cx="-80" cy="50" r="10" fill="#0c1224" stroke="#7000ff" stroke-width="3" />
+    <circle cx="-80" cy="50" r="3" fill="#7000ff" />
+    <text x="-80" y="75" font-family="monospace" font-size="9" fill="#7000ff" text-anchor="middle" font-weight="bold">INFRA (DB)</text>
+
+    <circle cx="80" cy="50" r="10" fill="#0c1224" stroke="#7000ff" stroke-width="3" />
+    <circle cx="80" cy="50" r="3" fill="#7000ff" />
+    <text x="80" y="75" font-family="monospace" font-size="9" fill="#7000ff" text-anchor="middle" font-weight="bold">INFRA (CACHE)</text>
+
+    <circle cx="0" cy="0" r="8" fill="#0c1224" stroke="#ffffff" stroke-width="2.5" />
+    <circle cx="0" cy="0" r="3" fill="#ffffff" />
+    <text x="25" y="5" font-family="monospace" font-size="9" fill="#ffffff" font-weight="bold">CONTRACT</text>
+  </g>
+
+  <!-- Left Header for the Diagram Section -->
+  <g transform="translate(50, 270)">
+    <text x="0" y="20" font-family="system-ui, -apple-system, sans-serif" font-weight="bold" font-size="22" fill="#ffffff">THE GRAPH MODEL</text>
+    <text x="0" y="45" font-family="sans-serif" font-size="12" fill="#a0aec0" width="250">
+      Acthur replaces static server files with
+    </text>
+    <text x="0" y="65" font-family="sans-serif" font-size="12" fill="#a0aec0">
+      a unified Directed Acyclic Graph (DAG).
+    </text>
+    <text x="0" y="85" font-family="sans-serif" font-size="12" fill="#a0aec0">
+      Execution, routing, health checking,
+    </text>
+    <text x="0" y="105" font-family="sans-serif" font-size="12" fill="#a0aec0">
+      and configuration are derived directly
+    </text>
+    <text x="0" y="125" font-family="sans-serif" font-size="12" fill="#a0aec0">
+      from Graph topology.
+    </text>
+    <rect x="0" y="150" width="130" height="28" fill="#00f2fe" fill-opacity="0.1" stroke="#00f2fe" stroke-width="1" />
+    <text x="65" y="168" font-family="monospace" font-size="10" fill="#00f2fe" font-weight="bold" text-anchor="middle">ACTIVE TOPOLOGY</text>
+  </g>
+
+  <!-- ==================== COMPARISON TABLE ==================== -->
+  <g transform="translate(50, 520)">
+    <text x="0" y="30" font-family="system-ui, -apple-system, sans-serif" font-weight="bold" font-size="22" fill="#ffffff" letter-spacing="1">THE OS ARCHITECTURAL ANALOGY</text>
+    <line x1="0" y1="45" x2="700" y2="45" stroke="#162740" stroke-width="1.5" />
+
+    <!-- Table Headers -->
+    <text x="10" y="70" font-family="monospace" font-size="11" fill="#00f2fe" font-weight="bold">OS KERNEL CONCEPT</text>
+    <text x="260" y="70" font-family="monospace" font-size="11" fill="#ff007f" font-weight="bold">ACTHUR IMPLEMENTATION</text>
+    <text x="510" y="70" font-family="monospace" font-size="11" fill="#ffffff" font-weight="bold">ENGINE COMPONENT</text>
+    <line x1="0" y1="80" x2="700" y2="80" stroke="url(#cyber-grad)" stroke-width="1.5" />
+
+    <!-- Row 1: Config/Boot -->
+    <g transform="translate(0, 85)">
+      <rect x="0" y="0" width="700" height="40" fill="#0f172a" fill-opacity="0.4" />
+      <text x="10" y="24" font-family="sans-serif" font-weight="bold" font-size="12" fill="#e2e8f0">Boot Loader / Config</text>
+      <text x="260" y="24" font-family="sans-serif" font-size="12" fill="#e2e8f0">acthur.yml → Typed Config</text>
+      <text x="510" y="24" font-family="monospace" font-size="11" fill="#00f2fe">internal/config</text>
+      <line x1="0" y1="40" x2="700" y2="40" stroke="#162740" stroke-width="0.8" />
+    </g>
+
+    <!-- Row 2: Scheduler -->
+    <g transform="translate(0, 130)">
+      <text x="10" y="24" font-family="sans-serif" font-weight="bold" font-size="12" fill="#e2e8f0">Process Table / Scheduler</text>
+      <text x="260" y="24" font-family="sans-serif" font-size="12" fill="#e2e8f0">DAG Scheduling (Kahn Topo)</text>
+      <text x="510" y="24" font-family="monospace" font-size="11" fill="#00f2fe">internal/graph</text>
+      <line x1="0" y1="40" x2="700" y2="40" stroke="#162740" stroke-width="0.8" />
+    </g>
+
+    <!-- Row 3: Syscalls -->
+    <g transform="translate(0, 175)">
+      <rect x="0" y="0" width="700" height="40" fill="#0f172a" fill-opacity="0.4" />
+      <text x="10" y="24" font-family="sans-serif" font-weight="bold" font-size="12" fill="#e2e8f0">System Calls (ABI)</text>
+      <text x="260" y="24" font-family="sans-serif" font-size="12" fill="#e2e8f0">API Contracts &amp; Diff Checks</text>
+      <text x="510" y="24" font-family="monospace" font-size="11" fill="#00f2fe">internal/contract</text>
+      <line x1="0" y1="40" x2="700" y2="40" stroke="#162740" stroke-width="0.8" />
+    </g>
+
+    <!-- Row 4: Drivers -->
+    <g transform="translate(0, 220)">
+      <text x="10" y="24" font-family="sans-serif" font-weight="bold" font-size="12" fill="#e2e8f0">Device Drivers</text>
+      <text x="260" y="24" font-family="sans-serif" font-size="12" fill="#e2e8f0">8-Method Framework Adapters</text>
+      <text x="510" y="24" font-family="monospace" font-size="11" fill="#00f2fe">internal/adapter</text>
+      <line x1="0" y1="40" x2="700" y2="40" stroke="#162740" stroke-width="0.8" />
+    </g>
+
+    <!-- Row 5: Loadable Modules -->
+    <g transform="translate(0, 265)">
+      <rect x="0" y="0" width="700" height="40" fill="#0f172a" fill-opacity="0.4" />
+      <text x="10" y="24" font-family="sans-serif" font-weight="bold" font-size="12" fill="#e2e8f0">Loadable Kernel Modules</text>
+      <text x="260" y="24" font-family="sans-serif" font-size="12" fill="#e2e8f0">Plugins + Core KernelAPI Bus</text>
+      <text x="510" y="24" font-family="monospace" font-size="11" fill="#00f2fe">internal/plugin</text>
+      <line x1="0" y1="40" x2="700" y2="40" stroke="#162740" stroke-width="0.8" />
+    </g>
+
+    <!-- Row 6: PID 1 Init -->
+    <g transform="translate(0, 310)">
+      <text x="10" y="24" font-family="sans-serif" font-weight="bold" font-size="12" fill="#e2e8f0">Init System (PID 1)</text>
+      <text x="260" y="24" font-family="sans-serif" font-size="12" fill="#e2e8f0">Orchestrator Liveness Watcher</text>
+      <text x="510" y="24" font-family="monospace" font-size="11" fill="#00f2fe">internal/engine</text>
+      <line x1="0" y1="40" x2="700" y2="40" stroke="url(#cyber-grad)" stroke-width="1.5" />
+    </g>
+  </g>
+
+  <!-- ==================== KEY ADVANTAGES ==================== -->
+  <g transform="translate(50, 930)">
+    <text x="0" y="20" font-family="system-ui, -apple-system, sans-serif" font-weight="bold" font-size="22" fill="#ffffff" letter-spacing="1">KEY ADVANTAGES</text>
+    <line x1="0" y1="35" x2="700" y2="35" stroke="#162740" stroke-width="1.5" />
+
+    <!-- Card 1 -->
+    <g transform="translate(0, 50)">
+      <rect x="0" y="0" width="215" height="110" fill="#0f172a" fill-opacity="0.8" stroke="#00f2fe" stroke-width="1" />
+      <text x="15" y="30" font-family="sans-serif" font-weight="bold" font-size="12" fill="#00f2fe">ZERO SERVICE DRIFT</text>
+      <text x="15" y="55" font-family="sans-serif" font-size="10" fill="#cbd5e1">Connection environments</text>
+      <text x="15" y="70" font-family="sans-serif" font-size="10" fill="#cbd5e1">derived directly from</text>
+      <text x="15" y="85" font-family="sans-serif" font-size="10" fill="#cbd5e1">active dependencies.</text>
+    </g>
+
+    <!-- Card 2 -->
+    <g transform="translate(242, 50)">
+      <rect x="0" y="0" width="215" height="110" fill="#0f172a" fill-opacity="0.8" stroke="#ff007f" stroke-width="1" />
+      <text x="15" y="30" font-family="sans-serif" font-weight="bold" font-size="12" fill="#ff007f">ABI COMPATIBILITY</text>
+      <text x="15" y="55" font-family="sans-serif" font-size="10" fill="#cbd5e1">Contract diff checker</text>
+      <text x="15" y="70" font-family="sans-serif" font-size="10" fill="#cbd5e1">detects and flags</text>
+      <text x="15" y="85" font-family="sans-serif" font-size="10" fill="#cbd5e1">breaking API changes.</text>
+    </g>
+
+    <!-- Card 3 -->
+    <g transform="translate(485, 50)">
+      <rect x="0" y="0" width="215" height="110" fill="#0f172a" fill-opacity="0.8" stroke="#ffffff" stroke-width="1" />
+      <text x="15" y="30" font-family="sans-serif" font-weight="bold" font-size="12" fill="#ffffff">DYNAMIC SUPERVISION</text>
+      <text x="15" y="55" font-family="sans-serif" font-size="10" fill="#cbd5e1">Kahn's sorted boot</text>
+      <text x="15" y="70" font-family="sans-serif" font-size="10" fill="#cbd5e1">with active backoff</text>
+      <text x="15" y="85" font-family="sans-serif" font-size="10" fill="#cbd5e1">and automatic restarts.</text>
+    </g>
+  </g>
+
+  <!-- ==================== FOOTER ==================== -->
+  <g transform="translate(50, 1130)">
+    <text x="0" y="20" font-family="monospace" font-size="10" fill="#4a5568">REPRESENTATIVE DOCUMENT // GITHUB: SAMUELOSHIO/ACTHUR</text>
+    <text x="700" y="20" text-anchor="end" font-family="monospace" font-size="10" fill="#00f2fe" font-weight="bold">ACTHUR.DEV // READ THE DOCUMENTATION</text>
+  </g>
+</svg>

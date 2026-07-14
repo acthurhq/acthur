@@ -5,16 +5,15 @@
 package process
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sync"
 	"time"
 
-	"github.com/acthur/acthur/internal/output"
+	"github.com/acthurhq/acthur/internal/output"
 )
 
 // ---------------------------------------------------------------------------
@@ -35,11 +34,11 @@ const (
 
 // Process wraps an os/exec.Cmd with supervision, log routing, and state tracking.
 type Process struct {
-	NodeID  string
-	Bin     string
-	Args    []string
-	Env     map[string]string
-	Dir     string
+	NodeID string
+	Bin    string
+	Args   []string
+	Env    map[string]string
+	Dir    string
 
 	cmd      *exec.Cmd
 	state    State
@@ -47,7 +46,6 @@ type Process struct {
 	cancel   context.CancelFunc
 	restarts int
 	lastExit time.Time
-	outputWG sync.WaitGroup
 
 	// exited is closed by the background waiter goroutine started in startLocked
 	// when cmd.Wait() returns. Stop() and Supervisor.loop() both read from this
@@ -95,6 +93,18 @@ func (p *Process) Start(ctx context.Context) error {
 func (p *Process) startLocked(ctx context.Context) error {
 	p.cmd = exec.CommandContext(ctx, p.Bin, p.Args...)
 
+	// Graceful cancellation: deliver SIGTERM to the whole process group so the
+	// full tree can clean up (air stops its compiled binary, docker-run proxies
+	// the signal into the container). The default context-cancel behavior is an
+	// immediate SIGKILL of only the direct child, which gives it no chance and
+	// orphans grandchildren — an orphan keeps its port bound, so a supervised
+	// restart could never recover. Stop() still force-kills on timeout.
+	setProcessGroup(p.cmd)
+	cmd := p.cmd
+	p.cmd.Cancel = func() error {
+		return terminateTree(cmd)
+	}
+
 	// Build environment: inherit current env + override with process-specific vars
 	p.cmd.Env = os.Environ()
 	for k, v := range p.Env {
@@ -105,36 +115,32 @@ func (p *Process) startLocked(ctx context.Context) error {
 		p.cmd.Dir = p.Dir
 	}
 
-	// Pipe stdout and stderr
-	stdout, err := p.cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("process %q: stdout pipe: %w", p.NodeID, err)
-	}
-	stderr, err := p.cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("process %q: stderr pipe: %w", p.NodeID, err)
-	}
+	// Let os/exec own the output-copy lifecycle. Wait does not return until
+	// writes to non-file Stdout/Stderr destinations complete, so a short-lived
+	// command cannot lose its final output when Wait closes its pipes.
+	stdout := &lineWriter{emit: p.emitLine}
+	stderr := &lineWriter{emit: p.emitLine}
+	p.cmd.Stdout = stdout
+	p.cmd.Stderr = stderr
 
 	if err := p.cmd.Start(); err != nil {
 		p.setState(StateFailed)
 		return fmt.Errorf("process %q: failed to start %q: %w", p.NodeID, p.Bin, err)
 	}
 
+	p.setState(StateRunning)
+
 	// exited is closed by a single background goroutine that is the sole caller
 	// of cmd.Wait(). Stop() and Supervisor.loop() both block on this channel
 	// rather than calling cmd.Wait() themselves, eliminating the data race.
-	p.exited = make(chan struct{})
+	exited := make(chan struct{})
+	p.exited = exited
 	go func() {
-		p.cmd.Wait() //nolint:errcheck // exit status is not used here
-		close(p.exited)
+		cmd.Wait() //nolint:errcheck // exit status is not used here
+		stdout.flush()
+		stderr.flush()
+		close(exited)
 	}()
-
-	p.setState(StateRunning)
-
-	// Pipe output to log router
-	p.outputWG.Add(2)
-	go p.pipeLines(stdout)
-	go p.pipeLines(stderr)
 
 	return nil
 }
@@ -162,15 +168,14 @@ func (p *Process) Stop(timeout time.Duration) error {
 
 	select {
 	case <-exited:
-		p.outputWG.Wait()
 		p.setState(StateStopped)
 		return nil
 	case <-time.After(timeout):
-		// Force kill
+		// Force kill the whole process group — killing only the direct child
+		// would orphan grandchildren (air's compiled binary).
 		if p.cmd != nil && p.cmd.Process != nil {
-			p.cmd.Process.Kill()
+			killTree(p.cmd) //nolint:errcheck // best-effort force kill
 		}
-		p.outputWG.Wait()
 		p.setState(StateStopped)
 		return nil
 	}
@@ -183,7 +188,25 @@ func (p *Process) Restart(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// If the process crashed (rather than being stopped by us), the context
+	// Cancel never fired — it only runs while the process is alive — so its
+	// process group may still hold orphaned grandchildren. Reap them before
+	// starting the replacement, or an orphan keeps the port bound and the
+	// restarted service can never come up.
+	if p.cmd != nil && p.cmd.Process != nil {
+		killTree(p.cmd) //nolint:errcheck // best-effort orphan reaping
+	}
 	return p.startLocked(ctx)
+}
+
+// Pid returns the OS process ID of the running process, or 0 if not running.
+func (p *Process) Pid() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
 }
 
 // State returns the current process state.
@@ -215,17 +238,48 @@ func (p *Process) setState(s State) {
 	}
 }
 
-func (p *Process) pipeLines(r io.Reader) {
-	defer p.outputWG.Done()
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if p.onLine != nil {
-			p.onLine(p.NodeID, line)
-		} else {
-			output.ServiceLog(p.NodeID, line)
-		}
+func (p *Process) emitLine(line string) {
+	if p.onLine != nil {
+		p.onLine(p.NodeID, line)
+	} else {
+		output.ServiceLog(p.NodeID, line)
 	}
+}
+
+// lineWriter turns the byte chunks delivered by os/exec into the line-based
+// callback contract exposed by Process.OnLine. Each command stream owns one
+// writer, and Wait flushes any final unterminated line before signalling exit.
+type lineWriter struct {
+	mu      sync.Mutex
+	pending []byte
+	emit    func(string)
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.pending = append(w.pending, p...)
+	for {
+		newline := bytes.IndexByte(w.pending, '\n')
+		if newline < 0 {
+			break
+		}
+		line := bytes.TrimSuffix(w.pending[:newline], []byte{'\r'})
+		w.emit(string(line))
+		w.pending = w.pending[newline+1:]
+	}
+	return len(p), nil
+}
+
+func (w *lineWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.pending) == 0 {
+		return
+	}
+	w.emit(string(bytes.TrimSuffix(w.pending, []byte{'\r'})))
+	w.pending = nil
 }
 
 // ---------------------------------------------------------------------------
@@ -234,10 +288,10 @@ func (p *Process) pipeLines(r io.Reader) {
 
 // SupervisionPolicy defines how a process is restarted on failure.
 type SupervisionPolicy struct {
-	MaxRestarts   int           // 0 = unlimited
-	InitialDelay  time.Duration // delay before first restart
-	MaxDelay      time.Duration // cap on exponential backoff
-	ResetAfter    time.Duration // reset restart count if stable for this long
+	MaxRestarts  int           // 0 = unlimited
+	InitialDelay time.Duration // delay before first restart
+	MaxDelay     time.Duration // cap on exponential backoff
+	ResetAfter   time.Duration // reset restart count if stable for this long
 }
 
 // DefaultPolicy is the default supervision policy for service nodes.
@@ -250,8 +304,8 @@ var DefaultPolicy = SupervisionPolicy{
 
 // Supervisor watches a Process and restarts it according to a policy.
 type Supervisor struct {
-	process *Process
-	policy  SupervisionPolicy
+	process  *Process
+	policy   SupervisionPolicy
 	onGiveUp func(nodeID string, restarts int)
 }
 
@@ -350,14 +404,22 @@ func (s *Supervisor) backoff(restarts int) time.Duration {
 // Manager
 // ---------------------------------------------------------------------------
 
+// LogSink receives every line of output from every process this Manager
+// spawns, in addition to the standard output.ServiceLog routing. The dev
+// engine uses it to persist per-node log files under .acthur/logs/<node>.log
+// so `acthur service logs <name>` has something real to read even after the
+// line has scrolled off the terminal.
+type LogSink func(nodeID, line string)
+
 // Manager tracks all managed processes in the system.
 // It is the single place the dev engine creates and monitors processes.
 type Manager struct {
-	processes map[string]*Process
+	processes   map[string]*Process
 	supervisors map[string]*Supervisor
-	mu        sync.RWMutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	mu          sync.RWMutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	logSink     LogSink
 }
 
 // NewManager creates a process manager.
@@ -371,6 +433,14 @@ func NewManager() *Manager {
 	}
 }
 
+// SetLogSink registers sink to additionally receive every output line from
+// every process this Manager spawns from now on. Nil disables it.
+func (m *Manager) SetLogSink(sink LogSink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logSink = sink
+}
+
 // Spawn creates and starts a new supervised process for a graph node.
 func (m *Manager) Spawn(nodeID, bin string, args []string, env map[string]string, dir string) (*Process, error) {
 	m.mu.Lock()
@@ -382,9 +452,14 @@ func (m *Manager) Spawn(nodeID, bin string, args []string, env map[string]string
 
 	p := NewProcess(nodeID, bin, args, env, dir)
 
-	// Default line handler: route to output package
+	// Default line handler: route to output package, and to the log sink
+	// (if configured) for durable per-node log files.
+	sink := m.logSink
 	p.OnLine(func(id, line string) {
 		output.ServiceLog(id, line)
+		if sink != nil {
+			sink(id, line)
+		}
 	})
 
 	if err := p.Start(m.ctx); err != nil {

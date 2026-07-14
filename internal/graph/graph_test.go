@@ -3,8 +3,8 @@ package graph_test
 import (
 	"testing"
 
-	"github.com/acthur/acthur/internal/config"
-	"github.com/acthur/acthur/internal/graph"
+	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/graph"
 )
 
 // ---------------------------------------------------------------------------
@@ -990,13 +990,6 @@ func TestReadTraversals_AfterSeal_Succeed(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Phase 1D — Reject hand-declared contract/plugin nodes (authored vs materialized)
 // ---------------------------------------------------------------------------
-
-// buildReservedTypeGraph constructs a *Graph directly (bypassing config.Validate)
-// so we can insert nodes with reserved types for testing Validate().
-func buildReservedTypeGraph(nodes map[string]*graph.Node) *graph.Graph {
-	g := graph.NewTestGraph(nodes)
-	return g
-}
 
 // Behavior 1: A node declared with type "contract" produces a ValidationError
 // with Rule "reserved-node-type".
