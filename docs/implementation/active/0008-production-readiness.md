@@ -333,6 +333,16 @@ In-flight
   binaries, and the GoReleaser/Syft release dry run. `main`, release tags, and
   issue #69 remain intentionally unchanged until the disposable remote Coolify
   witness is executed and recorded.
+- 2026-07-14 — main agent — recorded the latest green dev evidence at
+  `1d3f667`. Dev push run 29357417107 completed successfully across lint/vet,
+  Go 1.22 and 1.23 race-enabled tests on Ubuntu, macOS Intel, and Windows,
+  native installer integrity tests, snapshot binaries, and the
+  GoReleaser/Syft release dry run. The 23:22 UTC audit found one local
+  worktree, only `dev`, `staging`, and `main` locally/remotely, no open PRs,
+  no tags, no GitHub Releases, and issue #69 still open with only the remote
+  Coolify witness, `staging` -> `main`, public release/install verification,
+  and final ledger closure unchecked. The execution shell still has no
+  Coolify host/token/server/project values or workload environment values.
 
 ## Current Decisions
 
