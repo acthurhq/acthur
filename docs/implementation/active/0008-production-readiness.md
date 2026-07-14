@@ -273,6 +273,12 @@ In-flight
   service fails with its status identified, then gave terminal failure markers
   precedence over running success. Focused `go test -race -count=1
   ./internal/deploy/coolify`, focused `go vet`, and `git diff --check` are green.
+- 2026-07-14 — main agent — treated GitHub's native-runner Node 20
+  deprecation warnings as the failing CI behavior and upgraded the affected
+  official actions to their current Node 24 majors: checkout v6, setup-go v6,
+  upload-artifact v7, golangci-lint-action v9, and goreleaser-action v7.
+  Actionlint 1.7.12 and `git diff --check` are green; pushed native-runner
+  evidence is required before staging promotion.
 
 ## Current Decisions
 
