@@ -309,6 +309,14 @@ In-flight
   appended content written immediately before stop is preserved. Focused Go
   1.22 race stress and the affected package/process/output race checks are
   green locally.
+- 2026-07-14 — main agent — pushed the service-log drain fix to `dev` at
+  `de13342`, merged PR #74 (`dev` -> `staging`) as merge commit `0681e5a`,
+  and verified the post-merge staging push run 29349091091. The run is fully
+  green across lint/vet, Go 1.22 and 1.23 race-enabled tests on Ubuntu,
+  macOS Intel, and Windows, native installer integrity tests, snapshot
+  binaries, and the GoReleaser/Syft release dry run. `main` and release tags
+  remain intentionally unchanged until the disposable remote Coolify witness is
+  executed and recorded.
 
 ## Current Decisions
 

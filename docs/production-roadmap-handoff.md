@@ -2,11 +2,11 @@
 
 **Date:** 2026-07-14
 **Repository:** `acthurhq/acthur`
-**Working branch:** `dev`; latest pushed code candidate `329be4f`, with this ledger refresh following it
+**Working branch:** `dev`; latest pushed code candidate `de13342`, with this ledger refresh following it
 **Promotion path:** `dev` → `staging` → `main` (live)
 **Primary tracking issue:** [#69 — Production readiness and first release](https://github.com/acthurhq/acthur/issues/69)
 
-## Authoritative Current Status — 2026-07-14 16:00 UTC
+## Authoritative Current Status — 2026-07-14 16:30 UTC
 
 This section supersedes every repository, CI, pull-request, and blocker status
 in the historical audit below. The old findings remain only to explain why the
@@ -14,9 +14,9 @@ hardening work was undertaken.
 
 | Area | Current evidence | Release qualification |
 |---|---|---|
-| Branch promotion | PR #72 merged the hardened `dev` candidate into `staging`; `staging` is `0754ca7`. `main` remains deliberately held at `5467d48` pending the remote witness. | Promotion flow is established and the current candidate is staged; production promotion remains blocked. |
-| Pull requests | PRs #66, #70, #71, and #72 are merged. No pull requests are open; scratch PRs #67 and #68 were closed without merging. | Clean; the final reviewed `staging` → `main` promotion follows the remote witness. |
-| CI/process runtime | Dev run 29345788624, PR #72 run 29346371930, and staging push run 29346984175 passed lint/vet, installers, snapshot build, release dry run, and the supported Linux, Windows, and macOS Intel Go 1.22/1.23 race matrix. | The historical process-output, native Windows, action runtime, generated-project dependency, and concurrent logging failures are resolved with pushed CI evidence. |
+| Branch promotion | PR #74 merged the current `dev` candidate into `staging`; `staging` is `0681e5a`. `main` remains deliberately held at `5467d48` pending the remote witness. | Promotion flow is established and the current candidate is staged; production promotion remains blocked. |
+| Pull requests | PRs #66, #70, #71, #72, #73, and #74 are merged. No pull requests are open; scratch PRs #67 and #68 were closed without merging. | Clean; the final reviewed `staging` → `main` promotion follows the remote witness. |
+| CI/process runtime | Dev PR run 29348578231, dev push run 29348565272, and staging push run 29349091091 passed lint/vet, installers, snapshot build, release dry run, and the supported Linux, Windows, and macOS Intel Go 1.22/1.23 race matrix. The staged candidate includes the service-log shutdown drain fix from PR #74. | The historical process-output, native Windows, action runtime, generated-project dependency, concurrent logging, and service-log shutdown-drain failures are resolved with pushed CI evidence. |
 | Deploy completeness | Artifact projection and provider projection now fail closed. Fly, Railway, and Render reject infrastructure, dependency topology, and required workload environment that they cannot deliver; Coolify consumes the full Compose projection. | No graph node is silently omitted. A real remote staging witness remains required. |
 | Deploy gate | Graph, build, race-enabled tests, contract validation and compatibility baseline, generated freshness, migrations, delivered environment, and security are named checks. | Implemented; live deployment evidence remains. |
 | Release artifacts | GoReleaser/Syft dry runs produce five platform archives, SPDX SBOMs, and a checksum manifest; native installer integrity tests pass on Linux, macOS Intel, and Windows. | Dry-run qualification is green. Keyless signing, provenance, publication, and installation of actual public artifacts remain tag-stage evidence. |
