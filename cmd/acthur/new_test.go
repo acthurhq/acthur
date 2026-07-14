@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,7 +22,11 @@ func nonInteractiveWizard(adapterName string, db bool, module string) wizardInpu
 }
 
 func TestCLI_NewCompleteFlagsScaffoldsWithoutDatabase(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "acthur")
+	binName := "acthur"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), binName)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/acthur")
 	build.Dir = repoRoot(t)
 	if out, err := build.CombinedOutput(); err != nil {
