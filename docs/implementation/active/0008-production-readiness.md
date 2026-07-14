@@ -287,6 +287,11 @@ In-flight
   pins Prometheus client v1.19.1 (whose module requires Go 1.20), preserving
   the supported Go 1.22 floor instead of relying on an unstable latest-module
   resolution.
+- 2026-07-14 — main agent — the follow-up Windows Go 1.22 race job exposed a
+  concurrent map read/write in the public `output.ServiceLog` path while the
+  process manager streamed multiple services. Added a concurrent public-seam
+  regression and removed the unnecessary mutable color cache: service colors
+  remain the same deterministic name hash with no shared map mutation.
 
 ## Current Decisions
 

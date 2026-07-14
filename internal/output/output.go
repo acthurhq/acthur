@@ -314,19 +314,12 @@ var serviceColors = []*color.Color{
 	color.New(color.FgHiYellow),
 }
 
-var serviceColorMap = map[string]*color.Color{}
-
 func serviceColor(name string) *color.Color {
-	if c, ok := serviceColorMap[name]; ok {
-		return c
-	}
 	h := 0
 	for _, ch := range name {
 		h = (h*31 + int(ch)) % len(serviceColors)
 	}
-	c := serviceColors[h]
-	serviceColorMap[name] = c
-	return c
+	return serviceColors[h]
 }
 
 // ActhurError is the structured error type used by Fatal.
