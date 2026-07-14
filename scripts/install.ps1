@@ -19,7 +19,7 @@ $GITHUB_API   = "https://api.github.com/repos/$ACTHUR_REPO/releases/latest"
 # ── Colours ───────────────────────────────────────────────────────────────────
 function Write-Info    { param($msg) Write-Host "  ->  $msg" -ForegroundColor Cyan }
 function Write-Success { param($msg) Write-Host "  v   $msg" -ForegroundColor Green }
-function Write-Fail    { param($msg) Write-Host "  x   $msg" -ForegroundColor Red; exit 1 }
+function Write-Fail    { param($msg) Write-Host "  x   $msg" -ForegroundColor Red; throw $msg }
 function Write-Banner  {
     Write-Host ""
     Write-Host "  *  Acthur Installer" -ForegroundColor White
