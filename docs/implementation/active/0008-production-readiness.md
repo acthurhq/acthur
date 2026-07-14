@@ -301,6 +301,14 @@ In-flight
   binaries, and the GoReleaser/Syft release dry run. `main` and release tags
   remain intentionally unchanged until the disposable remote Coolify witness is
   executed and recorded.
+- 2026-07-14 — main agent — the docs-only PR #73 passed both duplicate CI
+  runs but its post-merge `staging` push exposed a real shutdown race in
+  `acthur service logs` on macOS Go 1.22: appended content could be missed if
+  the stop signal arrived before the next poll tick. The log follower now
+  drains the file once on shutdown, and the public service-log test asserts
+  appended content written immediately before stop is preserved. Focused Go
+  1.22 race stress and the affected package/process/output race checks are
+  green locally.
 
 ## Current Decisions
 

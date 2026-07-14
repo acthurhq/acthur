@@ -64,8 +64,9 @@ func TestRunServiceLogs_PicksUpAppendedContentBeforeStopping(t *testing.T) {
 		done <- runServiceLogs(path, &out, stop, 5*time.Millisecond)
 	}()
 
-	// Give the initial read a moment, then append and let a couple of poll
-	// ticks pick it up before stopping.
+	// Give the initial read a moment, then append and stop immediately. The
+	// shutdown path must drain once more so content written between poll ticks
+	// is not lost.
 	time.Sleep(20 * time.Millisecond)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -76,7 +77,6 @@ func TestRunServiceLogs_PicksUpAppendedContentBeforeStopping(t *testing.T) {
 	}
 	_ = f.Close()
 
-	time.Sleep(30 * time.Millisecond)
 	close(stop)
 
 	if err := <-done; err != nil {
