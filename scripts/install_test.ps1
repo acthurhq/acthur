@@ -55,11 +55,15 @@ function Invoke-WebRequest {
         New-Item -ItemType Directory -Path $caseRoot | Out-Null
         Set-Content -Path $checksums -Value $Manifest
 
-        & (Get-Process -Id $PID).Path -NoProfile -File $wrapper $Installer $appData $archive $checksums *> (Join-Path $caseRoot 'output.txt')
-        $passed = $LASTEXITCODE -eq 0
+        $stdout = Join-Path $caseRoot 'stdout.txt'
+        $stderr = Join-Path $caseRoot 'stderr.txt'
+        $child = Start-Process -FilePath (Get-Process -Id $PID).Path `
+            -ArgumentList @('-NoProfile', '-File', $wrapper, $Installer, $appData, $archive, $checksums) `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $passed = $child.ExitCode -eq 0
         if ($passed -ne $ShouldPass) {
-            Get-Content (Join-Path $caseRoot 'output.txt') | Write-Error
-            Fail "$Name returned exit code $LASTEXITCODE"
+            Get-Content $stdout, $stderr | Write-Error
+            Fail "$Name returned exit code $($child.ExitCode)"
         }
         return Join-Path $appData 'acthur\bin\acthur.exe'
     }
