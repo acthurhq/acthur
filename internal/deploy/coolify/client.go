@@ -12,9 +12,13 @@
 //
 //	GET    /api/v1/projects                    — list projects
 //	POST   /api/v1/projects                     — create a project ({"name": ...})
+//	GET    /api/v1/projects/{uuid}/environments — list project environments
+//	POST   /api/v1/projects/{uuid}/environments — create a project environment
+//	DELETE /api/v1/projects/{uuid}/environments/{name} — delete an empty environment
 //	GET    /api/v1/services                     — list service stacks
 //	POST   /api/v1/services                     — create a Compose service stack
 //	PATCH  /api/v1/services/{uuid}              — update its Compose definition
+//	DELETE /api/v1/services/{uuid}              — delete a Compose service stack
 //	PATCH  /api/v1/services/{uuid}/envs         — upsert workload environment
 //	POST   /api/v1/services/{uuid}/start        — deploy/redeploy the stack
 //	GET    /api/v1/services/{uuid}              — read service status
@@ -30,9 +34,9 @@
 //   - Service health is read from the "status" string field on the
 //     GET /api/v1/services/{uuid} response, which Coolify reports as
 //     "<state>:<health>" (e.g. "running:healthy", "exited:unhealthy").
-//     WaitServiceHealthy treats any status containing "running" as success and any
-//     status containing "exited", "unhealthy", "failed", or "error" as a
-//     terminal failure; anything else is treated as still-in-progress.
+//     WaitServiceHealthy treats any status containing "exited", "unhealthy",
+//     "failed", or "error" as a terminal failure. Only a non-failing status
+//     containing "running" is success; anything else remains in progress.
 package coolify
 
 import (
@@ -183,6 +187,11 @@ type project struct {
 	Name string `json:"name"`
 }
 
+type environment struct {
+	UUID string `json:"uuid"`
+	Name string `json:"name"`
+}
+
 type service struct {
 	UUID        string `json:"uuid"`
 	Name        string `json:"name"`
@@ -190,9 +199,97 @@ type service struct {
 	Status      string `json:"status"`
 }
 
+// ServiceStatus is the public deployment state reported by Coolify for one
+// exact Compose service stack.
+type ServiceStatus struct {
+	UUID   string
+	Name   string
+	Status string
+}
+
+// ComposeServiceStatus reports the current state of the exact named service
+// in projectUUID. found is false when no deployment exists yet.
+func (c *Client) ComposeServiceStatus(projectUUID, name string) (ServiceStatus, bool, error) {
+	var services []service
+	if err := c.do(http.MethodGet, "/api/v1/services", nil, nil, &services); err != nil {
+		return ServiceStatus{}, false, fmt.Errorf("coolify: listing services: %w", err)
+	}
+	for _, listed := range services {
+		if listed.Name != name || listed.ProjectUUID != projectUUID {
+			continue
+		}
+		var current service
+		if err := c.do(http.MethodGet, "/api/v1/services/"+listed.UUID, nil, nil, &current); err != nil {
+			return ServiceStatus{}, false, fmt.Errorf("coolify: reading service %q: %w", listed.UUID, err)
+		}
+		return ServiceStatus{UUID: current.UUID, Name: current.Name, Status: current.Status}, true, nil
+	}
+	return ServiceStatus{}, false, nil
+}
+
+// DeleteComposeService removes only the exact named service in projectUUID.
+// It returns false without error when the service is already absent.
+func (c *Client) DeleteComposeService(projectUUID, name string) (bool, error) {
+	var services []service
+	if err := c.do(http.MethodGet, "/api/v1/services", nil, nil, &services); err != nil {
+		return false, fmt.Errorf("coolify: listing services: %w", err)
+	}
+	for _, listed := range services {
+		if listed.Name != name || listed.ProjectUUID != projectUUID {
+			continue
+		}
+		query := url.Values{
+			"delete_configurations":     {"true"},
+			"delete_volumes":            {"true"},
+			"docker_cleanup":            {"true"},
+			"delete_connected_networks": {"true"},
+		}
+		err := c.do(http.MethodDelete, "/api/v1/services/"+listed.UUID, query, nil, nil)
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("coolify: deleting service %q: %w", listed.UUID, err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// WaitComposeServiceAbsent waits for Coolify's queued service deletion to
+// disappear before callers remove the containing environment.
+func (c *Client) WaitComposeServiceAbsent(projectUUID, name string, timeout time.Duration) error {
+	interval := c.PollInterval
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		var services []service
+		if err := c.do(http.MethodGet, "/api/v1/services", nil, nil, &services); err != nil {
+			return fmt.Errorf("coolify: checking deletion of service %q: %w", name, err)
+		}
+		found := false
+		for _, listed := range services {
+			if listed.Name == name && listed.ProjectUUID == projectUUID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("coolify: timed out waiting for service %q deletion after %s", name, timeout)
+		}
+		time.Sleep(interval)
+	}
+}
+
 // EnsureComposeService creates or updates the named current-generation
 // Coolify service-stack resource.
-func (c *Client) EnsureComposeService(projectUUID, serverUUID, environmentName, name, composeYAML string) (string, error) {
+func (c *Client) EnsureComposeService(projectUUID, serverUUID, destinationUUID, environmentName, name, composeYAML string) (string, error) {
 	var services []service
 	if err := c.do(http.MethodGet, "/api/v1/services", nil, nil, &services); err != nil {
 		return "", fmt.Errorf("coolify: listing services: %w", err)
@@ -211,6 +308,9 @@ func (c *Client) EnsureComposeService(projectUUID, serverUUID, environmentName, 
 		"environment_name":   environmentName,
 		"name":               name,
 		"docker_compose_raw": composeYAML,
+	}
+	if destinationUUID != "" {
+		body["destination_uuid"] = destinationUUID
 	}
 	var created service
 	if err := c.do(http.MethodPost, "/api/v1/services", nil, body, &created); err != nil {
@@ -245,13 +345,13 @@ func (c *Client) WaitServiceHealthy(serviceUUID string, timeout time.Duration) e
 			return fmt.Errorf("coolify: polling service status for %q: %w", serviceUUID, err)
 		}
 		lastStatus = svc.Status
-		if strings.Contains(lastStatus, "running") {
-			return nil
-		}
 		for _, marker := range terminalFailureMarkers {
 			if strings.Contains(lastStatus, marker) {
 				return fmt.Errorf("coolify: service %q failed with status %q", serviceUUID, lastStatus)
 			}
+		}
+		if strings.Contains(lastStatus, "running") {
+			return nil
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("coolify: timed out waiting for service %q after %s (last status: %q)", serviceUUID, timeout, lastStatus)
@@ -278,6 +378,57 @@ func (c *Client) EnsureProject(name string) (string, error) {
 		return "", fmt.Errorf("coolify: creating project %q: %w", name, err)
 	}
 	return created.UUID, nil
+}
+
+// FindProject resolves name without creating or changing provider state.
+func (c *Client) FindProject(name string) (string, bool, error) {
+	var projects []project
+	if err := c.do(http.MethodGet, "/api/v1/projects", nil, nil, &projects); err != nil {
+		return "", false, fmt.Errorf("coolify: listing projects: %w", err)
+	}
+	for _, p := range projects {
+		if p.Name == name {
+			return p.UUID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// EnsureProjectEnvironment returns the UUID of name within projectUUID,
+// creating it when needed. Coolify creates only a production environment for
+// a new project, so named Acthur environments must be reconciled explicitly.
+func (c *Client) EnsureProjectEnvironment(projectUUID, name string) (string, error) {
+	path := "/api/v1/projects/" + projectUUID + "/environments"
+	var environments []environment
+	if err := c.do(http.MethodGet, path, nil, nil, &environments); err != nil {
+		return "", fmt.Errorf("coolify: listing environments for project %q: %w", projectUUID, err)
+	}
+	for _, env := range environments {
+		if env.Name == name {
+			return env.UUID, nil
+		}
+	}
+
+	var created environment
+	if err := c.do(http.MethodPost, path, nil, map[string]string{"name": name}, &created); err != nil {
+		return "", fmt.Errorf("coolify: creating environment %q: %w", name, err)
+	}
+	return created.UUID, nil
+}
+
+// DeleteProjectEnvironment deletes the exact environment after its service
+// resources have been removed. An already absent environment is success.
+func (c *Client) DeleteProjectEnvironment(projectUUID, name string) error {
+	path := "/api/v1/projects/" + projectUUID + "/environments/" + url.PathEscape(name)
+	err := c.do(http.MethodDelete, path, nil, nil, nil)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("coolify: deleting environment %q: %w", name, err)
+	}
+	return nil
 }
 
 // terminalFailureMarkers are substrings of a Coolify application "status"

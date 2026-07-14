@@ -64,7 +64,7 @@ func TestEnsureComposeServiceCreatesCurrentServiceShape(t *testing.T) {
 			t.Fatalf("legacy/unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	uuid, err := New(srv.URL, "tok").EnsureComposeService("project-1", "server-1", "production", "myapp-production", "services: {}")
+	uuid, err := New(srv.URL, "tok").EnsureComposeService("project-1", "server-1", "destination-2", "production", "myapp-production", "services: {}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestEnsureComposeServiceCreatesCurrentServiceShape(t *testing.T) {
 		t.Fatalf("uuid = %q", uuid)
 	}
 	body := (*requests)[1].Body
-	for key, want := range map[string]any{"project_uuid": "project-1", "server_uuid": "server-1", "environment_name": "production", "name": "myapp-production", "docker_compose_raw": "services: {}"} {
+	for key, want := range map[string]any{"project_uuid": "project-1", "server_uuid": "server-1", "destination_uuid": "destination-2", "environment_name": "production", "name": "myapp-production", "docker_compose_raw": "services: {}"} {
 		if body[key] != want {
 			t.Fatalf("create body[%s] = %#v, want %#v; body=%#v", key, body[key], want, body)
 		}
@@ -185,6 +185,35 @@ func TestEnsureProject_reusesWhenPresent(t *testing.T) {
 	}
 }
 
+func TestEnsureProjectEnvironmentCreatesRequestedEnvironmentWhenAbsent(t *testing.T) {
+	var sequence []string
+	srv, requests := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		sequence = append(sequence, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			writeJSON(w, 200, []map[string]any{{"uuid": "env-production", "name": "production"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			writeJSON(w, 201, map[string]any{"uuid": "env-staging"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	uuid, err := New(srv.URL, "tok").EnsureProjectEnvironment("proj-1", "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uuid != "env-staging" {
+		t.Fatalf("environment UUID = %q, want env-staging", uuid)
+	}
+	if got := strings.Join(sequence, "\n"); got != "GET /api/v1/projects/proj-1/environments\nPOST /api/v1/projects/proj-1/environments" {
+		t.Fatalf("request sequence:\n%s", got)
+	}
+	if got := (*requests)[1].Body["name"]; got != "staging" {
+		t.Fatalf("create name = %#v, want staging", got)
+	}
+}
+
 func TestEnsureComposeService_createsWhenAbsent(t *testing.T) {
 	var createBody map[string]any
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
@@ -200,7 +229,7 @@ func TestEnsureComposeService_createsWhenAbsent(t *testing.T) {
 	})
 
 	c := New(srv.URL, "tok")
-	uuid, err := c.EnsureComposeService("proj-1", "server-1", "production", "web", "services:\n  web:\n    image: nginx\n")
+	uuid, err := c.EnsureComposeService("proj-1", "server-1", "", "production", "web", "services:\n  web:\n    image: nginx\n")
 	if err != nil {
 		t.Fatalf("EnsureComposeService: %v", err)
 	}
@@ -242,7 +271,7 @@ func TestEnsureComposeService_updatesWhenPresent(t *testing.T) {
 	})
 
 	c := New(srv.URL, "tok")
-	uuid, err := c.EnsureComposeService("proj-1", "server-1", "production", "web", "services:\n  web:\n    image: nginx\n")
+	uuid, err := c.EnsureComposeService("proj-1", "server-1", "", "production", "web", "services:\n  web:\n    image: nginx\n")
 	if err != nil {
 		t.Fatalf("EnsureComposeService: %v", err)
 	}
@@ -276,6 +305,121 @@ func TestStartService_triggersDeployment(t *testing.T) {
 	}
 }
 
+func TestComposeServiceStatusReturnsCurrentExactService(t *testing.T) {
+	var sequence []string
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		sequence = append(sequence, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			writeJSON(w, 200, []map[string]any{
+				{"uuid": "wrong-project", "name": "myapp-staging", "project_uuid": "proj-2"},
+				{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services/service-1":
+			writeJSON(w, 200, map[string]any{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1", "status": "running:healthy"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	status, found, err := New(srv.URL, "tok").ComposeServiceStatus("proj-1", "myapp-staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || status.UUID != "service-1" || status.Status != "running:healthy" {
+		t.Fatalf("status = %#v, found=%v", status, found)
+	}
+	if got := strings.Join(sequence, "\n"); got != "GET /api/v1/services\nGET /api/v1/services/service-1" {
+		t.Fatalf("request sequence:\n%s", got)
+	}
+}
+
+func TestDeleteComposeServiceDeletesOnlyExactProjectServiceAndIsIdempotent(t *testing.T) {
+	var deleted string
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			writeJSON(w, 200, []map[string]any{
+				{"uuid": "wrong-project", "name": "myapp-staging", "project_uuid": "proj-2"},
+				{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1"},
+			})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/services/service-1":
+			deleted = r.URL.Path
+			for _, key := range []string{"delete_configurations", "delete_volumes", "docker_cleanup", "delete_connected_networks"} {
+				if r.URL.Query().Get(key) != "true" {
+					t.Fatalf("cleanup query %s = %q", key, r.URL.Query().Get(key))
+				}
+			}
+			writeJSON(w, 200, map[string]any{"message": "Service deletion request queued."})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	deletedNow, err := New(srv.URL, "tok").DeleteComposeService("proj-1", "myapp-staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deletedNow || deleted != "/api/v1/services/service-1" {
+		t.Fatalf("deleted=%v path=%q", deletedNow, deleted)
+	}
+}
+
+func TestDeleteComposeServiceMissingIsSuccessfulNoop(t *testing.T) {
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/services" {
+			t.Fatalf("missing cleanup must be read-only: %s %s", r.Method, r.URL.Path)
+		}
+		writeJSON(w, 200, []map[string]any{})
+	})
+
+	deleted, err := New(srv.URL, "tok").DeleteComposeService("proj-1", "myapp-staging")
+	if err != nil || deleted {
+		t.Fatalf("deleted=%v err=%v", deleted, err)
+	}
+}
+
+func TestDeleteProjectEnvironmentDeletesExactNowEmptyEnvironment(t *testing.T) {
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/projects/proj-1/environments/staging" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeJSON(w, 200, map[string]any{"message": "Environment deleted."})
+	})
+	if err := New(srv.URL, "tok").DeleteProjectEnvironment("proj-1", "staging"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteProjectEnvironmentAlreadyMissingIsSuccessful(t *testing.T) {
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"message": "Environment not found."})
+	})
+	if err := New(srv.URL, "tok").DeleteProjectEnvironment("proj-1", "staging"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitComposeServiceAbsentPollsQueuedDeletion(t *testing.T) {
+	var polls int
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		polls++
+		if polls == 1 {
+			writeJSON(w, 200, []map[string]any{{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1"}})
+			return
+		}
+		writeJSON(w, 200, []map[string]any{})
+	})
+	c := New(srv.URL, "tok")
+	c.PollInterval = time.Millisecond
+	if err := c.WaitComposeServiceAbsent("proj-1", "myapp-staging", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if polls != 2 {
+		t.Fatalf("polls = %d, want 2", polls)
+	}
+}
+
 func TestWaitServiceHealthy_pollsUntilRunning(t *testing.T) {
 	var pollCount int
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
@@ -299,6 +443,22 @@ func TestWaitServiceHealthy_pollsUntilRunning(t *testing.T) {
 	}
 	if pollCount < 3 {
 		t.Fatalf("expected at least 3 polls, got %d", pollCount)
+	}
+}
+
+func TestWaitServiceHealthy_RejectsRunningButUnhealthyService(t *testing.T) {
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		writeJSON(w, 200, map[string]any{"uuid": "app-uuid-1", "status": "running:unhealthy"})
+	})
+
+	c := New(srv.URL, "tok")
+	c.PollInterval = time.Millisecond
+	err := c.WaitServiceHealthy("app-uuid-1", time.Second)
+	if err == nil {
+		t.Fatal("expected an unhealthy running service to fail the deploy health gate")
+	}
+	if !strings.Contains(err.Error(), "running:unhealthy") {
+		t.Fatalf("expected error to identify the unhealthy status, got: %v", err)
 	}
 }
 

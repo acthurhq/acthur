@@ -583,9 +583,12 @@ var buildCmd = &cobra.Command{
 // ---------------------------------------------------------------------------
 
 var (
-	deployEnv    string
-	deployTarget string
-	deployDryRun bool
+	deployEnv            string
+	deployTarget         string
+	deployDryRun         bool
+	deployStatusEnv      string
+	deployCleanupEnv     string
+	deployCleanupConfirm bool
 )
 
 var deployCmd = &cobra.Command{
@@ -604,10 +607,42 @@ from the graph, and ships to the configured target.`,
 	},
 }
 
+var deployStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show the current deployment identity and health",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		status, err := runDeployStatus(mustCwd(), deployStatusEnv)
+		if err != nil {
+			return err
+		}
+		output.Info("deploy", "%s", status)
+		return nil
+	},
+}
+
+var deployCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Delete a non-production deployment and its workload volumes",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := runDeployCleanup(mustCwd(), deployCleanupEnv, deployCleanupConfirm); err != nil {
+			return err
+		}
+		output.Success("deploy", "environment %q cleanup complete", deployCleanupEnv)
+		return nil
+	},
+}
+
 func init() {
+	deployCmd.AddCommand(deployStatusCmd)
+	deployCmd.AddCommand(deployCleanupCmd)
 	deployCmd.Flags().StringVar(&deployEnv, "env", "production", "environment to deploy")
 	deployCmd.Flags().StringVar(&deployTarget, "target", "", "override deploy target")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show deploy plan without executing")
+	deployStatusCmd.Flags().StringVar(&deployStatusEnv, "env", "production", "environment to inspect")
+	deployCleanupCmd.Flags().StringVar(&deployCleanupEnv, "env", "", "non-production environment to remove")
+	deployCleanupCmd.Flags().BoolVar(&deployCleanupConfirm, "confirm", false, "confirm deletion of the deployment and workload volumes")
 }
 
 // ---------------------------------------------------------------------------

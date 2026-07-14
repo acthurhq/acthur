@@ -128,10 +128,11 @@ const (
 )
 
 type EnvConfig struct {
-	Context    ExecutionContext `yaml:"context"`
-	Target     DeployTarget     `yaml:"target"`
-	Host       string           `yaml:"host"`
-	ServerUUID string           `yaml:"server_uuid"`
+	Context         ExecutionContext `yaml:"context"`
+	Target          DeployTarget     `yaml:"target"`
+	Host            string           `yaml:"host"`
+	ServerUUID      string           `yaml:"server_uuid"`
+	DestinationUUID string           `yaml:"destination_uuid"`
 }
 
 // ---------------------------------------------------------------------------

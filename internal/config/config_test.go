@@ -115,6 +115,30 @@ graph:
 	}
 }
 
+func TestLoad_CoolifyDestinationSelection(t *testing.T) {
+	cfg := writeConfigAndLoad(t, `
+project: testapp
+version: "1"
+environments:
+  staging:
+    context: cloud
+    target: coolify
+    host: https://coolify.example.com
+    server_uuid: server-1
+    destination_uuid: destination-2
+graph:
+  nodes:
+    api:
+      type: service
+      adapter: go:fiber
+  edges: []
+`)
+
+	if got := cfg.Environments["staging"].DestinationUUID; got != "destination-2" {
+		t.Fatalf("destination UUID = %q, want destination-2", got)
+	}
+}
+
 func TestLoad_DefaultPoolSettings(t *testing.T) {
 	cfg := writeConfigAndLoad(t, `
 project: testapp

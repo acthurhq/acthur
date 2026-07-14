@@ -162,6 +162,19 @@ In-flight
   both phases, and accepts the documented start acknowledgement before
   polling service health. Tests cover missing-key POST, existing-key PATCH,
   env-before-start ordering, and the exact acknowledgement shape.
+- 2026-07-14 — Coolify-lifecycle TDD agent — audited the installed Coolify
+  4.1.2 routes/OpenAPI and captured behavior-first reds at the public config,
+  client, target, and CLI seams. Deploy now preserves optional
+  `destination_uuid`, explicitly ensures the requested project environment
+  before service creation, and exposes the retained read-only `acthur deploy
+  status --env <name>` operation for the exact environment-scoped service.
+  Added confirmed non-production `acthur deploy cleanup --env <name>
+  --confirm`: it deletes only the exact service with configurations, volumes,
+  networks, and Docker cleanup enabled; waits for Coolify's queued deletion;
+  removes the now-empty environment; treats missing resources/404 as success;
+  refuses production; and never deletes the shared project. Provider and CLI
+  request-sequence tests prove identity, ordering, read-only status, safety,
+  and idempotency.
 - 2026-07-14 — remote-topology/secrets TDD agent — captured a black-box CLI
   red proving that locally validated secret values were followed by artifact
   writes and provider calls even though no remote target delivered those
@@ -246,6 +259,39 @@ In-flight
   on Go 1.22 and 1.23 across Ubuntu, macOS Intel, and Windows, installer
   integrity tests on all three operating systems, snapshot binaries, and the
   GoReleaser/Syft release dry run.
+- 2026-07-14 — main agent — promoted the reviewed candidate through the
+  required `dev` → `staging` tier in PR #71. The pull-request run
+  29342222528 and post-merge `staging` push run 29342678221 are fully green,
+  including lint/vet, the complete race-enabled supported OS/Go matrix,
+  native installer integrity tests, snapshot binaries, and the
+  GoReleaser/Syft release dry run. `main` and a release tag remain deliberately
+  unchanged until the real remote staging witness succeeds.
+- 2026-07-14 — Coolify health-gate TDD agent — reproduced at the public
+  `WaitServiceHealthy` seam that Coolify status `running:unhealthy` was
+  incorrectly accepted because the running-state check preceded terminal
+  health failures. Added a behavior regression proving an unhealthy running
+  service fails with its status identified, then gave terminal failure markers
+  precedence over running success. Focused `go test -race -count=1
+  ./internal/deploy/coolify`, focused `go vet`, and `git diff --check` are green.
+- 2026-07-14 — main agent — treated GitHub's native-runner Node 20
+  deprecation warnings as the failing CI behavior and upgraded the affected
+  official actions to their current Node 24 majors: checkout v6, setup-go v6,
+  upload-artifact v7, golangci-lint-action v9, and goreleaser-action v7.
+  Actionlint 1.7.12 and `git diff --check` are green; pushed native-runner
+  evidence is required before staging promotion.
+- 2026-07-14 — main agent — the upgraded CI witness exposed dependency drift
+  at the generated-project seam on Go 1.22: `go mod tidy` selected Prometheus
+  client v1.23.2, which requires Go 1.23, so the retained Go 1.22 project could
+  no longer compile with the observability plugin. The existing black-box
+  generated-project compilation test was the red. The go:fiber scaffold now
+  pins Prometheus client v1.19.1 (whose module requires Go 1.20), preserving
+  the supported Go 1.22 floor instead of relying on an unstable latest-module
+  resolution.
+- 2026-07-14 — main agent — the follow-up Windows Go 1.22 race job exposed a
+  concurrent map read/write in the public `output.ServiceLog` path while the
+  process manager streamed multiple services. Added a concurrent public-seam
+  regression and removed the unnecessary mutable color cache: service colors
+  remain the same deterministic name hash with no shared map mutation.
 
 ## Current Decisions
 
@@ -269,7 +315,9 @@ In-flight
 
 ## Open Questions
 
-- Which remote provider will be the first live production witness?
+- Coolify is selected for the first live remote witness. Execution requires a
+  disposable remote instance/server, its public route, and a short-lived token
+  with `read`, `write`, and `deploy` permissions.
 
 ## Files/Modules Expected
 
@@ -294,14 +342,18 @@ In-flight
       supported platforms.
 - [x] PRD and roadmap clearly distinguish shipped, experimental, and future
       behavior with no contradictory first-release claims.
-- [ ] All campaign tasks are complete/closed; PR #66 is reviewed and green.
+- [x] PR #66 and the follow-up staging promotion PR #71 are merged with green
+      supported-platform checks.
+- [ ] Campaign issue #69 is reconciled and closed only after remote and public
+      release evidence exists.
 - [ ] `main` is fast-forwarded and pushed, and the first production release is
       tagged, published, installed, and verified.
 
 ## Risks
 
 - Provider witnesses require external credentials and disposable resources.
-- Distribution repositories and signing policy may require owner decisions.
+- The first-release signing policy is decided and keyless; Homebrew/Scoop
+  repositories remain explicitly deferred and do not block GitHub Releases.
 - The expanded PRD contains mutually inconsistent version and size claims;
   release truthfulness requires explicit reconciliation rather than silently
   treating aspirational sections as delivered.

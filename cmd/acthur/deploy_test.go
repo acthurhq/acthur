@@ -26,6 +26,8 @@ func TestRunDeploy_CoolifyDeliversResolvedWorkloadEnvironmentWithoutEmbeddingVal
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects":
 			_, _ = w.Write([]byte(`{"uuid":"proj-1","name":"p"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			_, _ = w.Write([]byte(`[{"uuid":"env-1","name":"production"}]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services":
@@ -75,6 +77,94 @@ func TestRunDeploy_CoolifyDeliversResolvedWorkloadEnvironmentWithoutEmbeddingVal
 	}
 	if strings.Contains(compose, secret) {
 		t.Fatal("workload value was embedded in Compose")
+	}
+}
+
+func TestRunDeployStatus_CoolifyReportsCurrentNamedEnvironmentReadOnly(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/projects":
+			_, _ = w.Write([]byte(`[{"uuid":"proj-1","name":"p"}]`))
+		case "/api/v1/services":
+			_, _ = w.Write([]byte(`[{"uuid":"service-1","name":"p-staging","project_uuid":"proj-1"}]`))
+		case "/api/v1/services/service-1":
+			_, _ = w.Write([]byte(`{"uuid":"service-1","name":"p-staging","project_uuid":"proj-1","status":"running:healthy"}`))
+		default:
+			t.Fatalf("unexpected status request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	yml := "project: p\nversion: \"1\"\nenvironments:\n  staging:\n    context: cloud\n    target: coolify\n    host: " + srv.URL + "\n    server_uuid: server-1\ngraph:\n  nodes: {}\n  edges: []\n"
+	if err := os.WriteFile(filepath.Join(dir, "acthur.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COOLIFY_TOKEN", "provider-token")
+
+	status, err := runDeployStatus(dir, "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "p-staging: running:healthy (service-1)" {
+		t.Fatalf("status = %q", status)
+	}
+	if strings.Contains(strings.Join(methods, "\n"), "POST ") || strings.Contains(strings.Join(methods, "\n"), "DELETE ") || strings.Contains(strings.Join(methods, "\n"), "PATCH ") {
+		t.Fatalf("status mutated provider state:\n%s", strings.Join(methods, "\n"))
+	}
+}
+
+func TestRunDeployCleanup_RequiresConfirmationBeforeProviderAccess(t *testing.T) {
+	dir := t.TempDir()
+	yml := "project: p\nversion: \"1\"\nenvironments:\n  staging:\n    context: cloud\n    target: coolify\n    host: http://127.0.0.1:1\n    server_uuid: server-1\ngraph:\n  nodes: {}\n  edges: []\n"
+	if err := os.WriteFile(filepath.Join(dir, "acthur.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runDeployCleanup(dir, "staging", false)
+	if err == nil || !strings.Contains(err.Error(), "--confirm") {
+		t.Fatalf("expected confirmation refusal, got: %v", err)
+	}
+}
+
+func TestRunDeployCleanup_CoolifyRemovesExactDisposableEnvironment(t *testing.T) {
+	var sequence []string
+	deleted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sequence = append(sequence, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
+			_, _ = w.Write([]byte(`[{"uuid":"proj-1","name":"p"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			if deleted {
+				_, _ = w.Write([]byte(`[]`))
+			} else {
+				_, _ = w.Write([]byte(`[{"uuid":"service-1","name":"p-staging","project_uuid":"proj-1"}]`))
+			}
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/services/service-1":
+			deleted = true
+			_, _ = w.Write([]byte(`{"message":"queued"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/projects/proj-1/environments/staging":
+			_, _ = w.Write([]byte(`{"message":"deleted"}`))
+		default:
+			t.Fatalf("unexpected cleanup request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	yml := "project: p\nversion: \"1\"\nenvironments:\n  staging:\n    context: cloud\n    target: coolify\n    host: " + srv.URL + "\n    server_uuid: server-1\ngraph:\n  nodes: {}\n  edges: []\n"
+	if err := os.WriteFile(filepath.Join(dir, "acthur.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COOLIFY_TOKEN", "provider-token")
+	if err := runDeployCleanup(dir, "staging", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(sequence, "\n"); !strings.Contains(got, "DELETE /api/v1/services/service-1") || !strings.Contains(got, "DELETE /api/v1/projects/proj-1/environments/staging") {
+		t.Fatalf("cleanup sequence:\n%s", got)
 	}
 }
 
