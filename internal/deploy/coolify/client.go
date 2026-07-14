@@ -30,9 +30,9 @@
 //   - Service health is read from the "status" string field on the
 //     GET /api/v1/services/{uuid} response, which Coolify reports as
 //     "<state>:<health>" (e.g. "running:healthy", "exited:unhealthy").
-//     WaitServiceHealthy treats any status containing "running" as success and any
-//     status containing "exited", "unhealthy", "failed", or "error" as a
-//     terminal failure; anything else is treated as still-in-progress.
+//     WaitServiceHealthy treats any status containing "exited", "unhealthy",
+//     "failed", or "error" as a terminal failure. Only a non-failing status
+//     containing "running" is success; anything else remains in progress.
 package coolify
 
 import (
@@ -245,13 +245,13 @@ func (c *Client) WaitServiceHealthy(serviceUUID string, timeout time.Duration) e
 			return fmt.Errorf("coolify: polling service status for %q: %w", serviceUUID, err)
 		}
 		lastStatus = svc.Status
-		if strings.Contains(lastStatus, "running") {
-			return nil
-		}
 		for _, marker := range terminalFailureMarkers {
 			if strings.Contains(lastStatus, marker) {
 				return fmt.Errorf("coolify: service %q failed with status %q", serviceUUID, lastStatus)
 			}
+		}
+		if strings.Contains(lastStatus, "running") {
+			return nil
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("coolify: timed out waiting for service %q after %s (last status: %q)", serviceUUID, timeout, lastStatus)

@@ -302,6 +302,22 @@ func TestWaitServiceHealthy_pollsUntilRunning(t *testing.T) {
 	}
 }
 
+func TestWaitServiceHealthy_RejectsRunningButUnhealthyService(t *testing.T) {
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		writeJSON(w, 200, map[string]any{"uuid": "app-uuid-1", "status": "running:unhealthy"})
+	})
+
+	c := New(srv.URL, "tok")
+	c.PollInterval = time.Millisecond
+	err := c.WaitServiceHealthy("app-uuid-1", time.Second)
+	if err == nil {
+		t.Fatal("expected an unhealthy running service to fail the deploy health gate")
+	}
+	if !strings.Contains(err.Error(), "running:unhealthy") {
+		t.Fatalf("expected error to identify the unhealthy status, got: %v", err)
+	}
+}
+
 func TestWaitServiceHealthy_pointedErrorOnFailedStatus(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		writeJSON(w, 200, map[string]any{"uuid": "app-uuid-1", "status": "exited:unhealthy"})

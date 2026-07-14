@@ -253,6 +253,13 @@ In-flight
   native installer integrity tests, snapshot binaries, and the
   GoReleaser/Syft release dry run. `main` and a release tag remain deliberately
   unchanged until the real remote staging witness succeeds.
+- 2026-07-14 — Coolify health-gate TDD agent — reproduced at the public
+  `WaitServiceHealthy` seam that Coolify status `running:unhealthy` was
+  incorrectly accepted because the running-state check preceded terminal
+  health failures. Added a behavior regression proving an unhealthy running
+  service fails with its status identified, then gave terminal failure markers
+  precedence over running success. Focused `go test -race -count=1
+  ./internal/deploy/coolify`, focused `go vet`, and `git diff --check` are green.
 
 ## Current Decisions
 
