@@ -5,10 +5,9 @@
 package process
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -47,7 +46,6 @@ type Process struct {
 	cancel   context.CancelFunc
 	restarts int
 	lastExit time.Time
-	outputWG sync.WaitGroup
 
 	// exited is closed by the background waiter goroutine started in startLocked
 	// when cmd.Wait() returns. Stop() and Supervisor.loop() both read from this
@@ -117,15 +115,13 @@ func (p *Process) startLocked(ctx context.Context) error {
 		p.cmd.Dir = p.Dir
 	}
 
-	// Pipe stdout and stderr
-	stdout, err := p.cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("process %q: stdout pipe: %w", p.NodeID, err)
-	}
-	stderr, err := p.cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("process %q: stderr pipe: %w", p.NodeID, err)
-	}
+	// Let os/exec own the output-copy lifecycle. Wait does not return until
+	// writes to non-file Stdout/Stderr destinations complete, so a short-lived
+	// command cannot lose its final output when Wait closes its pipes.
+	stdout := &lineWriter{emit: p.emitLine}
+	stderr := &lineWriter{emit: p.emitLine}
+	p.cmd.Stdout = stdout
+	p.cmd.Stderr = stderr
 
 	if err := p.cmd.Start(); err != nil {
 		p.setState(StateFailed)
@@ -134,20 +130,16 @@ func (p *Process) startLocked(ctx context.Context) error {
 
 	p.setState(StateRunning)
 
-	// Start draining output before Wait. For short-lived commands, Wait may
-	// otherwise observe the exit and close the pipes before these readers get
-	// scheduled, nondeterministically dropping the command's final output.
-	p.outputWG.Add(2)
-	go p.pipeLines(stdout)
-	go p.pipeLines(stderr)
-
 	// exited is closed by a single background goroutine that is the sole caller
 	// of cmd.Wait(). Stop() and Supervisor.loop() both block on this channel
 	// rather than calling cmd.Wait() themselves, eliminating the data race.
-	p.exited = make(chan struct{})
+	exited := make(chan struct{})
+	p.exited = exited
 	go func() {
-		p.cmd.Wait() //nolint:errcheck // exit status is not used here
-		close(p.exited)
+		cmd.Wait() //nolint:errcheck // exit status is not used here
+		stdout.flush()
+		stderr.flush()
+		close(exited)
 	}()
 
 	return nil
@@ -176,7 +168,6 @@ func (p *Process) Stop(timeout time.Duration) error {
 
 	select {
 	case <-exited:
-		p.outputWG.Wait()
 		p.setState(StateStopped)
 		return nil
 	case <-time.After(timeout):
@@ -185,7 +176,6 @@ func (p *Process) Stop(timeout time.Duration) error {
 		if p.cmd != nil && p.cmd.Process != nil {
 			killTree(p.cmd) //nolint:errcheck // best-effort force kill
 		}
-		p.outputWG.Wait()
 		p.setState(StateStopped)
 		return nil
 	}
@@ -248,17 +238,48 @@ func (p *Process) setState(s State) {
 	}
 }
 
-func (p *Process) pipeLines(r io.Reader) {
-	defer p.outputWG.Done()
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if p.onLine != nil {
-			p.onLine(p.NodeID, line)
-		} else {
-			output.ServiceLog(p.NodeID, line)
-		}
+func (p *Process) emitLine(line string) {
+	if p.onLine != nil {
+		p.onLine(p.NodeID, line)
+	} else {
+		output.ServiceLog(p.NodeID, line)
 	}
+}
+
+// lineWriter turns the byte chunks delivered by os/exec into the line-based
+// callback contract exposed by Process.OnLine. Each command stream owns one
+// writer, and Wait flushes any final unterminated line before signalling exit.
+type lineWriter struct {
+	mu      sync.Mutex
+	pending []byte
+	emit    func(string)
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.pending = append(w.pending, p...)
+	for {
+		newline := bytes.IndexByte(w.pending, '\n')
+		if newline < 0 {
+			break
+		}
+		line := bytes.TrimSuffix(w.pending[:newline], []byte{'\r'})
+		w.emit(string(line))
+		w.pending = w.pending[newline+1:]
+	}
+	return len(p), nil
+}
+
+func (w *lineWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.pending) == 0 {
+		return
+	}
+	w.emit(string(bytes.TrimSuffix(w.pending, []byte{'\r'})))
+	w.pending = nil
 }
 
 // ---------------------------------------------------------------------------

@@ -82,6 +82,15 @@ In-flight
   check themselves. Black-box installer tests, POSIX shell syntax, and
   `git diff --check` are green. PowerShell execution/parse verification remains
   pending because this host has no PowerShell runtime.
+- 2026-07-14 — main agent — GitHub's Go 1.23 Ubuntu PR run reproduced
+  short-lived output loss after the first pipe-ordering fix. Replaced
+  independently drained `StdoutPipe`/`StderrPipe` readers with line writers
+  owned by `exec.Cmd`, whose `Wait` contract includes completed output copies.
+  Restart stress then exposed that the waiter closure still referenced mutable
+  `p.cmd`/`p.exited`; bound each waiter to its own command and exit channel.
+  Green evidence: output capture under `-race -count=100`, orphan-restart under
+  `-race -count=10`, full `go test -race -count=1 ./...`, full `go vet ./...`,
+  and `git diff --check`.
 
 ## Current Decisions
 
