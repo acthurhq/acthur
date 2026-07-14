@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/acthurhq/acthur/internal/config"
+	"github.com/acthurhq/acthur/internal/contract"
 	"github.com/acthurhq/acthur/internal/deploy"
 	"github.com/acthurhq/acthur/internal/graph"
 )
@@ -71,6 +72,29 @@ func TestGate_AllChecksPass(t *testing.T) {
 	}
 }
 
+// TestGate_TestsUseExactCIInvocation proves the production gate cannot pass
+// using cached, non-race test results. The injected runner is the public
+// process boundary; build and test policy remain owned by RunGate.
+func TestGate_TestsUseExactCIInvocation(t *testing.T) {
+	dir := t.TempDir()
+	in := passingChecks(t, dir)
+	var invocations [][]string
+	in.GoRunner = func(root, node string, args ...string) error {
+		invocations = append(invocations, append([]string(nil), args...))
+		return nil
+	}
+
+	if _, err := deploy.RunGate(in); err != nil {
+		t.Fatalf("expected injected healthy runner to pass, got: %v", err)
+	}
+	if len(invocations) != 2 {
+		t.Fatalf("expected build and test invocations, got: %#v", invocations)
+	}
+	if got := strings.Join(invocations[1], " "); got != "test ./... -race -count=1" {
+		t.Fatalf("deploy test invocation = %q, want exact CI behavior", got)
+	}
+}
+
 // TestGate_ContractsCheckPassesWhenProjectHasNoContracts: contracts are
 // optional, but the deploy report must still prove that the gate checked them.
 func TestGate_ContractsCheckPassesWhenProjectHasNoContracts(t *testing.T) {
@@ -80,6 +104,45 @@ func TestGate_ContractsCheckPassesWhenProjectHasNoContracts(t *testing.T) {
 		t.Fatalf("expected a project without contracts to pass, got: %v", err)
 	}
 	assertGateCheck(t, report, "contracts", true)
+}
+
+func TestGate_BreakingContractFromDeployBaselineBlocksPointedly(t *testing.T) {
+	dir := t.TempDir()
+	in := passingChecks(t, dir)
+	contractsDir := filepath.Join(dir, "contracts")
+	if err := os.MkdirAll(contractsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(contractsDir, "users.contract.yml")
+	oldContract := `contract: users
+version: "1"
+transport: http
+endpoints:
+  - id: get_user
+    method: GET
+    path: /users/:id
+    output:
+      id: string
+`
+	if err := os.WriteFile(path, []byte(oldContract), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := contract.UpdateDeployBaseline(dir); err != nil {
+		t.Fatalf("define baseline: %v", err)
+	}
+	breakingContract := strings.Replace(oldContract, "      id: string\n", "", 1)
+	if err := os.WriteFile(path, []byte(breakingContract), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := deploy.RunGate(in)
+	if err == nil {
+		t.Fatal("expected breaking contract change to block deploy")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "contract compatibility:") || !strings.Contains(msg, "endpoints.get_user.output.id") {
+		t.Fatalf("expected pointed compatibility failure, got: %v", err)
+	}
+	assertGateCheck(t, report, "contract compatibility", false)
 }
 
 // TestGate_GeneratedArtifacts proves deploy validates the on-disk artifacts

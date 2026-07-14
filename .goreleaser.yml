@@ -38,14 +38,37 @@ archives:
     name_template: "acthur_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     files:
       - README.md
-      - LICENSE
+      - LICENSE.md
 
 checksum:
   name_template: "acthur_{{ .Version }}_checksums.txt"
   algorithm: sha256
+
+# Publish an SPDX SBOM beside every release archive. The release workflow
+# installs Syft explicitly; a missing cataloger therefore fails the release.
+sboms:
+  - id: archives
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.spdx.json"
+
+# Keyless Sigstore signing binds the checksum manifest to the GitHub Actions
+# workflow identity and records the signature in Rekor. Consumers verify the
+# bundle, then use the signed manifest to verify every archive and SBOM.
+signs:
+  - id: checksums
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
 
 snapshot:
   version_template: "{{ .Tag }}-next"
@@ -65,27 +88,10 @@ release:
   github:
     owner: acthurhq
     name: acthur
-  draft: false
+  # Artifacts remain private until the workflow has attested them successfully.
+  draft: true
   prerelease: auto
   name_template: "Acthur v{{.Version}}"
 
-brews:
-  - name: acthur
-    homepage: https://acthur.dev
-    description: Runtime Graph Operating System with Pluggable Infrastructure Nodes
-    repository:
-      owner: acthurhq
-      name: homebrew-tap
-    install: |
-      bin.install "acthur"
-    test: |
-      system "#{bin}/acthur", "version"
-
-scoops:
-  - name: acthur
-    homepage: https://acthur.dev
-    description: Runtime Graph Operating System with Pluggable Infrastructure Nodes
-    repository:
-      owner: acthurhq
-      name: scoop-bucket
-    license: MIT
+# Homebrew and Scoop are intentionally deferred until acthurhq/homebrew-tap
+# and acthurhq/scoop-bucket exist and have dedicated publish credentials.

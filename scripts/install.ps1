@@ -19,7 +19,7 @@ $GITHUB_API   = "https://api.github.com/repos/$ACTHUR_REPO/releases/latest"
 # ── Colours ───────────────────────────────────────────────────────────────────
 function Write-Info    { param($msg) Write-Host "  ->  $msg" -ForegroundColor Cyan }
 function Write-Success { param($msg) Write-Host "  v   $msg" -ForegroundColor Green }
-function Write-Fail    { param($msg) Write-Host "  x   $msg" -ForegroundColor Red; exit 1 }
+function Write-Fail    { param($msg) Write-Host "  x   $msg" -ForegroundColor Red; throw $msg }
 function Write-Banner  {
     Write-Host ""
     Write-Host "  *  Acthur Installer" -ForegroundColor White
@@ -121,7 +121,7 @@ function Add-ToPath {
 function Verify-Installation {
     param($version)
     try {
-        $output = & $ACTHUR_EXE version 2>&1
+        $output = & $ACTHUR_EXE version 2>&1 | Out-String
         $expectedVersion = $version.TrimStart('v')
         if ($output -notmatch "Version:\s+v?$([regex]::Escape($expectedVersion))") {
             Write-Fail "Installation verification failed: binary does not report requested version $version"

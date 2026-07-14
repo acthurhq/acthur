@@ -2,9 +2,51 @@
 
 **Date:** 2026-07-14
 **Repository:** `acthurhq/acthur`
-**Working branch:** `dev` at `13cd242`
+**Working branch:** `dev` at `d65d64b` plus in-flight production-readiness changes
 **Promotion path:** `dev` → `staging` → `main` (live)
-**Primary pull request:** [#66 — PRD completion: Phases 3–9 + end-to-end production-readiness verification](https://github.com/acthurhq/acthur/pull/66)
+**Primary tracking issue:** [#69 — Production readiness and first release](https://github.com/acthurhq/acthur/issues/69)
+
+## Authoritative Current Status — 2026-07-14 14:00 UTC
+
+This section supersedes every repository, CI, pull-request, and blocker status
+in the historical audit below. The old findings remain only to explain why the
+hardening work was undertaken.
+
+| Area | Current evidence | Release qualification |
+|---|---|---|
+| Branch promotion | PR #66 merged `dev` → `staging`; PR #70 merged `staging` → `main`. `staging` and `main` are both `5467d48`; development continues on `dev` from `d65d64b`. | Promotion flow established; current in-flight release changes still require a new `dev` promotion. |
+| Pull requests | No pull requests are open. Scratch PRs #67 and #68 are closed without merging. | Clean; a new promotion PR is required for current work. |
+| CI/process runtime | The supported Linux, Windows, and macOS Intel race matrix passed after output ownership and restart waiter fixes. | The historical process-output failure is resolved. New installer/release jobs require a pushed CI witness. |
+| Deploy completeness | Artifact projection and provider projection now fail closed. Fly, Railway, and Render reject infrastructure, dependency topology, and required workload environment that they cannot deliver; Coolify consumes the full Compose projection. | No graph node is silently omitted. A real remote staging witness remains required. |
+| Deploy gate | Graph, build, race-enabled tests, contract validation and compatibility baseline, generated freshness, migrations, delivered environment, and security are named checks. | Implemented; live deployment evidence remains. |
+| Release artifacts | GoReleaser 2.17 snapshot produced five platform archives, SPDX SBOMs, and a checksum manifest; installer integrity checks exist for Unix and PowerShell. | Local dry run passed. Native Windows installer CI, keyless tag signing, provenance, publication, and public-install verification remain. |
+| Worktrees/branches | Only the primary `/home/makezure/projects/acthur` worktree remains. Obsolete worktree and scratch branches have been deleted locally and remotely; only `dev`, `staging`, and `main` remain at both scopes. | Worktree and branch cleanup complete. |
+| Public release | No production tag or GitHub Release has yet been published. | Still blocked on staging witness, refreshed CI, promotion, tag, and installed-artifact verification. |
+
+### Release scope
+
+- **Shipped core candidate:** graph kernel, current built-in adapters, contract
+  engine and compatibility baseline, local development supervision, generator
+  engine, Docker Compose/Coolify full-graph projection, fail-closed production
+  deploy gates, CLI release archives, installers, SBOM/signing/provenance
+  workflow. “Shipped” here means implemented in the release candidate; it does
+  not mean publicly released until the production tag is published.
+- **Experimental:** Fly, Railway, and Render service-only projections; Coolify
+  remote operation until live-witnessed; advanced adapters/plugins that have
+  package and fake-client coverage but no supported end-to-end witness.
+- **Future:** unimplemented ecosystem matrices and the expanded vision in PRD
+  sections 24–56, unless a capability is explicitly named in the shipped-core
+  row; Homebrew/Scoop; external registries; and provider features that cannot
+  preserve the complete graph and delivered environment.
+
+### Binary-size decision
+
+The `<500 KB` statement was not a credible single-binary target and is retired.
+The release requirement is a stripped CLI of at most **15 MiB** and a compressed
+archive of at most **6 MiB**. The 2026-07-14 GoReleaser snapshot measured
+11,206,818–12,532,736 bytes per executable and 4,421,475–5,060,675 bytes per
+archive. Generated applications have no Acthur runtime dependency, so their
+Acthur kernel overhead is zero rather than a bundled 500 KB runtime.
 
 ## Purpose
 
@@ -16,7 +58,12 @@ The central conclusion is:
 
 It is suitable for continued development, scaffolding experiments, local graph/dev workflows, and local Compose evaluation. It should not yet be described as a production-ready v1 or merged to `main` without stabilizing tests and CI, tightening deployment completeness, validating release artifacts, and reconciling the claimed PRD scope.
 
-## Repository State at Handoff
+## Historical Audit Snapshot — Superseded
+
+Everything below this heading records the initial audit at `13cd242`. It is not
+current status; use the dated section above for release decisions.
+
+### Repository State at Initial Handoff
 
 - The primary worktree is switched to `dev` and is clean against `origin/dev`.
 - `dev` is 132 commits ahead of `main`; `main` has no commits absent from `dev`.
@@ -117,8 +164,10 @@ Required outcome:
 - Verify version injection for both Makefile and GoReleaser builds.
 - Produce a release candidate tag and snapshot artifacts for every supported target.
 - Exercise Linux/macOS shell installation and Windows PowerShell installation against real release artifacts.
-- Verify or create the declared Homebrew tap and Scoop bucket repositories.
-- Decide whether the `<500 KB` PRD binary constraint is real; meet it or amend the PRD with an evidence-based target.
+- Keep Homebrew and Scoop explicitly deferred until their repositories and
+  dedicated publishing credentials exist; the first GitHub release must not
+  depend on absent distribution repositories.
+- Enforce the reconciled 15 MiB executable and 6 MiB archive release targets.
 
 ### P1 — Live-Witness Remote Production Deployment
 

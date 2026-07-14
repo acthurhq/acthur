@@ -410,6 +410,182 @@ func TestProcess_StopTerminatesWholeProcessTree(t *testing.T) {
 	}
 }
 
+// TestProcess_StopReapsReloadChildAfterSupervisorExits models a self-reloading
+// dev tool: the supervisor exits promptly on SIGTERM, while its currently
+// running compiled child survives the graceful signal. Stop must not report
+// success merely because the supervisor exited; the remaining process group
+// must be reaped before shutdown completes.
+func TestProcess_StopReapsReloadChildAfterSupervisorExits(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("skipping process-group test")
+	}
+
+	pidFile := t.TempDir() + "/reload-child.pid"
+	script := `trap 'exit 0' TERM; sh -c 'trap "" TERM; echo $$ > ` + pidFile + `; while true; do sleep 1; done' >/dev/null 2>&1 & while true; do sleep 0.1; done`
+	p := process.NewProcess("reload-tree-test", "sh", []string{"-c", script}, nil, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("reload child pid never appeared")
+	}
+
+	if err := p.Stop(2 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if pidAlive(pid) {
+		forceKill(pid)
+		t.Fatalf("reloaded child %d survived successful Stop", pid)
+	}
+}
+
+// TestProcess_StopReapsReloadChildInOwnSession models Air's reload behavior
+// more closely: the rebuilt application moves outside the supervisor's
+// process group/session. Group-only cleanup cannot reach it, so Stop must
+// retain ownership of descendants discovered before signaling the supervisor.
+func TestProcess_StopReapsReloadChildInOwnSession(t *testing.T) {
+	if testing.Short() || runtime.GOOS != "linux" {
+		t.Skip("requires Linux /proc and setsid")
+	}
+
+	pidFile := t.TempDir() + "/session-child.pid"
+	script := `trap 'exit 0' TERM; setsid sh -c 'trap "" TERM; echo $$ > ` + pidFile + `; while true; do sleep 1; done' >/dev/null 2>&1 & while true; do sleep 0.1; done`
+	p := process.NewProcess("session-reload-test", "sh", []string{"-c", script}, nil, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("session child pid never appeared")
+	}
+
+	if err := p.Stop(2 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if pidAlive(pid) {
+		forceKill(pid)
+		t.Fatalf("reloaded child %d in its own session survived successful Stop", pid)
+	}
+}
+
+// TestProcess_StopReapsChildReparentedBeforeShutdown is the exact ordering
+// seen with Air: the supervisor launches a reload child outside its process
+// group, exits, and the child is reparented before Stop can inspect ancestry.
+// Ownership must survive that reparenting event.
+func TestProcess_StopReapsChildReparentedBeforeShutdown(t *testing.T) {
+	if testing.Short() || runtime.GOOS != "linux" {
+		t.Skip("requires Linux /proc and setsid")
+	}
+
+	pidFile := t.TempDir() + "/preorphaned-child.pid"
+	script := `setsid sh -c 'trap "" TERM; echo $$ > ` + pidFile + `; while true; do sleep 1; done' >/dev/null 2>&1 & exit 0`
+	p := process.NewProcess("preorphaned-reload-test", "sh", []string{"-c", script}, nil, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var pid int
+	for i := 0; i < 50; i++ {
+		if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+			_, _ = fmt.Sscanf(string(b), "%d", &pid)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("pre-orphaned child pid never appeared")
+	}
+	// Prove the load-bearing ordering: the supervisor is gone and this child
+	// is no longer discoverable through its ancestry before Stop begins.
+	for i := 0; i < 50 && pidAlive(p.Pid()); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pidAlive(p.Pid()) {
+		forceKill(pid)
+		t.Fatal("supervisor did not exit before Stop")
+	}
+
+	if err := p.Stop(2 * time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if pidAlive(pid) {
+		forceKill(pid)
+		t.Fatalf("reload child %d reparented before Stop survived successful shutdown", pid)
+	}
+}
+
+// TestManager_StopAllReapsOrphanFromPreRestartGeneration models the complete
+// Air failure path: generation one leaves an escaped marked workload behind
+// and exits, Supervisor auto-restarts generation two, then final engine
+// shutdown must reap both generations.
+func TestManager_StopAllReapsOrphanFromPreRestartGeneration(t *testing.T) {
+	if testing.Short() || runtime.GOOS != "linux" {
+		t.Skip("requires Linux /proc and setsid")
+	}
+	dir := t.TempDir()
+	// A managed dev process can itself be launched from another managed
+	// environment. The inner owner must replace, not duplicate, this marker;
+	// shells collapse duplicate environment keys when spawning reload children.
+	t.Setenv("ACTHUR_PROCESS_OWNER", "outer-process-owner")
+	counter := dir + "/generation"
+	orphanPIDFile := dir + "/old-child.pid"
+	script := `if [ ! -f ` + counter + ` ]; then touch ` + counter + `; env ACTHUR_PROCESS_OWNER=prior-generation-owner setsid sh -c 'trap "" TERM; echo $$ > ` + orphanPIDFile + `; while true; do sleep 1; done' >/dev/null 2>&1 & exit 1; fi; while true; do sleep 0.1; done`
+
+	m := process.NewManager()
+	p, err := m.Spawn("autoreload", "sh", []string{"-c", script}, nil, "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var orphanPID int
+	for i := 0; i < 150; i++ {
+		if b, err := os.ReadFile(orphanPIDFile); err == nil {
+			_, _ = fmt.Sscanf(string(b), "%d", &orphanPID)
+		}
+		if orphanPID != 0 && p.Restarts() >= 1 && pidAlive(p.Pid()) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if orphanPID == 0 || p.Restarts() < 1 {
+		m.StopAll([]string{"autoreload"})
+		t.Fatalf("supervisor did not reach generation two (orphan=%d restarts=%d)", orphanPID, p.Restarts())
+	}
+
+	m.StopAll([]string{"autoreload"})
+	time.Sleep(100 * time.Millisecond)
+	if pidAlive(orphanPID) {
+		forceKill(orphanPID)
+		t.Fatalf("orphan %d from pre-restart generation survived StopAll", orphanPID)
+	}
+}
+
 // TestProcess_RestartReapsOrphanedGrandchildren: when the supervised process
 // is killed externally (crash), its grandchildren are orphaned — the context
 // Cancel never fires because the process already exited. Restart must reap

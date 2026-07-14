@@ -53,6 +53,49 @@ func TestNew_setsBaseURLAndToken(t *testing.T) {
 	}
 }
 
+func TestEnsureComposeServiceCreatesCurrentServiceShape(t *testing.T) {
+	srv, requests := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			writeJSON(w, 200, []map[string]any{})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services":
+			writeJSON(w, 201, map[string]any{"uuid": "service-1"})
+		default:
+			t.Fatalf("legacy/unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	uuid, err := New(srv.URL, "tok").EnsureComposeService("project-1", "server-1", "production", "myapp-production", "services: {}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uuid != "service-1" {
+		t.Fatalf("uuid = %q", uuid)
+	}
+	body := (*requests)[1].Body
+	for key, want := range map[string]any{"project_uuid": "project-1", "server_uuid": "server-1", "environment_name": "production", "name": "myapp-production", "docker_compose_raw": "services: {}"} {
+		if body[key] != want {
+			t.Fatalf("create body[%s] = %#v, want %#v; body=%#v", key, body[key], want, body)
+		}
+	}
+}
+
+func TestUpsertServiceEnv_ErrorDoesNotExposeValue(t *testing.T) {
+	const secret = "should-never-appear-in-error"
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "invalid value " + secret})
+	})
+	err := New(srv.URL, "tok").UpsertServiceEnv("app-1", "APP_SECRET", secret)
+	if err == nil {
+		t.Fatal("expected upsert error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("secret leaked in error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "APP_SECRET") || !strings.Contains(err.Error(), "HTTP 400") {
+		t.Fatalf("expected pointed key/status error, got: %v", err)
+	}
+}
+
 func TestEnsureProject_authHeaderPresent(t *testing.T) {
 	srv, requests := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		switch {
@@ -142,13 +185,13 @@ func TestEnsureProject_reusesWhenPresent(t *testing.T) {
 	}
 }
 
-func TestEnsureComposeApp_createsWhenAbsent(t *testing.T) {
+func TestEnsureComposeService_createsWhenAbsent(t *testing.T) {
 	var createBody map[string]any
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/applications":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
 			writeJSON(w, 200, []map[string]any{})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/applications/dockercompose":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services":
 			createBody = rec.Body
 			writeJSON(w, 201, map[string]any{"uuid": "app-uuid-1"})
 		default:
@@ -157,9 +200,9 @@ func TestEnsureComposeApp_createsWhenAbsent(t *testing.T) {
 	})
 
 	c := New(srv.URL, "tok")
-	uuid, err := c.EnsureComposeApp("proj-1", "web", "services:\n  web:\n    image: nginx\n")
+	uuid, err := c.EnsureComposeService("proj-1", "server-1", "production", "web", "services:\n  web:\n    image: nginx\n")
 	if err != nil {
-		t.Fatalf("EnsureComposeApp: %v", err)
+		t.Fatalf("EnsureComposeService: %v", err)
 	}
 	if uuid != "app-uuid-1" {
 		t.Fatalf("expected app-uuid-1, got %q", uuid)
@@ -175,22 +218,22 @@ func TestEnsureComposeApp_createsWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestEnsureComposeApp_updatesWhenPresent(t *testing.T) {
+func TestEnsureComposeService_updatesWhenPresent(t *testing.T) {
 	var patchCalled bool
 	var createCalled bool
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/applications":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
 			writeJSON(w, 200, []map[string]any{
 				{"uuid": "app-existing", "name": "web", "project_uuid": "proj-1"},
 			})
-		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/applications/app-existing":
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/services/app-existing":
 			patchCalled = true
 			if rec.Body["docker_compose_raw"] == nil {
 				t.Errorf("expected docker_compose_raw in patch body, got %v", rec.Body)
 			}
 			writeJSON(w, 200, map[string]any{"uuid": "app-existing"})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/applications/dockercompose":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services":
 			createCalled = true
 			writeJSON(w, 201, map[string]any{"uuid": "should-not-happen"})
 		default:
@@ -199,9 +242,9 @@ func TestEnsureComposeApp_updatesWhenPresent(t *testing.T) {
 	})
 
 	c := New(srv.URL, "tok")
-	uuid, err := c.EnsureComposeApp("proj-1", "web", "services:\n  web:\n    image: nginx\n")
+	uuid, err := c.EnsureComposeService("proj-1", "server-1", "production", "web", "services:\n  web:\n    image: nginx\n")
 	if err != nil {
-		t.Fatalf("EnsureComposeApp: %v", err)
+		t.Fatalf("EnsureComposeService: %v", err)
 	}
 	if createCalled {
 		t.Fatal("did not expect create request when app already exists")
@@ -214,37 +257,29 @@ func TestEnsureComposeApp_updatesWhenPresent(t *testing.T) {
 	}
 }
 
-func TestDeploy_triggersDeployment(t *testing.T) {
+func TestStartService_triggersDeployment(t *testing.T) {
 	srv, requests := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/deploy" {
-			if r.URL.Query().Get("uuid") != "app-uuid-1" {
-				t.Errorf("expected uuid=app-uuid-1 query param, got %q", r.URL.RawQuery)
-			}
-			writeJSON(w, 200, map[string]any{
-				"deployments": []map[string]any{{"deployment_uuid": "dep-uuid-1"}},
-			})
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/services/app-uuid-1/start" {
+			writeJSON(w, 200, map[string]any{"message": "Service starting request queued."})
 			return
 		}
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 	})
 
 	c := New(srv.URL, "tok")
-	deploymentUUID, err := c.Deploy("app-uuid-1")
+	err := c.StartService("app-uuid-1")
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
-	}
-	if deploymentUUID != "dep-uuid-1" {
-		t.Fatalf("expected dep-uuid-1, got %q", deploymentUUID)
 	}
 	if len(*requests) != 1 {
 		t.Fatalf("expected exactly 1 request, got %d", len(*requests))
 	}
 }
 
-func TestWaitHealthy_pollsUntilRunning(t *testing.T) {
+func TestWaitServiceHealthy_pollsUntilRunning(t *testing.T) {
 	var pollCount int
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
-		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/applications/app-uuid-1" {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/services/app-uuid-1" {
 			pollCount++
 			status := "starting"
 			if pollCount >= 3 {
@@ -258,23 +293,23 @@ func TestWaitHealthy_pollsUntilRunning(t *testing.T) {
 
 	c := New(srv.URL, "tok")
 	c.PollInterval = time.Millisecond
-	err := c.WaitHealthy("app-uuid-1", time.Second)
+	err := c.WaitServiceHealthy("app-uuid-1", time.Second)
 	if err != nil {
-		t.Fatalf("WaitHealthy: %v", err)
+		t.Fatalf("WaitServiceHealthy: %v", err)
 	}
 	if pollCount < 3 {
 		t.Fatalf("expected at least 3 polls, got %d", pollCount)
 	}
 }
 
-func TestWaitHealthy_pointedErrorOnFailedStatus(t *testing.T) {
+func TestWaitServiceHealthy_pointedErrorOnFailedStatus(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		writeJSON(w, 200, map[string]any{"uuid": "app-uuid-1", "status": "exited:unhealthy"})
 	})
 
 	c := New(srv.URL, "tok")
 	c.PollInterval = time.Millisecond
-	err := c.WaitHealthy("app-uuid-1", time.Second)
+	err := c.WaitServiceHealthy("app-uuid-1", time.Second)
 	if err == nil {
 		t.Fatal("expected error for failed deployment status")
 	}
@@ -283,14 +318,14 @@ func TestWaitHealthy_pointedErrorOnFailedStatus(t *testing.T) {
 	}
 }
 
-func TestWaitHealthy_timesOut(t *testing.T) {
+func TestWaitServiceHealthy_timesOut(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		writeJSON(w, 200, map[string]any{"uuid": "app-uuid-1", "status": "starting"})
 	})
 
 	c := New(srv.URL, "tok")
 	c.PollInterval = time.Millisecond
-	err := c.WaitHealthy("app-uuid-1", 20*time.Millisecond)
+	err := c.WaitServiceHealthy("app-uuid-1", 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}

@@ -93,6 +93,159 @@ In-flight
   and `git diff --check`. The refreshed matrix also exposed the retired
   `macos-13` runner label; CI now uses GitHub's supported `macos-15-intel`
   label, retaining the required x86_64 race-detector path.
+- 2026-07-14 — contract/CI-gate TDD agent — captured compile-time reds at
+  the public contract and deploy-gate seams: no deploy baseline could be
+  defined or checked, and the gate exposed no runner seam through which its
+  test policy could be proven. Added the explicit
+  `.acthur/contracts.lock.yml` baseline, public
+  `UpdateDeployBaseline`/`CheckDeployBaseline` operations, and the user-facing
+  `acthur contract baseline update` command. Deploy now records a named
+  `contract compatibility` check; an absent baseline passes, while removed
+  contracts and breaking diffs block with the contract, diff field, and
+  change description. Added the narrow `GateInput.GoRunner` process boundary
+  and made every deploy test invocation exactly `go test ./... -race
+  -count=1`, matching `acthur test --ci` and preventing cached/non-race
+  results from satisfying production preflight. Green evidence: focused race
+  tests for contract, deploy, and CLI behavior.
+- 2026-07-14 — canonical-scaffold TDD agent — captured a black-box CLI red
+  proving `acthur new widgets --adapter go:fiber --module
+  example.com/widgets` failed outside a terminal by demanding `--db`, even
+  though omission was the only natural way to select no database. Made
+  adapter and module the complete required non-interactive answer set and
+  treated `--db` as an opt-in. A second red during the cycle showed the
+  resolver still consumed non-interactive EOF as the interactive default
+  “yes”; database prompting is now restricted to interactive sessions.
+  Interactive prompting and its default-yes behavior remain unchanged. The
+  black-box regression builds and invokes the real CLI, loads the generated
+  `acthur.yml`, and proves no database node exists. Focused race tests are
+  green.
+- 2026-07-14 — Coolify-env TDD agent — verified against Coolify's official
+  API reference that application variables are upserted with `PATCH
+  /api/v1/applications/{uuid}/envs` using `key`, `value`, and optional literal
+  flags, and that write plus deploy token permissions are required. Captured
+  reds showing both the missing client operation and the projection gate's
+  blanket rejection. Added a narrow `WorkloadEnv() map[string]string` target
+  context populated only from Compose-referenced keys after the existing env
+  gate passes. The target sorts and upserts those keys before triggering the
+  deployment, logs only the count, keeps literal values out of Compose, and
+  sanitizes upsert failures to key plus HTTP status because an API response
+  may reflect submitted values. Coolify now passes remote projection env
+  validation; Fly, Railway, and Render remain fail-closed. Client, target,
+  projection, and command behavior tests prove exact key/value delivery,
+  ordering before deploy, and absence of values from Compose/logs/errors.
+- 2026-07-14 — Coolify-service API TDD agent — followed the adjacent
+  production blocker exposed by official Coolify v4.1 release notes: the
+  deprecated Docker Compose application endpoint was removed and current
+  clients must use `POST /api/v1/services`. Captured a compile-time red for
+  the missing typed service operation, then migrated the entire lifecycle to
+  `GET/POST/PATCH /api/v1/services`, service environment upserts,
+  `POST /services/{uuid}/start`, and `GET /services/{uuid}` health polling.
+  Creation now carries the officially required project UUID, server UUID,
+  environment name, stack name, and raw Compose; updates remain idempotent by
+  project/name and redeploy through the same service UUID. Added
+  `environments.<name>.server_uuid` to the typed config and target context,
+  with a pointed failure when absent. Removed production legacy application
+  paths and updated client, target, and command black-box tests to accept
+  only current service routes, assert exact create/update/env/start/status
+  ordering, and retain secret-safe errors. Updated the PRD configuration and
+  deployment projection description to match shipped behavior. Live-instance
+  verification remains required because current English service endpoint
+  detail pages were not discoverable through Coolify's official docs index;
+  the official changelog and deprecated endpoint page do explicitly mandate
+  the service migration.
+- 2026-07-14 — main-agent Coolify 4.1.2 route audit + Coolify-service agent
+  — resolved the remaining API ambiguity against an installed current
+  controller: service env `PATCH` updates existing keys only, while `POST`
+  creates missing keys, and service start acknowledges queueing with a
+  message rather than a deployment UUID. The client now lists service envs,
+  chooses POST/PATCH for a true idempotent upsert, sanitizes failures from
+  both phases, and accepts the documented start acknowledgement before
+  polling service health. Tests cover missing-key POST, existing-key PATCH,
+  env-before-start ordering, and the exact acknowledgement shape.
+- 2026-07-14 — remote-topology/secrets TDD agent — captured a black-box CLI
+  red proving that locally validated secret values were followed by artifact
+  writes and provider calls even though no remote target delivered those
+  values to workloads. Added a fail-closed remote projection preflight before
+  writes or target side effects: every remote target rejects required workload
+  environment until it has a real environment-delivery API, naming keys but
+  never values. Fly, Railway, and Render also reject infrastructure nodes and
+  `depends_on` topology because their current targets deploy service images
+  only; Coolify remains topology-capable through the complete Compose
+  projection. Service-only, environment-free provider projections remain
+  supported. CLI behavior tests prove no artifact/Docker/provider side effects
+  and no literal secret leakage. Focused and full `go test -race -count=1
+  ./...`, full `go vet ./...`, and `git diff --check` are green in the
+  accumulated workspace.
+- 2026-07-14 — release supply-chain TDD agent — added native black-box
+  installer CI on Linux, macOS Intel, and Windows PowerShell; the PowerShell
+  suite covers checksum mismatch, missing manifest entry, and a valid archive
+  whose installed binary reports the requested version. GoReleaser now emits
+  SPDX JSON SBOMs, keylessly signs the checksum manifest with a Cosign v3
+  Sigstore bundle, and no longer attempts nonexistent Homebrew/Scoop
+  repositories. The tag job has least-privilege release/OIDC/attestation
+  permissions and GitHub-attests archives, checksums, and SBOMs. Non-tag CI
+  validates the config and builds a full unsigned snapshot. Local green
+  evidence: Unix installer black-box suite, GoReleaser 2.17 config check and
+  five-platform archive/SBOM/checksum snapshot, actionlint 1.7.12, and diff
+  check. Native Windows execution remains to be proven by the pushed CI job.
+- 2026-07-14 — main agent — live-witnessed the canonical generated project.
+  Noninteractive scaffold, graph and contract validation, deploy-baseline
+  locking, docs/AI-context generation, and `acthur test --ci` passed. Native
+  development served health directly and through the graph proxy, rebuilt
+  after a Go source edit, and served health again. The initial shutdown
+  witnesses exposed reload descendants; after the fourth behavior-first fix,
+  the exact Air v1.63.4 rerun completed Ctrl+C cleanup with no generated-project
+  processes and no listeners remaining on service port 18081 or proxy port
+  4000.
+- 2026-07-14 — main agent — live-witnessed the integrated local production
+  Compose path twice (initial deploy and redeploy). Every named gate passed,
+  including contract compatibility and exact race-enabled tests; PostgreSQL
+  reached healthy state and answered `SELECT 1`; workload environment and
+  secret variables were present without printing their values; the secret was
+  absent from Compose logs; `/health` passed after both deploys; and teardown
+  removed the API, database, network, and volume. An initial attempt on the
+  generated port 8080 failed closed because that host port was already owned;
+  the isolated witness used port 18080.
+- 2026-07-14 — reload-descendant shutdown TDD agent — the canonical live
+  witness found a hot-reloaded service child still listening after Ctrl+C
+  reported all services stopped. The first regression only covered a survivor
+  in the supervisor's process group and its fix was disproved by the exact Air
+  v1.63.4 witness: Air's rebuilt shell/application escaped that group. Reopened
+  TDD with a deterministic Linux regression whose reload child creates its own
+  session. The resulting stop-time ancestry snapshot also failed the second
+  exact witness: Air had already exited and its shell/application had PPID 1
+  before shutdown began, so there was no ancestry left to discover. The third
+  red regression makes that ordering load-bearing by exiting the supervisor
+  before calling `Stop`. Each managed process now receives a random opaque
+  ownership marker inherited through its workload tree; Linux shutdown finds
+  exact marker matches through `/proc/*/environ`, captures PID plus kernel
+  start time to prevent PID-reuse mistakes, gracefully signals them, and
+  force-reaps survivors regardless of PPID, process group, or session changes.
+  Ancestry/group cleanup remains the cross-platform fallback. The pre-orphaned
+  regression passes under `-race -count=20`. The third exact witness then
+  exposed another load-bearing transition: the orphan preceded an Acthur
+  supervisor auto-restart, and final shutdown's current-generation owner sweep
+  still missed it. A full Manager/Supervisor regression now creates an escaped
+  generation-one orphan with a differing process-owner value, waits for
+  automatic generation-two restart, then invokes `StopAll`; it was red before
+  the fourth fix. Managers now inject a separate opaque manager-lifetime marker
+  inherited by every supervised generation, and `StopAll` performs a final
+  marker-based sweep after all per-process stops. The auto-restart regression
+  passes under `-race -count=10`; escaped-session and existing lifecycle tests,
+  Windows cross-compilation, full `go test -race -count=1 ./...`, full vet, and
+  diff checks are green. The exact fourth Air witness passed: source rebuild,
+  direct and proxy health, graceful Ctrl+C, zero remaining witness processes,
+  and zero listeners on ports 18081/4000.
+- 2026-07-14 — main agent — pushed the integrated candidate to `dev` and
+  closed the Windows-native reds exposed by the new CI gates. The PowerShell
+  harness now observes expected nonzero child exits without terminating its
+  parent; installer failures throw (so dot-sourced/`iex` use cannot print an
+  error and return success); multi-line version output is normalized before
+  matching; and the scaffold black-box test executes the native `.exe` path.
+  GitHub Actions run 29341764155 is fully green: lint/vet, race-enabled tests
+  on Go 1.22 and 1.23 across Ubuntu, macOS Intel, and Windows, installer
+  integrity tests on all three operating systems, snapshot binaries, and the
+  GoReleaser/Syft release dry run.
 
 ## Current Decisions
 
@@ -106,15 +259,17 @@ In-flight
   interfaces, and release binaries/installers.
 - Branch promotion is `dev` → `staging` → `main`; CI validates pushes and pull
   requests at every tier, and `main` remains the live production branch.
+- The first release distributes through GitHub Releases and the checksum-
+  verifying installers. Homebrew and Scoop are deferred until their dedicated
+  repositories and credentials exist.
+- Release trust is keyless: Cosign signs the checksum manifest with GitHub OIDC
+  and a Sigstore bundle, GoReleaser emits per-archive SPDX SBOMs, and GitHub
+  attests the archives, checksum manifest, and SBOMs. No long-lived signing key
+  is required.
 
 ## Open Questions
 
 - Which remote provider will be the first live production witness?
-- What signing identity/trust policy will be used for release artifacts?
-- Will Homebrew/Scoop distribution ship in the first release or move to a
-  later explicitly scoped milestone?
-- Which internally conflicting PRD scope and binary-size claims are retained
-  for the first release?
 
 ## Files/Modules Expected
 
@@ -126,18 +281,18 @@ In-flight
 
 ## Acceptance Criteria
 
-- [ ] `go test ./... -race -count=1` is green on every supported OS/Go pair.
-- [ ] Lint, vet, snapshot, and release-dry-run gates are green.
-- [ ] A canonical generated project completes scaffold → validate → dev →
+- [x] `go test ./... -race -count=1` is green on every supported OS/Go pair.
+- [x] Lint, vet, snapshot, and release-dry-run gates are green.
+- [x] A canonical generated project completes scaffold → validate → dev →
       hot reload/restart → contracts/generate/test → deploy.
-- [ ] Deployment refuses every incomplete graph projection.
-- [ ] The full pre-deploy gate required by the retained PRD runs and aggregates
+- [x] Deployment refuses every incomplete graph projection.
+- [x] The full pre-deploy gate required by the retained PRD runs and aggregates
       pointed failures.
 - [ ] At least one remote target is live-witnessed end-to-end, including
       infrastructure, dependency environment, health, redeploy, and cleanup.
 - [ ] Release artifacts verify integrity and report the correct version on
       supported platforms.
-- [ ] PRD and roadmap clearly distinguish shipped, experimental, and future
+- [x] PRD and roadmap clearly distinguish shipped, experimental, and future
       behavior with no contradictory first-release claims.
 - [ ] All campaign tasks are complete/closed; PR #66 is reviewed and green.
 - [ ] `main` is fast-forwarded and pushed, and the first production release is

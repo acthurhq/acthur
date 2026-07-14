@@ -21,14 +21,14 @@ const configFileName = "acthur.yml"
 
 // Config is the fully-parsed representation of acthur.yml.
 type Config struct {
-	Project      string                 `yaml:"project"`
-	Version      string                 `yaml:"version"`
-	Identifiers  IdentifierConfig       `yaml:"identifiers"`
-	Dev          DevConfig              `yaml:"dev"`
-	Environments map[string]EnvConfig   `yaml:"environments"`
-	Graph        GraphConfig            `yaml:"graph"`
-	Plugins      []PluginEntry          `yaml:"plugins"`
-	AI           AIConfig               `yaml:"ai"`
+	Project      string               `yaml:"project"`
+	Version      string               `yaml:"version"`
+	Identifiers  IdentifierConfig     `yaml:"identifiers"`
+	Dev          DevConfig            `yaml:"dev"`
+	Environments map[string]EnvConfig `yaml:"environments"`
+	Graph        GraphConfig          `yaml:"graph"`
+	Plugins      []PluginEntry        `yaml:"plugins"`
+	AI           AIConfig             `yaml:"ai"`
 
 	// ModulePrefix is the Go module path prefix for scaffolded services.
 	// The kernel resolves ModulePath = ModulePrefix + "/" + nodeID.
@@ -36,7 +36,7 @@ type Config struct {
 	ModulePrefix string `yaml:"module_prefix"`
 
 	// Runtime fields — not in YAML, populated by loader
-	RootDir   string `yaml:"-"`
+	RootDir    string `yaml:"-"`
 	ConfigPath string `yaml:"-"`
 }
 
@@ -128,9 +128,10 @@ const (
 )
 
 type EnvConfig struct {
-	Context ExecutionContext `yaml:"context"`
-	Target  DeployTarget    `yaml:"target"`
-	Host    string          `yaml:"host"`
+	Context    ExecutionContext `yaml:"context"`
+	Target     DeployTarget     `yaml:"target"`
+	Host       string           `yaml:"host"`
+	ServerUUID string           `yaml:"server_uuid"`
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +177,7 @@ type NodeConfig struct {
 	// Source is the location of the node's codebase. Defaults to "./" (local).
 	// Accepts local paths (./…, ../…, /abs), https:// URLs, git@ SSH URLs,
 	// or bare host/org/repo references such as github.com/org/repo.
-	Source    string     `yaml:"source"`
+	Source string `yaml:"source"`
 
 	// Raw extra config — adapter-specific keys
 	Extra map[string]any `yaml:",inline"`
@@ -192,9 +193,9 @@ func (n *NodeConfig) IsHotReloadEnabled() bool {
 // PoolConfig holds database connection pool settings.
 // "auto" values are resolved at runtime by the pool tuner.
 type PoolConfig struct {
-	MaxConns              string `yaml:"max_conns"`               // int or "auto"
-	MinConns              string `yaml:"min_conns"`               // int or "auto"
-	MaxConnLifetime       string `yaml:"max_conn_lifetime"`       // duration string
+	MaxConns              string `yaml:"max_conns"`         // int or "auto"
+	MinConns              string `yaml:"min_conns"`         // int or "auto"
+	MaxConnLifetime       string `yaml:"max_conn_lifetime"` // duration string
 	MaxConnLifetimeJitter string `yaml:"max_conn_lifetime_jitter"`
 	MaxConnIdleTime       string `yaml:"max_conn_idle_time"`
 	HealthCheckPeriod     string `yaml:"health_check_period"`
@@ -258,13 +259,13 @@ const (
 )
 
 type EdgeConfig struct {
-	From        string        `yaml:"from"`
-	To          string        `yaml:"to"`
-	Type        EdgeType      `yaml:"type"`
-	Contracts   []string      `yaml:"contracts"`
-	Transport   EdgeTransport `yaml:"transport"`
-	Events      []string      `yaml:"events"`
-	PathPrefix  string        `yaml:"path_prefix"`
+	From       string        `yaml:"from"`
+	To         string        `yaml:"to"`
+	Type       EdgeType      `yaml:"type"`
+	Contracts  []string      `yaml:"contracts"`
+	Transport  EdgeTransport `yaml:"transport"`
+	Events     []string      `yaml:"events"`
+	PathPrefix string        `yaml:"path_prefix"`
 }
 
 // ---------------------------------------------------------------------------
