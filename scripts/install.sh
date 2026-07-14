@@ -68,19 +68,40 @@ get_latest_version() {
 download_binary() {
   ARCHIVE_NAME="acthur_${VERSION#v}_${PLATFORM}.tar.gz"
   DOWNLOAD_URL="https://github.com/${ACTHUR_REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
+  CHECKSUMS_NAME="acthur_${VERSION#v}_checksums.txt"
+  CHECKSUMS_URL="https://github.com/${ACTHUR_REPO}/releases/download/${VERSION}/${CHECKSUMS_NAME}"
 
   info "Downloading Acthur ${VERSION} for ${PLATFORM}..."
 
   TMP_DIR="$(mktemp -d)"
   ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE_NAME}"
+  CHECKSUMS_PATH="${TMP_DIR}/${CHECKSUMS_NAME}"
 
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --progress-bar "${DOWNLOAD_URL}" -o "${ARCHIVE_PATH}" || \
       error "Download failed from ${DOWNLOAD_URL}"
+    curl -fsSL "${CHECKSUMS_URL}" -o "${CHECKSUMS_PATH}" || \
+      error "Checksum manifest download failed from ${CHECKSUMS_URL}"
   else
     wget -q --show-progress "${DOWNLOAD_URL}" -O "${ARCHIVE_PATH}" || \
       error "Download failed from ${DOWNLOAD_URL}"
+    wget -q "${CHECKSUMS_URL}" -O "${CHECKSUMS_PATH}" || \
+      error "Checksum manifest download failed from ${CHECKSUMS_URL}"
   fi
+
+  EXPECTED_SHA256="$(awk -v archive="${ARCHIVE_NAME}" '$2 == archive { print $1; exit }' "${CHECKSUMS_PATH}")"
+  [ -n "${EXPECTED_SHA256}" ] || error "Checksum manifest has no entry for ${ARCHIVE_NAME}"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_SHA256="$(sha256sum "${ARCHIVE_PATH}" | awk '{ print $1 }')"
+  elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_SHA256="$(shasum -a 256 "${ARCHIVE_PATH}" | awk '{ print $1 }')"
+  else
+    error "sha256sum or shasum is required to verify the Acthur release"
+  fi
+
+  [ "${ACTUAL_SHA256}" = "${EXPECTED_SHA256}" ] || \
+    error "Checksum verification failed for ${ARCHIVE_NAME}"
 
   # Extract
   tar -xzf "${ARCHIVE_PATH}" -C "${TMP_DIR}"
@@ -138,11 +159,14 @@ add_to_path() {
 
 # ── Verify installation ───────────────────────────────────────────────────────
 verify() {
-  if "${ACTHUR_BIN}" version >/dev/null 2>&1; then
-    success "Acthur ${VERSION} installed successfully"
-  else
+  VERSION_OUTPUT="$("${ACTHUR_BIN}" version 2>&1)" || \
     error "Installation verification failed. Binary at ${ACTHUR_BIN} is not executable."
-  fi
+
+  EXPECTED_VERSION="${VERSION#v}"
+  printf '%s\n' "${VERSION_OUTPUT}" | grep -F "Version:" | grep -F "${EXPECTED_VERSION}" >/dev/null 2>&1 || \
+    error "Installation verification failed. Binary does not report requested version ${VERSION}."
+
+  success "Acthur ${VERSION} installed successfully"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/acthurhq/acthur/internal/secrets"
 )
 
 // writeBuildableAPINode drops a minimal compiling Go module at dir/api so
@@ -23,6 +25,18 @@ func writeBuildableAPINode(t *testing.T, dir string) {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	// Deploy success fixtures must be semantically connected production
+	// graphs. The shared project fixture intentionally contains only a node.
+	configPath := filepath.Join(dir, "acthur.yml")
+	yml, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yml = append(yml, []byte("  edges:\n    - from: api\n      to: proxy\n      type: proxied_through\n")...)
+	if err := os.WriteFile(configPath, yml, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -108,6 +122,110 @@ func TestRunDeploy_GateFailure_BlocksDeploy(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("gate failure must block the target, got %d docker calls", calls)
+	}
+}
+
+// TestRunDeploy_MigrationFilesWireLiveStatusCheck proves command assembly
+// does not silently skip migration state. A project with an up migration but
+// no delivered DATABASE_URL cannot establish live production status and is
+// blocked before artifacts or target execution.
+func TestRunDeploy_MigrationFilesWireLiveStatusCheck(t *testing.T) {
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+	writeBuildableAPINode(t, dir)
+	migrationsDir := filepath.Join(dir, "migrations")
+	if err := os.MkdirAll(migrationsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(migrationsDir, "0001_init.up.sql"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Unsetenv("DATABASE_URL")
+
+	var calls int
+	run := func(args ...string) (string, error) { calls++; return "", nil }
+	_, err := runDeploy(dir, "production", "", false, run)
+	if err == nil || !strings.Contains(err.Error(), "migrations:") || !strings.Contains(err.Error(), "DATABASE_URL is not set") {
+		t.Fatalf("expected live migration status preflight to block pointedly, got: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("migration gate failure must block target execution, got %d calls", calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "deploy")); !os.IsNotExist(statErr) {
+		t.Fatalf("migration gate failure must block artifact writes, stat error: %v", statErr)
+	}
+}
+
+// TestRunDeploy_SecurityPluginWiresProductionValidation proves an unsafe
+// configured security plugin blocks before artifacts or the target are
+// touched; command assembly must not omit the builtin policy callback.
+func TestRunDeploy_SecurityPluginWiresProductionValidation(t *testing.T) {
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+	writeBuildableAPINode(t, dir)
+	configPath := filepath.Join(dir, "acthur.yml")
+	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("plugins:\n  - name: security\n    config:\n      allowed_origins: ['*']\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"APP_ENV", "APP_PORT", "APP_SECRET", "DATABASE_URL", "REDIS_URL"} {
+		t.Setenv(v, "test-value")
+	}
+
+	var calls int
+	run := func(args ...string) (string, error) {
+		calls++
+		if strings.Contains(strings.Join(args, " "), "ps") {
+			return `{"Service":"api","State":"running","Health":"healthy"}`, nil
+		}
+		return "", nil
+	}
+	_, err = runDeploy(dir, "production", "", false, run)
+	if err == nil || !strings.Contains(err.Error(), "security:") || !strings.Contains(err.Error(), "wildcard CORS origin") {
+		t.Fatalf("expected production security gate to block pointedly, got: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("security gate failure must block target execution, got %d calls", calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "deploy")); !os.IsNotExist(statErr) {
+		t.Fatalf("security gate failure must block artifact writes, stat error: %v", statErr)
+	}
+}
+
+// TestRunDeploy_LocalSecretDoesNotSatisfyProductionEnv proves that the
+// preflight checks the environment which will actually be delivered to the
+// target. The project-local development store is not target configuration,
+// so merely storing a required value there must not allow production deploy.
+func TestRunDeploy_LocalSecretDoesNotSatisfyProductionEnv(t *testing.T) {
+	dir := t.TempDir()
+	writeTestProject(t, dir)
+	writeBuildableAPINode(t, dir)
+	for _, v := range []string{"APP_ENV", "APP_PORT", "DATABASE_URL", "REDIS_URL"} {
+		t.Setenv(v, "test-value")
+	}
+	_ = os.Unsetenv("APP_SECRET")
+	if err := secrets.New(dir).Set("APP_SECRET", "local-only-value"); err != nil {
+		t.Fatalf("seed local secret: %v", err)
+	}
+
+	var calls int
+	run := func(args ...string) (string, error) { calls++; return "", nil }
+	_, err := runDeploy(dir, "production", "", false, run)
+	if err == nil || !strings.Contains(err.Error(), "APP_SECRET") {
+		t.Fatalf("expected missing delivered APP_SECRET to block deploy, got: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("gate failure must block the target, got %d docker calls", calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "deploy")); !os.IsNotExist(statErr) {
+		t.Fatalf("gate failure must block artifact writes, stat error: %v", statErr)
 	}
 }
 

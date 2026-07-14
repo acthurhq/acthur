@@ -98,6 +98,46 @@ func Status(root, databaseURL string) (version uint, dirty bool, err error) {
 // ---------------------------------------------------------------------------
 
 var migrationFileRe = regexp.MustCompile(`^(\d{4,})_`)
+var upMigrationFileRe = regexp.MustCompile(`^(\d{4,})_.+\.up\.sql$`)
+
+// LatestVersion returns the highest version represented by an up migration
+// under root/migrations. present is false when the directory is absent or
+// contains no up migrations, allowing callers to avoid touching a database
+// for projects that do not use migrations.
+func LatestVersion(root string) (version uint, present bool, err error) {
+	entries, err := os.ReadDir(migrationsDir(root))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("reading migrations directory: %w", err)
+	}
+
+	var latest uint64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		match := upMigrationFileRe.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		candidate, parseErr := strconv.ParseUint(match[1], 10, 64)
+		if parseErr != nil {
+			return 0, false, fmt.Errorf("reading migration version from %q: %w", entry.Name(), parseErr)
+		}
+		if candidate > uint64(^uint(0)) {
+			return 0, false, fmt.Errorf("migration version in %q exceeds platform uint range", entry.Name())
+		}
+		if candidate > latest {
+			latest = candidate
+		}
+	}
+	if latest == 0 {
+		return 0, false, nil
+	}
+	return uint(latest), true, nil
+}
 
 // CreateNext writes the next-numbered empty up/down migration pair named
 // name into the project's migrations/ directory, creating the directory if

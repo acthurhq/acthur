@@ -18,7 +18,8 @@ import (
 	"github.com/acthurhq/acthur/internal/graph"
 	"github.com/acthurhq/acthur/internal/output"
 	"github.com/acthurhq/acthur/internal/plugin"
-	"github.com/acthurhq/acthur/internal/secrets"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/migrations"
+	builtinsecurity "github.com/acthurhq/acthur/internal/plugin/builtin/security"
 )
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,14 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 
 	serviceNodes := buildableServiceNodes(root, g)
 	requiredEnv := requiredEnvVars(files, target)
+	var securityCheck func() error
+	for _, entry := range cfg.Plugins {
+		if entry.Name == "security" {
+			pluginConfig := entry.Config
+			securityCheck = func() error { return builtinsecurity.ValidateProduction(pluginConfig, g) }
+			break
+		}
+	}
 
 	plan := []string{
 		fmt.Sprintf("environment: %s", env),
@@ -82,22 +91,46 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 		return plan, nil
 	}
 
-	// Gate before anything ships. A required var not exported into this shell
-	// falls back to the project's local secret store (acthur secrets set) —
-	// convenient for local `acthur deploy` dev-loop testing; CI/production
-	// deploy environments are expected to export real vars, which are always
-	// checked first and win.
-	secretStore := secrets.New(root)
+	// Gate before anything ships. Required values must be present in the
+	// deploy process environment, which is the configuration targets actually
+	// receive. The project-local development secret store is not delivered to
+	// production targets and therefore cannot satisfy this check.
 	report, err := deploy.RunGate(deploy.GateInput{
-		Root:         root,
-		ServiceNodes: serviceNodes,
-		RequiredEnv:  requiredEnv,
-		ResolveSecret: func(key string) (string, bool) {
-			v, err := secretStore.Get(key)
+		Root:            root,
+		ServiceNodes:    serviceNodes,
+		RequiredEnv:     requiredEnv,
+		Graph:           g,
+		AdapterResolver: registryResolver{},
+		SecurityCheck:   securityCheck,
+		MigrationStatus: func() (deploy.MigrationState, error) {
+			latest, filesPresent, err := migrations.LatestVersion(root)
 			if err != nil {
-				return "", false
+				return deploy.MigrationState{}, err
 			}
-			return v, true
+			configured := filesPresent
+			for _, entry := range cfg.Plugins {
+				if entry.Name == "migrations" {
+					configured = true
+					break
+				}
+			}
+			if !configured {
+				return deploy.MigrationState{}, nil
+			}
+			databaseURL := os.Getenv("DATABASE_URL")
+			if databaseURL == "" {
+				return deploy.MigrationState{}, fmt.Errorf("DATABASE_URL is not set — export the production database URL before deploying")
+			}
+			applied, dirty, err := migrations.Status(root, databaseURL)
+			if err != nil {
+				return deploy.MigrationState{}, err
+			}
+			return deploy.MigrationState{
+				Configured: true,
+				Applied:    applied,
+				Latest:     latest,
+				Dirty:      dirty,
+			}, nil
 		},
 	})
 	if err != nil {

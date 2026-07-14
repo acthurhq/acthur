@@ -17,12 +17,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// loadVetangle builds the sealed vetangle fixture graph. cache:redis,
-// storage:minio, queue:nats and ui:astro/ui:next are referenced in the
-// fixture but have no adapter package in this repo yet — graph.Build does
-// not resolve adapters (only graph.Validate does), so the graph still
-// builds; Project() must skip nodes whose adapter can't be resolved rather
-// than error.
+// loadVetangle builds the deploy-supported portion of the vetangle fixture.
+// Tests that exercise rejection of an incomplete production projection build
+// their own graph explicitly; successful projection tests must start from a
+// graph whose every declared node has production capability.
 var vetangleRoot = filepath.Join("..", "..", "..", "testdata", "vetangle")
 
 func loadVetangle(t *testing.T) (*config.Config, *graph.Graph) {
@@ -31,6 +29,19 @@ func loadVetangle(t *testing.T) (*config.Config, *graph.Graph) {
 	if err != nil {
 		t.Fatalf("config.LoadFile: %v", err)
 	}
+	omitted := map[string]bool{
+		"web": true, "backoffice": true, "cache": true, "storage": true, "queue": true,
+	}
+	for nodeID := range omitted {
+		delete(cfg.Graph.Nodes, nodeID)
+	}
+	edges := cfg.Graph.Edges[:0]
+	for _, edge := range cfg.Graph.Edges {
+		if !omitted[edge.From] && !omitted[edge.To] {
+			edges = append(edges, edge)
+		}
+	}
+	cfg.Graph.Edges = edges
 	g, err := graph.Build(cfg)
 	if err != nil {
 		t.Fatalf("graph.Build: %v", err)
@@ -94,6 +105,58 @@ func parseCompose(t *testing.T, content []byte) composeFile {
 		t.Fatalf("compose file did not parse as YAML: %v\n%s", err, content)
 	}
 	return cf
+}
+
+func TestProject_RefusesToEmitPartialGraphWhenNodeCannotBeProjected(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType config.NodeType
+		adapter  string
+	}{
+		{
+			name:     "adapter cannot be resolved",
+			nodeType: config.NodeTypeInfra,
+			adapter:  "cache:not-installed",
+		},
+		{
+			name:     "adapter lacks the required production capability",
+			nodeType: config.NodeTypeInfra,
+			adapter:  "go:fiber",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Graph: config.GraphConfig{Nodes: map[string]config.NodeConfig{
+				"api": {
+					Type:    config.NodeTypeService,
+					Adapter: "go:fiber",
+					Port:    8080,
+				},
+				"backing-store": {
+					Type:    tt.nodeType,
+					Adapter: tt.adapter,
+				},
+			}}}
+			g, err := graph.Build(cfg)
+			if err != nil {
+				t.Fatalf("graph.Build: %v", err)
+			}
+
+			files, err := artifacts.Project(cfg, g, t.TempDir())
+			if err == nil {
+				t.Fatal("Project succeeded; want a pointed error instead of a partial production graph")
+			}
+			for _, want := range []string{"backing-store", tt.adapter} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err, want)
+				}
+			}
+			if len(files) != 0 {
+				t.Errorf("Project returned partial artifacts %v; want none", paths(files))
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -168,23 +231,6 @@ func TestProject_NoDockerfileForInfraNodes(t *testing.T) {
 	}
 }
 
-func TestProject_NoDockerfileForUnresolvableAdapters(t *testing.T) {
-	cfg, g := loadVetangle(t)
-	files, err := artifacts.Project(cfg, g, vetangleRoot)
-	if err != nil {
-		t.Fatalf("Project: %v", err)
-	}
-	// web (ui:astro) and backoffice (ui:next) have no adapter package
-	// registered in this repo yet.
-	for _, path := range []string{"deploy/Dockerfile.web", "deploy/Dockerfile.backoffice"} {
-		for _, f := range files {
-			if f.Path == path {
-				t.Errorf("did not expect %q — its adapter isn't implemented", path)
-			}
-		}
-	}
-}
-
 func TestProject_DockerfileContent_MatchesDockerizableCapability(t *testing.T) {
 	cfg, g := loadVetangle(t)
 	files, err := artifacts.Project(cfg, g, vetangleRoot)
@@ -254,7 +300,7 @@ func TestProject_Compose_ContainsExpectedServices(t *testing.T) {
 	}
 	for _, notWant := range []string{"web", "backoffice", "cache", "storage", "queue", "proxy"} {
 		if _, ok := cf.Services[notWant]; ok {
-			t.Errorf("did not expect service %q (unresolvable adapter or kernel-materialized node)", notWant)
+			t.Errorf("did not expect service %q (excluded from this supported fixture or kernel-materialized)", notWant)
 		}
 	}
 }
@@ -368,11 +414,6 @@ func TestProject_Compose_DependsOnServiceHealthyFromGraphEdges(t *testing.T) {
 		t.Error("expected worker to depend_on db (graph has a worker->db depends_on edge)")
 	}
 
-	// api also depends_on cache in the fixture, but cache:redis has no
-	// adapter implemented yet — must not reference an undefined service.
-	if _, ok := api.DependsOn["cache"]; ok {
-		t.Error("must not emit depends_on for a service that was skipped (undefined in compose)")
-	}
 }
 
 func TestProject_Compose_PortsPublishedOnlyForProxiedNodes(t *testing.T) {

@@ -75,9 +75,8 @@ type composeFile struct {
 // Project generates the production deploy artifacts for the sealed graph g:
 // deploy/Dockerfile.<nodeID> for every service node whose adapter satisfies
 // adapter.Dockerizable, and one deploy/docker-compose.prod.yml wiring every
-// projectable node together. A node whose adapter isn't registered (a
-// capability still on the roadmap, e.g. cache:redis) is skipped rather than
-// erroring — Slice 1 projects what the adapter registry can actually back.
+// projectable node together. Every declared service and infra node must be
+// projectable: silently skipping one would emit a partial production graph.
 //
 // Every returned file has Overwrite=true: deploy artifacts are regenerated
 // fresh on every `acthur deploy`, and generated.lock (internal/generate)
@@ -109,7 +108,7 @@ func Project(cfg *config.Config, g *graph.Graph, root string) ([]plugin.Generate
 
 		a, err := adapter.Resolve(n.Adapter)
 		if err != nil {
-			continue // adapter not implemented yet — nothing to project
+			return nil, fmt.Errorf("projecting node %q with adapter %q: adapter cannot be resolved: %w", n.ID, n.Adapter, err)
 		}
 
 		switch n.Type {
@@ -119,7 +118,7 @@ func Project(cfg *config.Config, g *graph.Graph, root string) ([]plugin.Generate
 				return nil, fmt.Errorf("node %q: %w", n.ID, err)
 			}
 			if !ok {
-				continue // adapter isn't Dockerizable
+				return nil, fmt.Errorf("projecting node %q with adapter %q: service adapter lacks required Dockerizable production capability", n.ID, n.Adapter)
 			}
 			services[n.ID] = svc
 			files = append(files, plugin.GeneratedFile{
@@ -131,7 +130,7 @@ func Project(cfg *config.Config, g *graph.Graph, root string) ([]plugin.Generate
 		case config.NodeTypeInfra:
 			svc, ok := projectInfra(a, n)
 			if !ok {
-				continue // adapter isn't Containerized
+				return nil, fmt.Errorf("projecting node %q with adapter %q: infra adapter lacks required Containerized production capability", n.ID, n.Adapter)
 			}
 			services[n.ID] = svc
 			for _, v := range svc.Volumes {

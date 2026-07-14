@@ -11,30 +11,39 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-)
 
-// SecretResolver looks up a fallback value for a required env var that is not
-// already exported into the deploying shell's environment. Wired from
-// internal/secrets.Store.Get by the `acthur deploy` command so a secret set
-// via `acthur secrets set` satisfies the gate without also needing an
-// `export` — but a real production deploy environment (CI secrets, the host
-// shell) is still checked first and always wins. Returns ok=false if the key
-// resolves to nothing (unset, or no store configured).
-type SecretResolver func(key string) (value string, ok bool)
+	"github.com/acthurhq/acthur/internal/contract"
+	"github.com/acthurhq/acthur/internal/generate"
+	"github.com/acthurhq/acthur/internal/graph"
+)
 
 // GateInput is everything the pre-deploy gate needs. The caller (the deploy
 // command) resolves it from config + graph so the gate stays testable
 // without either.
 type GateInput struct {
-	Root         string   // project root
-	ServiceNodes []string // node IDs with buildable Go modules under Root/<node>
-	RequiredEnv  []string // env vars that must be set for the target env
+	Root            string   // project root
+	ServiceNodes    []string // node IDs with buildable Go modules under Root/<node>
+	RequiredEnv     []string // env vars that must be set for the target env
+	Graph           *graph.Graph
+	AdapterResolver graph.Resolver
+	// MigrationStatus is nil when the project has no migration state. The
+	// command layer supplies it when migrations are configured or present,
+	// keeping this package independent of the migrations plugin and database.
+	MigrationStatus func() (MigrationState, error)
+	// SecurityCheck is nil when no production security policy is active. The
+	// command layer supplies it for configured security plugins so deploy does
+	// not depend on plugin implementations.
+	SecurityCheck func() error
+}
 
-	// ResolveSecret is an optional fallback consulted for a RequiredEnv var
-	// that isn't set in the process environment. Nil disables the fallback
-	// (required vars must be exported, matching the gate's original
-	// behavior).
-	ResolveSecret SecretResolver
+// MigrationState is the narrow production fact needed by the gate. Applied
+// and Dirty come from the live database; Latest comes from the project's up
+// migration files.
+type MigrationState struct {
+	Configured bool
+	Applied    uint
+	Latest     uint
+	Dirty      bool
 }
 
 // CheckResult is one executed gate check.
@@ -65,18 +74,70 @@ func RunGate(in GateInput) (*GateReport, error) {
 		report.Checks = append(report.Checks, CheckResult{Name: name, OK: true})
 	}
 
+	record("graph", validateGraph(in.Graph, in.AdapterResolver))
 	for _, node := range in.ServiceNodes {
 		record("build "+node, goRun(in.Root, node, "build", "./..."))
 	}
 	for _, node := range in.ServiceNodes {
 		record("test "+node, goRun(in.Root, node, "test", "./..."))
 	}
-	record("env vars", checkEnv(in.RequiredEnv, in.ResolveSecret))
+	_, contractsErr := contract.LoadDir(in.Root)
+	record("contracts", contractsErr)
+	record("generated artifacts", generate.VerifyGeneratedArtifacts(in.Root))
+	record("migrations", checkMigrations(in.MigrationStatus))
+	record("security", checkSecurity(in.SecurityCheck))
+	record("env vars", checkEnv(in.RequiredEnv))
 
 	if len(failures) > 0 {
 		return report, fmt.Errorf("pre-deploy gate failed:\n  - %s", strings.Join(failures, "\n  - "))
 	}
 	return report, nil
+}
+
+func checkSecurity(check func() error) error {
+	if check == nil {
+		return nil
+	}
+	return check()
+}
+
+func checkMigrations(status func() (MigrationState, error)) error {
+	if status == nil {
+		return nil
+	}
+	state, err := status()
+	if err != nil {
+		return fmt.Errorf("checking database migration status: %w", err)
+	}
+	if !state.Configured {
+		return nil
+	}
+	if state.Dirty {
+		return fmt.Errorf("database is dirty at migration %d — repair the migration state before deploying", state.Applied)
+	}
+	if state.Applied < state.Latest {
+		return fmt.Errorf("database migration version %d is behind latest migration %d — run 'acthur db migrate' before deploying", state.Applied, state.Latest)
+	}
+	return nil
+}
+
+func validateGraph(g *graph.Graph, resolver graph.Resolver) error {
+	if g == nil {
+		return fmt.Errorf("production graph is required")
+	}
+	if resolver == nil {
+		return fmt.Errorf("production adapter resolver is required")
+	}
+
+	validationErrors := g.Validate(resolver)
+	if len(validationErrors) == 0 {
+		return nil
+	}
+	details := make([]string, 0, len(validationErrors))
+	for _, validationErr := range validationErrors {
+		details = append(details, fmt.Sprintf("%s: %s", validationErr.Rule, validationErr.Message))
+	}
+	return fmt.Errorf("semantic validation failed: %s", strings.Join(details, "; "))
 }
 
 func goRun(root, node string, args ...string) error {
@@ -118,21 +179,16 @@ func GoStream(root, node string, out io.Writer, env []string, args ...string) er
 	return nil
 }
 
-func checkEnv(required []string, resolveSecret SecretResolver) error {
+func checkEnv(required []string) error {
 	var missing []string
 	for _, v := range required {
 		if os.Getenv(v) != "" {
 			continue
 		}
-		if resolveSecret != nil {
-			if val, ok := resolveSecret(v); ok && val != "" {
-				continue
-			}
-		}
 		missing = append(missing, v)
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("required env vars not set: %s — export them, add them to your deploy environment, or run 'acthur secrets set <KEY> <value>' before deploying", strings.Join(missing, ", "))
+		return fmt.Errorf("required env vars not set: %s — export them or add them to your deploy environment before deploying", strings.Join(missing, ", "))
 	}
 	return nil
 }

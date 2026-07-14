@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"net/url"
 	"sort"
 	"text/template"
 
@@ -38,6 +39,73 @@ const (
 	defaultRateLimitMax           = 100
 	defaultRateLimitWindowSeconds = 60
 )
+
+// ValidateProduction checks the security plugin's deploy-time policy against
+// the production graph. Generation remains responsible for emitting
+// middleware; this function rejects configuration that would make that
+// middleware unsafe or unavailable in production.
+func ValidateProduction(pluginConfig map[string]any, g *graph.Graph) error {
+	if g == nil {
+		return fmt.Errorf("production graph is required for security validation")
+	}
+	for _, node := range g.Nodes() {
+		if node.Type == config.NodeTypeService && node.Adapter != "go:fiber" {
+			return fmt.Errorf("service %q uses unsupported adapter %q for security plugin (supported: go:fiber)", node.ID, node.Adapter)
+		}
+	}
+	origins, err := configuredOrigins(pluginConfig)
+	if err != nil {
+		return err
+	}
+	for _, origin := range origins {
+		if origin == "*" {
+			return fmt.Errorf("wildcard CORS origin is not allowed in production")
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("CORS origin %q must be a valid absolute http or https origin without a path, query, credentials, or fragment", origin)
+		}
+	}
+	if raw, supplied := pluginConfig["rate_limit_max"]; supplied {
+		value, ok := raw.(int)
+		if !ok || value <= 0 {
+			return fmt.Errorf("rate_limit_max must be a positive integer")
+		}
+	}
+	if raw, supplied := pluginConfig["rate_limit_window_seconds"]; supplied {
+		value, ok := raw.(int)
+		if !ok || value <= 0 {
+			return fmt.Errorf("rate_limit_window_seconds must be a positive integer")
+		}
+	}
+	return nil
+}
+
+func configuredOrigins(pluginConfig map[string]any) ([]string, error) {
+	if pluginConfig == nil {
+		return nil, nil
+	}
+	raw, supplied := pluginConfig["allowed_origins"]
+	if !supplied {
+		return nil, nil
+	}
+	switch origins := raw.(type) {
+	case []string:
+		return origins, nil
+	case []any:
+		out := make([]string, 0, len(origins))
+		for _, raw := range origins {
+			origin, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("allowed_origins must contain only strings")
+			}
+			out = append(out, origin)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("allowed_origins must be a list of strings")
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Plugin

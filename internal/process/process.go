@@ -132,6 +132,15 @@ func (p *Process) startLocked(ctx context.Context) error {
 		return fmt.Errorf("process %q: failed to start %q: %w", p.NodeID, p.Bin, err)
 	}
 
+	p.setState(StateRunning)
+
+	// Start draining output before Wait. For short-lived commands, Wait may
+	// otherwise observe the exit and close the pipes before these readers get
+	// scheduled, nondeterministically dropping the command's final output.
+	p.outputWG.Add(2)
+	go p.pipeLines(stdout)
+	go p.pipeLines(stderr)
+
 	// exited is closed by a single background goroutine that is the sole caller
 	// of cmd.Wait(). Stop() and Supervisor.loop() both block on this channel
 	// rather than calling cmd.Wait() themselves, eliminating the data race.
@@ -140,13 +149,6 @@ func (p *Process) startLocked(ctx context.Context) error {
 		p.cmd.Wait() //nolint:errcheck // exit status is not used here
 		close(p.exited)
 	}()
-
-	p.setState(StateRunning)
-
-	// Pipe output to log router
-	p.outputWG.Add(2)
-	go p.pipeLines(stdout)
-	go p.pipeLines(stderr)
 
 	return nil
 }

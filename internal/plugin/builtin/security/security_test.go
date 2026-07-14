@@ -12,7 +12,7 @@ import (
 	"github.com/acthurhq/acthur/internal/config"
 	"github.com/acthurhq/acthur/internal/graph"
 	"github.com/acthurhq/acthur/internal/plugin"
-	_ "github.com/acthurhq/acthur/internal/plugin/builtin/security"
+	"github.com/acthurhq/acthur/internal/plugin/builtin/security"
 	"github.com/acthurhq/acthur/internal/scaffold"
 )
 
@@ -120,6 +120,93 @@ func TestGenerate_FallsBackToConfigAllowedOrigins(t *testing.T) {
 	src := string(files[0].Content)
 	if !strings.Contains(src, `"https://app.example.com"`) {
 		t.Errorf("expected config-provided origin in allowlist:\n%s", src)
+	}
+}
+
+func TestValidateProduction_RejectsWildcardCORSOrigin(t *testing.T) {
+	g, err := graph.Build(minimalConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(map[string]any{
+		"allowed_origins": []any{"*"},
+	}, g)
+	if err == nil || !strings.Contains(err.Error(), "wildcard CORS origin") {
+		t.Fatalf("expected wildcard CORS origin to be rejected, got: %v", err)
+	}
+}
+
+func TestValidateProduction_RejectsInvalidCORSOrigin(t *testing.T) {
+	g, err := graph.Build(minimalConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(map[string]any{
+		"allowed_origins": []any{"app.example.com/path"},
+	}, g)
+	if err == nil || !strings.Contains(err.Error(), "valid absolute http or https origin") {
+		t.Fatalf("expected invalid CORS origin to be rejected, got: %v", err)
+	}
+}
+
+func TestValidateProduction_RejectsNonpositiveRateLimit(t *testing.T) {
+	g, err := graph.Build(minimalConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(map[string]any{"rate_limit_max": 0}, g)
+	if err == nil || !strings.Contains(err.Error(), "rate_limit_max must be a positive integer") {
+		t.Fatalf("expected nonpositive rate limit to be rejected, got: %v", err)
+	}
+}
+
+func TestValidateProduction_RejectsNonpositiveRateLimitWindow(t *testing.T) {
+	g, err := graph.Build(minimalConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(map[string]any{"rate_limit_window_seconds": -1}, g)
+	if err == nil || !strings.Contains(err.Error(), "rate_limit_window_seconds must be a positive integer") {
+		t.Fatalf("expected nonpositive rate limit window to be rejected, got: %v", err)
+	}
+}
+
+func TestValidateProduction_RejectsUnsupportedServiceAdapter(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Graph.Nodes["api"] = config.NodeConfig{Type: config.NodeTypeService, Adapter: "rust:axum"}
+	g, err := graph.Build(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(nil, g)
+	if err == nil || !strings.Contains(err.Error(), `service "api" uses unsupported adapter "rust:axum"`) {
+		t.Fatalf("expected unsupported service adapter to be rejected, got: %v", err)
+	}
+}
+
+func TestValidateProduction_RejectsNonStringCORSOrigin(t *testing.T) {
+	g, err := graph.Build(minimalConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(map[string]any{"allowed_origins": []any{42}}, g)
+	if err == nil || !strings.Contains(err.Error(), "allowed_origins must contain only strings") {
+		t.Fatalf("expected non-string CORS origin to be rejected, got: %v", err)
+	}
+}
+
+func TestValidateProduction_AcceptsSafeConfig(t *testing.T) {
+	g, err := graph.Build(minimalConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = security.ValidateProduction(map[string]any{
+		"allowed_origins":           []any{"https://app.example.com"},
+		"rate_limit_max":            200,
+		"rate_limit_window_seconds": 30,
+	}, g)
+	if err != nil {
+		t.Fatalf("expected safe production security config to pass, got: %v", err)
 	}
 }
 

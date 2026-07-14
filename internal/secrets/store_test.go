@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -47,12 +48,14 @@ func TestStore_SetGet(t *testing.T) {
 		t.Errorf("Get() = %q, want %q", got, "hunter2")
 	}
 
-	// Persisted with 0600 permissions, not group/world readable.
+	// POSIX stores must persist with 0600 permissions. Windows does not expose
+	// ACLs through FileMode.Perm, so its synthetic 0666 value is not evidence
+	// that the file is group/world readable.
 	info, err := os.Stat(filepath.Join(root, ".acthur", "secrets", "kv", "APP_SECRET"))
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Errorf("file mode = %o, want 0600", perm)
 	}
 }

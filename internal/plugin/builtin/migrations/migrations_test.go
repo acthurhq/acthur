@@ -200,3 +200,62 @@ func TestCreateNext_ContinuesFromExistingHighestNumber(t *testing.T) {
 		t.Errorf("expected next migration to continue from 0001, got %q", filepath.Base(up))
 	}
 }
+
+func TestLatestVersion_DiscoversHighestUpMigration(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "migrations")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"0001_init.up.sql",
+		"0001_init.down.sql",
+		"0012_accounts.up.sql",
+		"9999_rollback_only.down.sql",
+		"README.md",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	latest, present, err := migrations.LatestVersion(root)
+	if err != nil {
+		t.Fatalf("LatestVersion: %v", err)
+	}
+	if !present || latest != 12 {
+		t.Fatalf("LatestVersion = (%d, %v), want (12, true)", latest, present)
+	}
+}
+
+func TestLatestVersion_NoMigrations(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{name: "directory absent"},
+		{name: "directory has no up files", setup: func(t *testing.T, root string) {
+			dir := filepath.Join(root, "migrations")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "0001_init.down.sql"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, root)
+			}
+			latest, present, err := migrations.LatestVersion(root)
+			if err != nil {
+				t.Fatalf("LatestVersion: %v", err)
+			}
+			if present || latest != 0 {
+				t.Fatalf("LatestVersion = (%d, %v), want (0, false)", latest, present)
+			}
+		})
+	}
+}

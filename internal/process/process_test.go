@@ -299,7 +299,7 @@ func TestManager_LogSinkReceivesOutputLines(t *testing.T) {
 // sleepCmd returns the platform-appropriate sleep command binary.
 func sleepCmd() string {
 	if runtime.GOOS == "windows" {
-		return "timeout"
+		return "ping"
 	}
 	return "sleep"
 }
@@ -307,7 +307,9 @@ func sleepCmd() string {
 // sleepArgs returns args for a 10-second sleep.
 func sleepArgs() []string {
 	if runtime.GOOS == "windows" {
-		return []string{"/t", "10"}
+		// Unlike `timeout`, ping does not fail when exec.Cmd redirects stdin.
+		// Eleven loopback probes take approximately ten seconds.
+		return []string{"-n", "11", "127.0.0.1"}
 	}
 	return []string{"10"}
 }

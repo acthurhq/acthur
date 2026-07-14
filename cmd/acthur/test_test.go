@@ -2,11 +2,92 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+// TestRunTest_CIModeUsesRaceAndUncachedTests specifies the externally
+// observable contract of `acthur test --ci`: every selected Go service is
+// exercised with the race detector and a cold test cache. The runner seam
+// keeps this command test focused on argument projection rather than spawning
+// nested Go toolchains.
+func TestRunTest_CIModeUsesRaceAndUncachedTests(t *testing.T) {
+	dir := t.TempDir()
+	twoServiceProject(t, dir)
+	writeGoNodeWithTest(t, dir, "api", false)
+	writeGoNodeWithTest(t, dir, "worker", false)
+
+	_, g, err := loadProjectGraph(dir)
+	if err != nil {
+		t.Fatalf("loadProjectGraph: %v", err)
+	}
+
+	type call struct {
+		node string
+		args []string
+	}
+	var calls []call
+	runner := func(_ string, node string, _ io.Writer, _ []string, args ...string) error {
+		calls = append(calls, call{node: node, args: append([]string(nil), args...)})
+		return nil
+	}
+
+	err = runTestMode(dir, g, "", io.Discard, testModeCI, runner)
+	if err != nil {
+		t.Fatalf("runTestMode(--ci): %v", err)
+	}
+	want := []call{
+		{node: "api", args: []string{"test", "./...", "-race", "-count=1"}},
+		{node: "worker", args: []string{"test", "./...", "-race", "-count=1"}},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("CI go invocations = %#v, want %#v", calls, want)
+	}
+}
+
+func TestRunTest_CIModeAggregatesFailuresAndRunsEveryNode(t *testing.T) {
+	dir := t.TempDir()
+	twoServiceProject(t, dir)
+	writeGoNodeWithTest(t, dir, "api", false)
+	writeGoNodeWithTest(t, dir, "worker", false)
+
+	_, g, err := loadProjectGraph(dir)
+	if err != nil {
+		t.Fatalf("loadProjectGraph: %v", err)
+	}
+
+	var ran []string
+	runner := func(_ string, node string, _ io.Writer, _ []string, _ ...string) error {
+		ran = append(ran, node)
+		return os.ErrInvalid
+	}
+	err = runTestMode(dir, g, "", io.Discard, testModeCI, runner)
+	if err == nil {
+		t.Fatal("runTestMode(--ci) succeeded despite failing service tests")
+	}
+	if !reflect.DeepEqual(ran, []string{"api", "worker"}) {
+		t.Fatalf("CI ran nodes %v, want all selected nodes [api worker]", ran)
+	}
+	for _, node := range ran {
+		if !strings.Contains(err.Error(), node) {
+			t.Errorf("aggregate error %q does not name failing node %q", err, node)
+		}
+	}
+}
+
+func TestTestCommand_ExposesCIMode(t *testing.T) {
+	flag := testCmd.Flags().Lookup("ci")
+	if flag == nil {
+		t.Fatal("acthur test does not expose --ci")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--ci default = %q, want false", flag.DefValue)
+	}
+}
 
 // writeGoNodeWithTest drops a minimal Go module at dir/<name> with a single
 // test that passes (or fails, per fail) — for exercising runTest without

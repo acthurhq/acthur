@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/acthurhq/acthur/internal/plugin"
@@ -147,6 +148,54 @@ func WriteFiles(root, nodeID string, files []plugin.GeneratedFile) ([]Result, er
 	return results, nil
 }
 
+// VerifyGeneratedArtifacts checks that every path recorded in generated.lock
+// still exists below root and has exactly the content acthur last wrote. It is
+// deliberately read-only: callers such as the pre-deploy gate must refuse a
+// stale artifact rather than silently regenerating over user changes.
+//
+// A missing generated.lock, or a lock containing no entries, is valid for
+// projects that have not generated files yet.
+func VerifyGeneratedArtifacts(root string) error {
+	l, err := loadLock(root)
+	if err != nil {
+		return err
+	}
+
+	keys := make([]string, 0, len(l))
+	for key := range l {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var failures []string
+	for _, key := range keys {
+		wantHash := l[key]
+		cleanKey := path.Clean(strings.ReplaceAll(key, "\\", "/"))
+		if cleanKey == "." || cleanKey == ".." || strings.HasPrefix(cleanKey, "../") || path.IsAbs(cleanKey) {
+			failures = append(failures, fmt.Sprintf("%s: invalid path", key))
+			continue
+		}
+
+		content, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(cleanKey)))
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				failures = append(failures, fmt.Sprintf("%s: missing", cleanKey))
+			} else {
+				failures = append(failures, fmt.Sprintf("%s: %v", cleanKey, readErr))
+			}
+			continue
+		}
+		if gotHash := sha256Hex(content); gotHash != wantHash {
+			failures = append(failures, fmt.Sprintf("%s: content differs from generated.lock", cleanKey))
+		}
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("generated files are stale: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
 // lockKey resolves a GeneratedFile.Path to the repo-relative path it is
 // tracked under in generated.lock and written to on disk: paths under
 // "migrations/", "deploy/", or ".acthur/" (project-scoped state — e.g. the
@@ -245,7 +294,7 @@ func saveLock(root string, l lock) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()  // no-op once the rename below succeeds
+	defer func() { _ = os.Remove(tmpPath) }() // no-op once the rename below succeeds
 
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()

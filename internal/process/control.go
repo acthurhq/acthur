@@ -38,26 +38,21 @@ func PIDPath(rootDir, nodeID string) string {
 
 // FileLogSink returns a LogSink that appends every line to
 // .acthur/logs/<node>.log under rootDir, creating the directory if needed.
-// It opens (and keeps open) one file per node the first time a line arrives
-// for it.
+// Each append is closed before the sink returns so another process can rotate,
+// remove, or clean up the log on platforms that prohibit deleting open files.
 func FileLogSink(rootDir string) (LogSink, error) {
 	dir := filepath.Join(rootDir, ".acthur", "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
 	}
 
-	files := make(map[string]*os.File)
 	return func(nodeID, line string) {
-		f, ok := files[nodeID]
-		if !ok {
-			var err error
-			f, err = os.OpenFile(LogPath(rootDir, nodeID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-			if err != nil {
-				return // best-effort — never let a log write failure take down the node
-			}
-			files[nodeID] = f
+		f, err := os.OpenFile(LogPath(rootDir, nodeID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return // best-effort — never let a log write failure take down the node
 		}
 		_, _ = fmt.Fprintln(f, line)
+		_ = f.Close()
 	}, nil
 }
 

@@ -1425,7 +1425,12 @@ Use flags to run integration, contract, E2E, or load tests.`,
 		if len(args) > 0 {
 			service = args[0]
 		}
-		if err := runTest(mustCwd(), g, service, os.Stdout); err != nil {
+		ci, _ := cmd.Flags().GetBool("ci")
+		mode := testModeUnit
+		if ci {
+			mode = testModeCI
+		}
+		if err := runTestMode(mustCwd(), g, service, os.Stdout, mode, deploy.GoStream); err != nil {
 			return err
 		}
 		output.Success(output.PrefixKernel, "tests passed")
@@ -1440,6 +1445,7 @@ func init() {
 	testCmd.Flags().Bool("load", false, "run k6 load tests")
 	testCmd.Flags().Bool("coverage", false, "generate coverage report")
 	testCmd.Flags().Bool("watch", false, "re-run on file change")
+	testCmd.Flags().Bool("ci", false, "run CI-grade unit tests with race detection and no test cache")
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,11 +1604,12 @@ var secretsCmd = &cobra.Command{
 as plaintext files with 0600 permissions — the local, dev-only model the
 PRD documents for Acthur's built-in secrets provider (production deploys
 should export real secrets into the deploy environment; this store is a
-convenient fallback for local dev-loop testing only, never a vault).
+convenient input for the local dev runtime only, never a vault).
 
 Every stored secret is injected into every node's process environment by
-'acthur dev', and consulted as a fallback by the pre-deploy gate for any
-required env var not already exported into the deploying shell.`,
+'acthur dev'. Production deploys only accept required values exported into
+the deploy process environment, because this local store is not delivered to
+production targets.`,
 }
 
 func init() {
@@ -1856,7 +1863,7 @@ func init() {
 // ---------------------------------------------------------------------------
 
 // Version is set at build time via ldflags:
-// go build -ldflags "-X github.com/acthurhq/acthur/cmd.Version=0.1.0"
+// go build -ldflags "-X main.Version=0.1.0"
 var Version = "dev"
 
 var versionCmd = &cobra.Command{

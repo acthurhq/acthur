@@ -3,7 +3,7 @@
 
 BINARY     = acthur
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS    = -ldflags "-s -w -X github.com/acthur/acthur/cmd/acthur.Version=$(VERSION)"
+LDFLAGS    = -ldflags "-s -w -X main.Version=$(VERSION)"
 BUILD_DIR  = bin
 MAIN       = ./cmd/acthur
 

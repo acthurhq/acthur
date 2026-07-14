@@ -350,3 +350,43 @@ func TestWriteFiles_LockRoundTrip_AtomicNoTempFileLeftBehind(t *testing.T) {
 		t.Fatalf("expected 3 lock entries after round-trip, got %+v", lock2)
 	}
 }
+
+func TestVerifyGeneratedArtifacts(t *testing.T) {
+	t.Run("matching tracked file passes", func(t *testing.T) {
+		root := t.TempDir()
+		content := []byte("package api\n")
+		if _, err := generate.WriteFiles(root, "api", []plugin.GeneratedFile{{Path: "generated.go", Content: content}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := generate.VerifyGeneratedArtifacts(root); err != nil {
+			t.Fatalf("expected generated artifacts to verify, got: %v", err)
+		}
+	})
+
+	t.Run("reports every missing or changed path", func(t *testing.T) {
+		root := t.TempDir()
+		files := []plugin.GeneratedFile{
+			{Path: "missing.go", Content: []byte("package api\n")},
+			{Path: "changed.go", Content: []byte("package api\n")},
+		}
+		if _, err := generate.WriteFiles(root, "api", files); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(root, "api", "missing.go")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "api", "changed.go"), []byte("package api\n\n// user edit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		err := generate.VerifyGeneratedArtifacts(root)
+		if err == nil {
+			t.Fatal("expected stale generated artifacts to fail verification")
+		}
+		for _, want := range []string{"api/missing.go: missing", "api/changed.go: content differs"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("expected error to contain %q, got: %v", want, err)
+			}
+		}
+	})
+}
