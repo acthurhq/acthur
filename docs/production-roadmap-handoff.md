@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-14
 **Repository:** `acthurhq/acthur`
-**Working branch:** `dev` at `c9c0edc` after the reviewed staging promotion
+**Working branch:** `dev` at `14ccbea` after Coolify lifecycle hardening
 **Promotion path:** `dev` → `staging` → `main` (live)
 **Primary tracking issue:** [#69 — Production readiness and first release](https://github.com/acthurhq/acthur/issues/69)
 

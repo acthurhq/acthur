@@ -296,7 +296,9 @@ In-flight
 
 ## Open Questions
 
-- Which remote provider will be the first live production witness?
+- Coolify is selected for the first live remote witness. Execution requires a
+  disposable remote instance/server, its public route, and a short-lived token
+  with `read`, `write`, and `deploy` permissions.
 
 ## Files/Modules Expected
 
@@ -321,14 +323,18 @@ In-flight
       supported platforms.
 - [x] PRD and roadmap clearly distinguish shipped, experimental, and future
       behavior with no contradictory first-release claims.
-- [ ] All campaign tasks are complete/closed; PR #66 is reviewed and green.
+- [x] PR #66 and the follow-up staging promotion PR #71 are merged with green
+      supported-platform checks.
+- [ ] Campaign issue #69 is reconciled and closed only after remote and public
+      release evidence exists.
 - [ ] `main` is fast-forwarded and pushed, and the first production release is
       tagged, published, installed, and verified.
 
 ## Risks
 
 - Provider witnesses require external credentials and disposable resources.
-- Distribution repositories and signing policy may require owner decisions.
+- The first-release signing policy is decided and keyless; Homebrew/Scoop
+  repositories remain explicitly deferred and do not block GitHub Releases.
 - The expanded PRD contains mutually inconsistent version and size claims;
   release truthfulness requires explicit reconciliation rather than silently
   treating aspirational sections as delivered.
