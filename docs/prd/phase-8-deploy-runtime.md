@@ -30,7 +30,7 @@
 **Files:** `internal/deploy/`, `cmd/acthur`.
 
 ### Slice 3 — Coolify target (#52)
-`internal/deploy/coolify/`: minimal typed client for the Coolify v4 API (token auth via `COOLIFY_TOKEN`, base URL from `environments.<env>.host`): ensure project/application exists, push compose-based deployment, trigger deploy, poll status. All behavior tested against an httptest fake recording requests; a `--target coolify` wiring in the deploy command. Live VPS verification is out of scope for this phase's witness (needs user credentials/instance) — the tracker records it as the remaining leg.
+`internal/deploy/coolify/`: minimal typed client for the Coolify v4 API (token auth via `COOLIFY_TOKEN`, base URL from `environments.<env>.host`): ensure the project and named environment exist, optionally select `destination_uuid`, push a compose service, trigger deploy, and poll status. `acthur deploy status --env <env>` reads the exact environment-scoped service without mutation. `acthur deploy cleanup --env <env> --confirm` safely removes only an exact non-production service and its now-empty environment; it waits for queued service deletion, is idempotent when resources are absent, and never deletes the shared project. All behavior is tested against an httptest fake recording requests. Live VPS verification remains the final witness leg.
 **Files:** `internal/deploy/coolify/`, small wiring in `cmd/acthur`.
 
 ## Out of scope

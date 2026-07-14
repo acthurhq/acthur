@@ -10,13 +10,14 @@ import (
 
 // fakeDeployContext implements DeployContext for target tests.
 type fakeDeployContext struct {
-	env         string
-	compose     []byte
-	projectName string
-	host        string
-	serverUUID  string
-	logs        []string
-	workloadEnv map[string]string
+	env             string
+	compose         []byte
+	projectName     string
+	host            string
+	serverUUID      string
+	destinationUUID string
+	logs            []string
+	workloadEnv     map[string]string
 }
 
 func (f *fakeDeployContext) EnvName() string                { return f.env }
@@ -24,6 +25,7 @@ func (f *fakeDeployContext) ComposeYAML() []byte            { return f.compose }
 func (f *fakeDeployContext) ProjectName() string            { return f.projectName }
 func (f *fakeDeployContext) Host() string                   { return f.host }
 func (f *fakeDeployContext) ServerUUID() string             { return f.serverUUID }
+func (f *fakeDeployContext) DestinationUUID() string        { return f.destinationUUID }
 func (f *fakeDeployContext) WorkloadEnv() map[string]string { return f.workloadEnv }
 func (f *fakeDeployContext) Log(format string, args ...any) {
 	f.logs = append(f.logs, fmt.Sprintf(format, args...))
@@ -37,6 +39,8 @@ func TestTarget_DeployUpsertsEnvironmentBeforeDeploymentWithoutLeakingValues(t *
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
 			writeJSON(w, 200, []map[string]any{{"uuid": "proj-1", "name": "myapp"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			writeJSON(w, 200, []map[string]any{{"uuid": "env-1", "name": "production"}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
 			writeJSON(w, 200, []map[string]any{{"uuid": "app-1", "name": "myapp-production", "project_uuid": "proj-1"}})
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/services/app-1":
@@ -80,6 +84,13 @@ func TestTarget_Deploy_fullHappyPath(t *testing.T) {
 			writeJSON(w, 200, []map[string]any{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects":
 			writeJSON(w, 201, map[string]any{"uuid": "proj-1", "name": "myapp"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			writeJSON(w, 200, []map[string]any{})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			if rec.Body["name"] != "production" {
+				t.Fatalf("environment create body: %#v", rec.Body)
+			}
+			writeJSON(w, 201, map[string]any{"uuid": "env-production"})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
 			writeJSON(w, 200, []map[string]any{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services":
@@ -127,6 +138,8 @@ func TestTarget_Deploy_fullHappyPath(t *testing.T) {
 	wantSequence := []string{
 		"GET /api/v1/projects",
 		"POST /api/v1/projects",
+		"GET /api/v1/projects/proj-1/environments",
+		"POST /api/v1/projects/proj-1/environments",
 		"GET /api/v1/services",
 		"POST /api/v1/services",
 		"POST /api/v1/services/app-1/start",
@@ -156,11 +169,88 @@ func TestTarget_DeployRequiresServerUUIDBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestTarget_StatusReportsExistingDeploymentWithoutMutation(t *testing.T) {
+	var sequence []string
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		sequence = append(sequence, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
+			writeJSON(w, 200, []map[string]any{{"uuid": "proj-1", "name": "myapp"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			writeJSON(w, 200, []map[string]any{{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services/service-1":
+			writeJSON(w, 200, map[string]any{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1", "status": "running:healthy"})
+		default:
+			t.Fatalf("status must be read-only, got: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	ctx := &fakeDeployContext{env: "staging", projectName: "myapp", host: srv.URL}
+	status, err := NewTarget("tok").Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.UUID != "service-1" || status.Status != "running:healthy" {
+		t.Fatalf("status = %#v", status)
+	}
+	if got := strings.Join(sequence, "\n"); got != "GET /api/v1/projects\nGET /api/v1/services\nGET /api/v1/services/service-1" {
+		t.Fatalf("request sequence:\n%s", got)
+	}
+}
+
+func TestTarget_CleanupDeletesExactStagingServiceThenEnvironment(t *testing.T) {
+	var sequence []string
+	deleted := false
+	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
+		sequence = append(sequence, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
+			writeJSON(w, 200, []map[string]any{{"uuid": "proj-1", "name": "myapp"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			if deleted {
+				writeJSON(w, 200, []map[string]any{})
+			} else {
+				writeJSON(w, 200, []map[string]any{{"uuid": "service-1", "name": "myapp-staging", "project_uuid": "proj-1"}})
+			}
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/services/service-1":
+			deleted = true
+			writeJSON(w, 200, map[string]any{"message": "Service deletion request queued."})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/projects/proj-1/environments/staging":
+			writeJSON(w, 200, map[string]any{"message": "Environment deleted."})
+		default:
+			t.Fatalf("unexpected cleanup request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	ctx := &fakeDeployContext{env: "staging", projectName: "myapp", host: srv.URL}
+	target := NewTarget("tok")
+	target.PollInterval = time.Millisecond
+	if err := target.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := "GET /api/v1/projects\nGET /api/v1/services\nDELETE /api/v1/services/service-1\nGET /api/v1/services\nDELETE /api/v1/projects/proj-1/environments/staging"
+	if got := strings.Join(sequence, "\n"); got != want {
+		t.Fatalf("cleanup sequence:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestTarget_CleanupRefusesProductionBeforeNetwork(t *testing.T) {
+	for _, env := range []string{"production", "Production"} {
+		ctx := &fakeDeployContext{env: env, projectName: "myapp", host: "http://127.0.0.1:1"}
+		err := NewTarget("tok").Cleanup(ctx)
+		if err == nil || !strings.Contains(err.Error(), "refusing to clean production") {
+			t.Fatalf("expected production safety refusal for %q, got: %v", env, err)
+		}
+	}
+}
+
 func TestTarget_Deploy_surfacesFailedHealth(t *testing.T) {
 	srv, _ := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, rec *recordedRequest) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
 			writeJSON(w, 200, []map[string]any{{"uuid": "proj-1", "name": "myapp"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/proj-1/environments":
+			writeJSON(w, 200, []map[string]any{{"uuid": "env-1", "name": "production"}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
 			writeJSON(w, 200, []map[string]any{{"uuid": "app-1", "name": "myapp-production", "project_uuid": "proj-1"}})
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/services/"):

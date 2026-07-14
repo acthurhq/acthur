@@ -177,7 +177,12 @@ Required outcome:
 
 - Select the first supported production target.
 - Deploy a canonical example using documented credentials and least-privilege setup.
-- Verify health, routing, secrets, database connectivity, redeploy, status, failure reporting, and teardown.
+- Verify health, routing, secrets, database connectivity, redeploy, status,
+  failure reporting, and teardown. Coolify lifecycle preflight now ensures the
+  requested project environment, supports multi-destination servers through
+  `destination_uuid`, exposes read-only `acthur deploy status`, and provides
+  confirmed/idempotent non-production `acthur deploy cleanup` without deleting
+  the shared project.
 - Record a sanitised repeatable witness in repository documentation or CI.
 - Do not claim all provider targets production-ready based only on client-unit tests.
 

@@ -162,6 +162,19 @@ In-flight
   both phases, and accepts the documented start acknowledgement before
   polling service health. Tests cover missing-key POST, existing-key PATCH,
   env-before-start ordering, and the exact acknowledgement shape.
+- 2026-07-14 — Coolify-lifecycle TDD agent — audited the installed Coolify
+  4.1.2 routes/OpenAPI and captured behavior-first reds at the public config,
+  client, target, and CLI seams. Deploy now preserves optional
+  `destination_uuid`, explicitly ensures the requested project environment
+  before service creation, and exposes the retained read-only `acthur deploy
+  status --env <name>` operation for the exact environment-scoped service.
+  Added confirmed non-production `acthur deploy cleanup --env <name>
+  --confirm`: it deletes only the exact service with configurations, volumes,
+  networks, and Docker cleanup enabled; waits for Coolify's queued deletion;
+  removes the now-empty environment; treats missing resources/404 as success;
+  refuses production; and never deletes the shared project. Provider and CLI
+  request-sequence tests prove identity, ordering, read-only status, safety,
+  and idempotency.
 - 2026-07-14 — remote-topology/secrets TDD agent — captured a black-box CLI
   red proving that locally validated secret values were followed by artifact
   writes and provider calls even though no remote target delivered those

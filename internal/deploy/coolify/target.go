@@ -3,6 +3,7 @@ package coolify
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,9 @@ type DeployContext interface {
 	Host() string
 	// ServerUUID identifies the Coolify server required by service creation.
 	ServerUUID() string
+	// DestinationUUID optionally selects one destination on a server that has
+	// more than one configured Docker network destination.
+	DestinationUUID() string
 	// WorkloadEnv returns values already resolved and gated by the command.
 	// Values are sent only to Coolify's environment API and must never be
 	// rendered into Compose or progress/error output.
@@ -48,13 +52,14 @@ type Target struct {
 	// PollInterval and HealthTimeout control service health polling. Zero
 	// values fall back to Client defaults (PollInterval) and a 5-minute
 	// timeout (HealthTimeout) respectively.
-	PollInterval  time.Duration
-	HealthTimeout time.Duration
+	PollInterval   time.Duration
+	HealthTimeout  time.Duration
+	CleanupTimeout time.Duration
 }
 
 // NewTarget constructs a coolify Target with the given API token.
 func NewTarget(token string) *Target {
-	return &Target{Token: token, HealthTimeout: 5 * time.Minute}
+	return &Target{Token: token, HealthTimeout: 5 * time.Minute, CleanupTimeout: 5 * time.Minute}
 }
 
 // Deploy implements the deploy command's target interface: ensure the
@@ -75,10 +80,14 @@ func (t *Target) Deploy(ctx DeployContext) error {
 	if err != nil {
 		return fmt.Errorf("coolify target: %w", err)
 	}
+	ctx.Log("coolify: ensuring project environment %q exists", ctx.EnvName())
+	if _, err := client.EnsureProjectEnvironment(projectUUID, ctx.EnvName()); err != nil {
+		return fmt.Errorf("coolify target: %w", err)
+	}
 
 	appName := ctx.ProjectName() + "-" + ctx.EnvName()
 	ctx.Log("coolify: ensuring compose application %q exists", appName)
-	appUUID, err := client.EnsureComposeService(projectUUID, ctx.ServerUUID(), ctx.EnvName(), appName, string(ctx.ComposeYAML()))
+	appUUID, err := client.EnsureComposeService(projectUUID, ctx.ServerUUID(), ctx.DestinationUUID(), ctx.EnvName(), appName, string(ctx.ComposeYAML()))
 	if err != nil {
 		return fmt.Errorf("coolify target: %w", err)
 	}
@@ -112,5 +121,67 @@ func (t *Target) Deploy(ctx DeployContext) error {
 	}
 
 	ctx.Log("coolify: %q is healthy", appName)
+	return nil
+}
+
+// Status reports the current deployment state without creating or changing
+// any Coolify resource.
+func (t *Target) Status(ctx DeployContext) (ServiceStatus, error) {
+	client := New(ctx.Host(), t.Token)
+	projectUUID, found, err := client.FindProject(ctx.ProjectName())
+	if err != nil {
+		return ServiceStatus{}, fmt.Errorf("coolify target: %w", err)
+	}
+	if !found {
+		return ServiceStatus{}, fmt.Errorf("coolify target: project %q is not deployed", ctx.ProjectName())
+	}
+	name := ctx.ProjectName() + "-" + ctx.EnvName()
+	status, found, err := client.ComposeServiceStatus(projectUUID, name)
+	if err != nil {
+		return ServiceStatus{}, fmt.Errorf("coolify target: %w", err)
+	}
+	if !found {
+		return ServiceStatus{}, fmt.Errorf("coolify target: service %q is not deployed", name)
+	}
+	return status, nil
+}
+
+// Cleanup removes only the exact service and non-production environment
+// managed for ctx. The shared Coolify project is intentionally retained.
+func (t *Target) Cleanup(ctx DeployContext) error {
+	if strings.EqualFold(ctx.EnvName(), "production") {
+		return fmt.Errorf("coolify target: refusing to clean production environment")
+	}
+	if ctx.EnvName() == "" {
+		return fmt.Errorf("coolify target: cleanup environment name is required")
+	}
+	client := New(ctx.Host(), t.Token)
+	if t.PollInterval > 0 {
+		client.PollInterval = t.PollInterval
+	}
+	projectUUID, found, err := client.FindProject(ctx.ProjectName())
+	if err != nil {
+		return fmt.Errorf("coolify target: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	name := ctx.ProjectName() + "-" + ctx.EnvName()
+	deleted, err := client.DeleteComposeService(projectUUID, name)
+	if err != nil {
+		return fmt.Errorf("coolify target: %w", err)
+	}
+	if deleted {
+		timeout := t.CleanupTimeout
+		if timeout <= 0 {
+			timeout = 5 * time.Minute
+		}
+		if err := client.WaitComposeServiceAbsent(projectUUID, name, timeout); err != nil {
+			return fmt.Errorf("coolify target: %w", err)
+		}
+	}
+	if err := client.DeleteProjectEnvironment(projectUUID, ctx.EnvName()); err != nil {
+		return fmt.Errorf("coolify target: %w", err)
+	}
 	return nil
 }

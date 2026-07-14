@@ -1671,6 +1671,7 @@ environments:
     target: coolify
     host: yourserver.com
     server_uuid: <coolify-server-uuid>
+    destination_uuid: <optional-destination-uuid> # required when the server has multiple destinations
 ```
 
 `COOLIFY_TOKEN` supplies the API credential at deploy time. Acthur sends the
@@ -1681,6 +1682,14 @@ Workload env   → service environment API before start/redeploy
 data_flow edges → Service-to-service environment variable wiring
 migrates edges  → Migration run ordering in Coolify
 ```
+
+Acthur ensures the named Coolify project environment exists before creating
+the service. `acthur deploy status --env <name>` reads the exact
+`<project>-<environment>` service identity and health without changing provider
+state. `acthur deploy cleanup --env <name> --confirm` removes that exact
+non-production service (including its workload volumes), waits for Coolify's
+queued deletion, and then removes the empty environment. Cleanup refuses the
+`production` environment and never deletes the shared Coolify project.
 
 ### 13.5 Dokploy Deploy Target
 

@@ -44,6 +44,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 	target := targetOverride
 	host := ""
 	serverUUID := ""
+	destinationUUID := ""
 	if len(cfg.Environments) > 0 {
 		envCfg, ok := cfg.Environments[env]
 		if !ok {
@@ -59,6 +60,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 		}
 		host = envCfg.Host
 		serverUUID = envCfg.ServerUUID
+		destinationUUID = envCfg.DestinationUUID
 	}
 	if target == "" {
 		target = "compose"
@@ -170,7 +172,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 		if compose == nil {
 			return plan, fmt.Errorf("no docker-compose.prod.yml artifact projected — cannot deploy to coolify")
 		}
-		ctx := &coolifyContext{env: env, compose: compose, project: cfg.Project, host: host, serverUUID: serverUUID, workloadEnv: resolveWorkloadEnv(workloadEnv)}
+		ctx := &coolifyContext{env: env, compose: compose, project: cfg.Project, host: host, serverUUID: serverUUID, destinationUUID: destinationUUID, workloadEnv: resolveWorkloadEnv(workloadEnv)}
 		return plan, coolify.NewTarget(os.Getenv("COOLIFY_TOKEN")).Deploy(ctx)
 	case "fly":
 		svcs := serviceArtifacts(files, g)
@@ -187,6 +189,62 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 	default:
 		return plan, fmt.Errorf("unknown deploy target %q (supported: compose, coolify, fly, railway, render)", target)
 	}
+}
+
+// runDeployStatus reports the current provider state for one configured
+// environment without running deploy gates or mutating provider resources.
+func runDeployStatus(root, env string) (string, error) {
+	cfg, _, err := loadProjectGraph(root)
+	if err != nil {
+		return "", err
+	}
+	envCfg, ok := cfg.Environments[env]
+	if !ok {
+		return "", fmt.Errorf("environment %q is not defined in acthur.yml", env)
+	}
+	if envCfg.Target != "coolify" {
+		return "", fmt.Errorf("deploy status is not implemented for target %q", envCfg.Target)
+	}
+	ctx := &coolifyContext{
+		env:             env,
+		project:         cfg.Project,
+		host:            envCfg.Host,
+		serverUUID:      envCfg.ServerUUID,
+		destinationUUID: envCfg.DestinationUUID,
+	}
+	status, err := coolify.NewTarget(os.Getenv("COOLIFY_TOKEN")).Status(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s: %s (%s)", status.Name, status.Status, status.UUID), nil
+}
+
+// runDeployCleanup removes the exact non-production Coolify deployment for a
+// configured environment. Confirmation is mandatory because volumes are
+// deleted with the service.
+func runDeployCleanup(root, env string, confirm bool) error {
+	if !confirm {
+		return fmt.Errorf("deploy cleanup deletes workload volumes; pass --confirm to continue")
+	}
+	cfg, _, err := loadProjectGraph(root)
+	if err != nil {
+		return err
+	}
+	envCfg, ok := cfg.Environments[env]
+	if !ok {
+		return fmt.Errorf("environment %q is not defined in acthur.yml", env)
+	}
+	if envCfg.Target != "coolify" {
+		return fmt.Errorf("deploy cleanup is not implemented for target %q", envCfg.Target)
+	}
+	ctx := &coolifyContext{
+		env:             env,
+		project:         cfg.Project,
+		host:            envCfg.Host,
+		serverUUID:      envCfg.ServerUUID,
+		destinationUUID: envCfg.DestinationUUID,
+	}
+	return coolify.NewTarget(os.Getenv("COOLIFY_TOKEN")).Cleanup(ctx)
 }
 
 // serviceArtifact is the generic (provider-agnostic) shape every remote
@@ -376,12 +434,13 @@ func composeContent(files []plugin.GeneratedFile) []byte {
 // coolifyContext adapts the deploy command's resolved state to the
 // coolify.DeployContext interface.
 type coolifyContext struct {
-	env         string
-	compose     []byte
-	project     string
-	host        string
-	serverUUID  string
-	workloadEnv map[string]string
+	env             string
+	compose         []byte
+	project         string
+	host            string
+	serverUUID      string
+	destinationUUID string
+	workloadEnv     map[string]string
 }
 
 func (c *coolifyContext) EnvName() string                { return c.env }
@@ -389,6 +448,7 @@ func (c *coolifyContext) ComposeYAML() []byte            { return c.compose }
 func (c *coolifyContext) ProjectName() string            { return c.project }
 func (c *coolifyContext) Host() string                   { return c.host }
 func (c *coolifyContext) ServerUUID() string             { return c.serverUUID }
+func (c *coolifyContext) DestinationUUID() string        { return c.destinationUUID }
 func (c *coolifyContext) WorkloadEnv() map[string]string { return c.workloadEnv }
 func (c *coolifyContext) Log(format string, args ...any) {
 	output.Info("deploy", format, args...)
