@@ -317,6 +317,14 @@ In-flight
   binaries, and the GoReleaser/Syft release dry run. `main` and release tags
   remain intentionally unchanged until the disposable remote Coolify witness is
   executed and recorded.
+- 2026-07-14 — main agent — refreshed the production evidence ledger on `dev`
+  at `61807d8`, merged PR #75 (`dev` -> `staging`) as merge commit `04973e2`,
+  and verified the post-merge staging push run 29350110378. The run is fully
+  green across lint/vet, Go 1.22 and 1.23 race-enabled tests on Ubuntu,
+  macOS Intel, and Windows, native installer integrity tests, snapshot
+  binaries, and the GoReleaser/Syft release dry run. `main`, release tags, and
+  issue #69 remain intentionally unchanged until the disposable remote Coolify
+  witness is executed and recorded.
 
 ## Current Decisions
 
