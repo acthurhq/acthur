@@ -3,24 +3,31 @@
 > Acthur is a runtime graph operating system. This roadmap tracks what is built,
 > what is next, and how the five official repositories grow together.
 
+> **Status note (2026-07-14):** the phase narrative below is a historical
+> planning record, not current release qualification. The authoritative
+> shipped/experimental/future scope is the release-authority table in
+> `docs/acthur-prd.md`; current production evidence and blockers are tracked in
+> `docs/implementation/active/0008-production-readiness.md` and
+> `docs/production-roadmap-handoff.md`.
+
 ---
 
 ## Repository map
 
 ```
-github.com/samueloshio/acthur           → kernel (this repo)
-github.com/samueloshio/acthur-plugins   → official plugins (migrations, auth, rbac, …)
-github.com/samueloshio/acthur-adapters  → official adapters (go:chi, rust:axum, ui:astro, …)
-github.com/samueloshio/acthur-examples  → example projects (dogfooding + docs-by-example)
-github.com/samueloshio/acthur-docs      → documentation site (built with Acthur + Astro)
+github.com/acthurhq/acthur           → kernel (this repo)
+github.com/acthurhq/acthur-plugins   → planned official plugin repository
+github.com/acthurhq/acthur-adapters  → planned official adapter repository
+github.com/acthurhq/acthur-examples  → planned example-project repository
+github.com/acthurhq/acthur-docs      → planned documentation-site repository
 ```
 
-Community plugins and adapters live in independent repositories and are discovered via
-the plugin registry (a JSON manifest hosted at `registry.acthur.dev`).
+The external repositories and hosted plugin registry are future ecosystem
+work; their planned shape below is not a shipped first-release capability.
 
 ---
 
-## Current state (kernel, as of Phase 0 close-out)
+## Historical state (kernel, at Phase 0 close-out)
 
 Legend: ✅ done · 🟡 partial · ❌ not built
 
