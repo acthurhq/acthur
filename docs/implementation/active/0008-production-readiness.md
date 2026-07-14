@@ -279,6 +279,14 @@ In-flight
   upload-artifact v7, golangci-lint-action v9, and goreleaser-action v7.
   Actionlint 1.7.12 and `git diff --check` are green; pushed native-runner
   evidence is required before staging promotion.
+- 2026-07-14 — main agent — the upgraded CI witness exposed dependency drift
+  at the generated-project seam on Go 1.22: `go mod tidy` selected Prometheus
+  client v1.23.2, which requires Go 1.23, so the retained Go 1.22 project could
+  no longer compile with the observability plugin. The existing black-box
+  generated-project compilation test was the red. The go:fiber scaffold now
+  pins Prometheus client v1.19.1 (whose module requires Go 1.20), preserving
+  the supported Go 1.22 floor instead of relying on an unstable latest-module
+  resolution.
 
 ## Current Decisions
 
