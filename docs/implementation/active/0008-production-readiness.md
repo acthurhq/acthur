@@ -292,6 +292,15 @@ In-flight
   process manager streamed multiple services. Added a concurrent public-seam
   regression and removed the unnecessary mutable color cache: service colors
   remain the same deterministic name hash with no shared map mutation.
+- 2026-07-14 — main agent — pushed the CI/runtime hardening to `dev` at
+  `329be4f`, merged PR #72 (`dev` -> `staging`) as merge commit `0754ca7`,
+  and verified the post-merge staging push run 29346984175. Dev run
+  29345788624, PR #72 run 29346371930, and staging run 29346984175 are fully
+  green across lint/vet, Go 1.22 and 1.23 race-enabled tests on Ubuntu,
+  macOS Intel, and Windows, native installer integrity tests, snapshot
+  binaries, and the GoReleaser/Syft release dry run. `main` and release tags
+  remain intentionally unchanged until the disposable remote Coolify witness is
+  executed and recorded.
 
 ## Current Decisions
 
@@ -342,8 +351,8 @@ In-flight
       supported platforms.
 - [x] PRD and roadmap clearly distinguish shipped, experimental, and future
       behavior with no contradictory first-release claims.
-- [x] PR #66 and the follow-up staging promotion PR #71 are merged with green
-      supported-platform checks.
+- [x] PR #66 and the follow-up staging promotion PRs #71 and #72 are merged
+      with green supported-platform checks.
 - [ ] Campaign issue #69 is reconciled and closed only after remote and public
       release evidence exists.
 - [ ] `main` is fast-forwarded and pushed, and the first production release is
