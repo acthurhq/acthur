@@ -236,6 +236,16 @@ In-flight
   diff checks are green. The exact fourth Air witness passed: source rebuild,
   direct and proxy health, graceful Ctrl+C, zero remaining witness processes,
   and zero listeners on ports 18081/4000.
+- 2026-07-14 — main agent — pushed the integrated candidate to `dev` and
+  closed the Windows-native reds exposed by the new CI gates. The PowerShell
+  harness now observes expected nonzero child exits without terminating its
+  parent; installer failures throw (so dot-sourced/`iex` use cannot print an
+  error and return success); multi-line version output is normalized before
+  matching; and the scaffold black-box test executes the native `.exe` path.
+  GitHub Actions run 29341764155 is fully green: lint/vet, race-enabled tests
+  on Go 1.22 and 1.23 across Ubuntu, macOS Intel, and Windows, installer
+  integrity tests on all three operating systems, snapshot binaries, and the
+  GoReleaser/Syft release dry run.
 
 ## Current Decisions
 
@@ -271,8 +281,8 @@ In-flight
 
 ## Acceptance Criteria
 
-- [ ] `go test ./... -race -count=1` is green on every supported OS/Go pair.
-- [ ] Lint, vet, snapshot, and release-dry-run gates are green.
+- [x] `go test ./... -race -count=1` is green on every supported OS/Go pair.
+- [x] Lint, vet, snapshot, and release-dry-run gates are green.
 - [x] A canonical generated project completes scaffold → validate → dev →
       hot reload/restart → contracts/generate/test → deploy.
 - [x] Deployment refuses every incomplete graph projection.
