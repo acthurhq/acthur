@@ -3,7 +3,7 @@
 **Date:** 2026-07-14
 **Repository:** `acthurhq/acthur`
 **Working branch:** `dev` at `13cd242`
-**Target branch:** `main`
+**Promotion path:** `dev` → `staging` → `main` (live)
 **Primary pull request:** [#66 — PRD completion: Phases 3–9 + end-to-end production-readiness verification](https://github.com/acthurhq/acthur/pull/66)
 
 ## Purpose

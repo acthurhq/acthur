@@ -2,10 +2,10 @@ name: Acthur CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, staging, dev]
     tags: ["v*"]
   pull_request:
-    branches: [main, dev]
+    branches: [main, staging, dev]
 
 permissions:
   contents: write

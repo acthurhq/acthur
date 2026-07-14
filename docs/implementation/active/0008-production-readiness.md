@@ -4,8 +4,9 @@
 
 Turn the implementation on `dev` into a defensible end-to-end production
 release: close every retained PRD requirement, make all supported-platform
-quality gates green, prove local and remote deployment behavior, publish the
-release, and fast-forward `main` only after the evidence is complete.
+quality gates green, prove local and remote deployment behavior, promote it
+through `staging`, publish the release, and fast-forward `main` only after the
+evidence is complete.
 
 ## Owning Docs
 
@@ -92,6 +93,8 @@ In-flight
 - The agreed behavior-test seams are CLI exit/output, generated applications
   as black boxes, process/dev lifecycle callbacks, deploy artifact/target
   interfaces, and release binaries/installers.
+- Branch promotion is `dev` → `staging` → `main`; CI validates pushes and pull
+  requests at every tier, and `main` remains the live production branch.
 
 ## Open Questions
 
