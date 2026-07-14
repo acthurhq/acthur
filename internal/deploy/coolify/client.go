@@ -12,34 +12,25 @@
 //
 //	GET    /api/v1/projects                    — list projects
 //	POST   /api/v1/projects                     — create a project ({"name": ...})
-//	GET    /api/v1/applications                 — list applications
-//	POST   /api/v1/applications/dockercompose   — create a compose-based application
-//	PATCH  /api/v1/applications/{uuid}           — update an existing application
-//	POST   /api/v1/deploy?uuid={uuid}            — trigger a deployment
-//	GET    /api/v1/applications/{uuid}           — read application status
+//	GET    /api/v1/services                     — list service stacks
+//	POST   /api/v1/services                     — create a Compose service stack
+//	PATCH  /api/v1/services/{uuid}              — update its Compose definition
+//	PATCH  /api/v1/services/{uuid}/envs         — upsert workload environment
+//	POST   /api/v1/services/{uuid}/start        — deploy/redeploy the stack
+//	GET    /api/v1/services/{uuid}              — read service status
 //
 // # Assumptions (documented — live-VPS verification still pending, see the
 // implementation tracker)
 //
-//   - EnsureProject/EnsureComposeApp resolve "does this already exist" by
+//   - EnsureProject/EnsureComposeService resolve "does this already exist" by
 //     listing and matching on name client-side, since the documented API
 //     has no filter-by-name query parameter. This is O(n) in list size but
 //     correct, and is the safest assumption without a live instance to
 //     confirm filter support against.
-//   - The create-application request body uses field names
-//     "project_uuid", "name", and "docker_compose_raw" — these are the
-//     field names Coolify's own dashboard uses when creating a compose
-//     application from raw YAML; the OpenAPI spec is not fully public for
-//     this endpoint, so this is the minimal shape, not a verified contract.
-//   - Deploy trigger response is assumed to have the shape
-//     {"deployments": [{"deployment_uuid": "..."}]} — Coolify's documented
-//     behavior for /api/v1/deploy?uuid=... targeting a single application
-//     is to return a list because the same endpoint accepts multiple UUIDs
-//     via ?uuid=a,b,c.
-//   - Application health is read from the "status" string field on the
-//     GET /api/v1/applications/{uuid} response, which Coolify reports as
+//   - Service health is read from the "status" string field on the
+//     GET /api/v1/services/{uuid} response, which Coolify reports as
 //     "<state>:<health>" (e.g. "running:healthy", "exited:unhealthy").
-//     WaitHealthy treats any status containing "running" as success and any
+//     WaitServiceHealthy treats any status containing "running" as success and any
 //     status containing "exited", "unhealthy", "failed", or "error" as a
 //     terminal failure; anything else is treated as still-in-progress.
 package coolify
@@ -47,6 +38,7 @@ package coolify
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,6 +46,38 @@ import (
 	"strings"
 	"time"
 )
+
+// UpsertServiceEnv updates one variable on a Compose service stack.
+func (c *Client) UpsertServiceEnv(serviceUUID, key, value string) error {
+	body := map[string]any{"key": key, "value": value, "is_literal": true}
+	path := "/api/v1/services/" + serviceUUID + "/envs"
+	var existing []struct {
+		Key string `json:"key"`
+	}
+	if err := c.do(http.MethodGet, path, nil, nil, &existing); err != nil {
+		return safeServiceEnvError(key, err)
+	}
+	method := http.MethodPost
+	for _, env := range existing {
+		if env.Key == key {
+			method = http.MethodPatch
+			break
+		}
+	}
+	err := c.do(method, path, nil, body, nil)
+	if err == nil {
+		return nil
+	}
+	return safeServiceEnvError(key, err)
+}
+
+func safeServiceEnvError(key string, err error) error {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return fmt.Errorf("coolify: updating service environment key %q: HTTP %d", key, apiErr.Status)
+	}
+	return fmt.Errorf("coolify: updating service environment key %q failed", key)
+}
 
 // Client is a minimal typed Coolify v4 API client. Construct with New; the
 // caller resolves the token (e.g. from the COOLIFY_TOKEN env var) — the
@@ -65,7 +89,7 @@ type Client struct {
 	// HTTPClient is overridable for testing; defaults to http.DefaultClient.
 	HTTPClient *http.Client
 
-	// PollInterval is the delay between WaitHealthy polls. Defaults to 3s;
+	// PollInterval is the delay between WaitServiceHealthy polls. Defaults to 3s;
 	// tests override it to keep the suite fast.
 	PollInterval time.Duration
 }
@@ -159,13 +183,81 @@ type project struct {
 	Name string `json:"name"`
 }
 
-// application is the subset of a Coolify application resource this client
-// needs.
-type application struct {
+type service struct {
 	UUID        string `json:"uuid"`
 	Name        string `json:"name"`
 	ProjectUUID string `json:"project_uuid"`
 	Status      string `json:"status"`
+}
+
+// EnsureComposeService creates or updates the named current-generation
+// Coolify service-stack resource.
+func (c *Client) EnsureComposeService(projectUUID, serverUUID, environmentName, name, composeYAML string) (string, error) {
+	var services []service
+	if err := c.do(http.MethodGet, "/api/v1/services", nil, nil, &services); err != nil {
+		return "", fmt.Errorf("coolify: listing services: %w", err)
+	}
+	for _, svc := range services {
+		if svc.Name == name && svc.ProjectUUID == projectUUID {
+			if err := c.do(http.MethodPatch, "/api/v1/services/"+svc.UUID, nil, map[string]string{"docker_compose_raw": composeYAML}, nil); err != nil {
+				return "", fmt.Errorf("coolify: updating service %q: %w", name, err)
+			}
+			return svc.UUID, nil
+		}
+	}
+	body := map[string]string{
+		"project_uuid":       projectUUID,
+		"server_uuid":        serverUUID,
+		"environment_name":   environmentName,
+		"name":               name,
+		"docker_compose_raw": composeYAML,
+	}
+	var created service
+	if err := c.do(http.MethodPost, "/api/v1/services", nil, body, &created); err != nil {
+		return "", fmt.Errorf("coolify: creating service %q: %w", name, err)
+	}
+	return created.UUID, nil
+}
+
+func (c *Client) StartService(serviceUUID string) error {
+	var resp struct {
+		Message string `json:"message"`
+	}
+	if err := c.do(http.MethodPost, "/api/v1/services/"+serviceUUID+"/start", nil, nil, &resp); err != nil {
+		return fmt.Errorf("coolify: starting service %q: %w", serviceUUID, err)
+	}
+	if resp.Message == "" {
+		return fmt.Errorf("coolify: start for service %q returned no acknowledgement", serviceUUID)
+	}
+	return nil
+}
+
+func (c *Client) WaitServiceHealthy(serviceUUID string, timeout time.Duration) error {
+	interval := c.PollInterval
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var lastStatus string
+	for {
+		var svc service
+		if err := c.do(http.MethodGet, "/api/v1/services/"+serviceUUID, nil, nil, &svc); err != nil {
+			return fmt.Errorf("coolify: polling service status for %q: %w", serviceUUID, err)
+		}
+		lastStatus = svc.Status
+		if strings.Contains(lastStatus, "running") {
+			return nil
+		}
+		for _, marker := range terminalFailureMarkers {
+			if strings.Contains(lastStatus, marker) {
+				return fmt.Errorf("coolify: service %q failed with status %q", serviceUUID, lastStatus)
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("coolify: timed out waiting for service %q after %s (last status: %q)", serviceUUID, timeout, lastStatus)
+		}
+		time.Sleep(interval)
+	}
 }
 
 // EnsureProject returns the UUID of the Coolify project named name,
@@ -188,93 +280,6 @@ func (c *Client) EnsureProject(name string) (string, error) {
 	return created.UUID, nil
 }
 
-// EnsureComposeApp creates a docker-compose-based application named name
-// under the given project, or updates it in place with the new compose
-// YAML if an application with that name already exists in the project.
-// Returns the application's UUID.
-func (c *Client) EnsureComposeApp(projectUUID, name, composeYAML string) (string, error) {
-	var apps []application
-	if err := c.do(http.MethodGet, "/api/v1/applications", nil, nil, &apps); err != nil {
-		return "", fmt.Errorf("coolify: listing applications: %w", err)
-	}
-	for _, a := range apps {
-		if a.Name == name && a.ProjectUUID == projectUUID {
-			update := map[string]string{"docker_compose_raw": composeYAML}
-			if err := c.do(http.MethodPatch, "/api/v1/applications/"+a.UUID, nil, update, nil); err != nil {
-				return "", fmt.Errorf("coolify: updating application %q: %w", name, err)
-			}
-			return a.UUID, nil
-		}
-	}
-
-	create := map[string]string{
-		"project_uuid":       projectUUID,
-		"name":               name,
-		"docker_compose_raw": composeYAML,
-	}
-	var created application
-	if err := c.do(http.MethodPost, "/api/v1/applications/dockercompose", nil, create, &created); err != nil {
-		return "", fmt.Errorf("coolify: creating application %q: %w", name, err)
-	}
-	return created.UUID, nil
-}
-
-// deployResponse is the assumed shape of the /api/v1/deploy response — see
-// the package doc comment for why this is an assumption, not a verified
-// contract.
-type deployResponse struct {
-	Deployments []struct {
-		DeploymentUUID string `json:"deployment_uuid"`
-	} `json:"deployments"`
-}
-
-// Deploy triggers a deployment of the application identified by appUUID and
-// returns the resulting deployment UUID.
-func (c *Client) Deploy(appUUID string) (string, error) {
-	query := url.Values{"uuid": []string{appUUID}}
-	var resp deployResponse
-	if err := c.do(http.MethodPost, "/api/v1/deploy", query, nil, &resp); err != nil {
-		return "", fmt.Errorf("coolify: triggering deploy for %q: %w", appUUID, err)
-	}
-	if len(resp.Deployments) == 0 {
-		return "", fmt.Errorf("coolify: deploy for %q returned no deployment record", appUUID)
-	}
-	return resp.Deployments[0].DeploymentUUID, nil
-}
-
 // terminalFailureMarkers are substrings of a Coolify application "status"
 // field that indicate the deployment will never become healthy on its own.
 var terminalFailureMarkers = []string{"exited", "unhealthy", "failed", "error"}
-
-// WaitHealthy polls the application's status until it reports running, it
-// reports a terminal failure, or timeout elapses — whichever comes first.
-func (c *Client) WaitHealthy(appUUID string, timeout time.Duration) error {
-	interval := c.PollInterval
-	if interval <= 0 {
-		interval = 3 * time.Second
-	}
-
-	deadline := time.Now().Add(timeout)
-	var lastStatus string
-	for {
-		var app application
-		if err := c.do(http.MethodGet, "/api/v1/applications/"+appUUID, nil, nil, &app); err != nil {
-			return fmt.Errorf("coolify: polling status for %q: %w", appUUID, err)
-		}
-		lastStatus = app.Status
-
-		if strings.Contains(app.Status, "running") {
-			return nil
-		}
-		for _, marker := range terminalFailureMarkers {
-			if strings.Contains(app.Status, marker) {
-				return fmt.Errorf("coolify: deployment for %q failed with status %q", appUUID, app.Status)
-			}
-		}
-
-		if time.Now().After(deadline) {
-			return fmt.Errorf("coolify: timed out waiting for %q to become healthy after %s (last status: %q)", appUUID, timeout, lastStatus)
-		}
-		time.Sleep(interval)
-	}
-}

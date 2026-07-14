@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/acthurhq/acthur/internal/output"
@@ -140,6 +141,36 @@ func TestRunContractDiff_NonBreakingPair_ExitsZero(t *testing.T) {
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0 for a non-breaking diff, got %d; output: %s", code, out)
+	}
+}
+
+func TestRunContractBaselineUpdate_DefinesDeployCompatibilityLock(t *testing.T) {
+	root := t.TempDir()
+	contractsDir := filepath.Join(root, "contracts")
+	if err := os.MkdirAll(contractsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `contract: users
+version: "1"
+transport: http
+endpoints:
+  - id: list_users
+    method: GET
+    path: /users
+`
+	if err := os.WriteFile(filepath.Join(contractsDir, "users.contract.yml"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runContractBaselineUpdate(root); code != 0 {
+		t.Fatalf("baseline update exit = %d, want 0", code)
+	}
+	lock, err := os.ReadFile(filepath.Join(root, ".acthur", "contracts.lock.yml"))
+	if err != nil {
+		t.Fatalf("expected explicit deploy baseline: %v", err)
+	}
+	if !strings.Contains(string(lock), "contract: users") {
+		t.Fatalf("baseline does not contain current contract: %s", lock)
 	}
 }
 

@@ -26,6 +26,9 @@ type GateInput struct {
 	RequiredEnv     []string // env vars that must be set for the target env
 	Graph           *graph.Graph
 	AdapterResolver graph.Resolver
+	// GoRunner is the process boundary for production build/test checks. Nil
+	// uses the real Go tool; tests may inject it to observe public gate policy.
+	GoRunner func(root, node string, args ...string) error
 	// MigrationStatus is nil when the project has no migration state. The
 	// command layer supplies it when migrations are configured or present,
 	// keeping this package independent of the migrations plugin and database.
@@ -74,15 +77,20 @@ func RunGate(in GateInput) (*GateReport, error) {
 		report.Checks = append(report.Checks, CheckResult{Name: name, OK: true})
 	}
 
+	runner := in.GoRunner
+	if runner == nil {
+		runner = goRun
+	}
 	record("graph", validateGraph(in.Graph, in.AdapterResolver))
 	for _, node := range in.ServiceNodes {
-		record("build "+node, goRun(in.Root, node, "build", "./..."))
+		record("build "+node, runner(in.Root, node, "build", "./..."))
 	}
 	for _, node := range in.ServiceNodes {
-		record("test "+node, goRun(in.Root, node, "test", "./..."))
+		record("test "+node, runner(in.Root, node, "test", "./...", "-race", "-count=1"))
 	}
 	_, contractsErr := contract.LoadDir(in.Root)
 	record("contracts", contractsErr)
+	record("contract compatibility", contract.CheckDeployBaseline(in.Root))
 	record("generated artifacts", generate.VerifyGeneratedArtifacts(in.Root))
 	record("migrations", checkMigrations(in.MigrationStatus))
 	record("security", checkSecurity(in.SecurityCheck))

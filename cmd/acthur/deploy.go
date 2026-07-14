@@ -43,6 +43,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 	// the local compose target.
 	target := targetOverride
 	host := ""
+	serverUUID := ""
 	if len(cfg.Environments) > 0 {
 		envCfg, ok := cfg.Environments[env]
 		if !ok {
@@ -57,6 +58,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 			target = string(envCfg.Target)
 		}
 		host = envCfg.Host
+		serverUUID = envCfg.ServerUUID
 	}
 	if target == "" {
 		target = "compose"
@@ -69,7 +71,8 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 	}
 
 	serviceNodes := buildableServiceNodes(root, g)
-	requiredEnv := requiredEnvVars(files, target)
+	workloadEnv := workloadEnvVars(files)
+	requiredEnv := requiredEnvVars(workloadEnv, target)
 	var securityCheck func() error
 	for _, entry := range cfg.Plugins {
 		if entry.Name == "security" {
@@ -139,6 +142,9 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 	for _, c := range report.Checks {
 		output.Info("deploy", "gate ✓ %s", c.Name)
 	}
+	if err := deploy.ValidateRemoteProjection(target, g, workloadEnv); err != nil {
+		return plan, fmt.Errorf("unsupported production projection: %w", err)
+	}
 
 	// Persist artifacts through the write engine (generated.lock semantics).
 	results, err := generate.WriteFiles(root, "", files)
@@ -164,7 +170,7 @@ func runDeploy(root, env, targetOverride string, dryRun bool, run deploy.Runner)
 		if compose == nil {
 			return plan, fmt.Errorf("no docker-compose.prod.yml artifact projected — cannot deploy to coolify")
 		}
-		ctx := &coolifyContext{env: env, compose: compose, project: cfg.Project, host: host}
+		ctx := &coolifyContext{env: env, compose: compose, project: cfg.Project, host: host, serverUUID: serverUUID, workloadEnv: resolveWorkloadEnv(workloadEnv)}
 		return plan, coolify.NewTarget(os.Getenv("COOLIFY_TOKEN")).Deploy(ctx)
 	case "fly":
 		svcs := serviceArtifacts(files, g)
@@ -307,7 +313,7 @@ func buildableServiceNodes(root string, g *graph.Graph) []string {
 // requiredEnvVars extracts every ${VAR} the compose projection references
 // (secrets are never baked into artifacts, so they must resolve at deploy
 // time), plus target-specific credentials.
-func requiredEnvVars(files []plugin.GeneratedFile, target string) []string {
+func workloadEnvVars(files []plugin.GeneratedFile) []string {
 	seen := map[string]bool{}
 	var vars []string
 	for _, f := range files {
@@ -317,6 +323,16 @@ func requiredEnvVars(files []plugin.GeneratedFile, target string) []string {
 				vars = append(vars, m[1])
 			}
 		}
+	}
+	sort.Strings(vars)
+	return vars
+}
+
+func requiredEnvVars(workload []string, target string) []string {
+	seen := map[string]bool{}
+	vars := append([]string(nil), workload...)
+	for _, v := range vars {
+		seen[v] = true
 	}
 	addVar := func(v string) {
 		if !seen[v] {
@@ -340,6 +356,14 @@ func requiredEnvVars(files []plugin.GeneratedFile, target string) []string {
 	return vars
 }
 
+func resolveWorkloadEnv(keys []string) map[string]string {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		values[key] = os.Getenv(key)
+	}
+	return values
+}
+
 func composeContent(files []plugin.GeneratedFile) []byte {
 	for _, f := range files {
 		if strings.HasSuffix(f.Path, "docker-compose.prod.yml") {
@@ -352,16 +376,20 @@ func composeContent(files []plugin.GeneratedFile) []byte {
 // coolifyContext adapts the deploy command's resolved state to the
 // coolify.DeployContext interface.
 type coolifyContext struct {
-	env     string
-	compose []byte
-	project string
-	host    string
+	env         string
+	compose     []byte
+	project     string
+	host        string
+	serverUUID  string
+	workloadEnv map[string]string
 }
 
-func (c *coolifyContext) EnvName() string     { return c.env }
-func (c *coolifyContext) ComposeYAML() []byte { return c.compose }
-func (c *coolifyContext) ProjectName() string { return c.project }
-func (c *coolifyContext) Host() string        { return c.host }
+func (c *coolifyContext) EnvName() string                { return c.env }
+func (c *coolifyContext) ComposeYAML() []byte            { return c.compose }
+func (c *coolifyContext) ProjectName() string            { return c.project }
+func (c *coolifyContext) Host() string                   { return c.host }
+func (c *coolifyContext) ServerUUID() string             { return c.serverUUID }
+func (c *coolifyContext) WorkloadEnv() map[string]string { return c.workloadEnv }
 func (c *coolifyContext) Log(format string, args ...any) {
 	output.Info("deploy", format, args...)
 }

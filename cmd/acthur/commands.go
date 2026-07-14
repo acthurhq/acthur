@@ -401,8 +401,8 @@ var newCmd = &cobra.Command{
 adapter, whether to include a database, and your Go module prefix, then
 scaffolds a complete project into a new <project-name>/ directory.
 
-Pass --adapter, --db, and --module to skip the wizard entirely — required
-when stdin is not a terminal (CI, scripts, tests).`,
+Pass --adapter and --module to skip the wizard entirely — required when stdin
+is not a terminal (CI, scripts, tests). Add --db to include postgres.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.Banner()
@@ -446,8 +446,8 @@ var initCmd = &cobra.Command{
 wizard as 'acthur new', targeting cwd instead of a new subdirectory. Refuses
 to run if acthur.yml already exists here.
 
-Pass --adapter, --db, and --module to skip the wizard entirely — required
-when stdin is not a terminal (CI, scripts, tests).`,
+Pass --adapter and --module to skip the wizard entirely — required when stdin
+is not a terminal (CI, scripts, tests). Add --db to include postgres.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.Banner()
 		wi := wizardInput{
@@ -1013,11 +1013,39 @@ var contractDiffCmd = &cobra.Command{
 	},
 }
 
+var contractBaselineCmd = &cobra.Command{
+	Use:   "baseline",
+	Short: "Manage the deploy compatibility baseline",
+}
+
+var contractBaselineUpdateCmd = &cobra.Command{
+	Use:   "update",
+	Short: "Record current contracts as the deploy compatibility baseline",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if code := runContractBaselineUpdate(mustCwd()); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	},
+}
+
 func init() {
 	contractCmd.AddCommand(contractValidateCmd)
 	contractCmd.AddCommand(contractDiffCmd)
 	contractCmd.AddCommand(contractListCmd)
 	contractCmd.AddCommand(contractShowCmd)
+	contractBaselineCmd.AddCommand(contractBaselineUpdateCmd)
+	contractCmd.AddCommand(contractBaselineCmd)
+}
+
+func runContractBaselineUpdate(root string) int {
+	if err := contract.UpdateDeployBaseline(root); err != nil {
+		output.Error(output.PrefixContract, "%s", err)
+		return int(output.ExitContractError)
+	}
+	output.Success(output.PrefixContract, "updated deploy compatibility baseline at %s", filepath.Join(root, ".acthur", "contracts.lock.yml"))
+	return 0
 }
 
 // runContractValidate loads and structurally validates every contract under

@@ -2,6 +2,7 @@ package coolify
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -25,6 +26,12 @@ type DeployContext interface {
 	// Host is the target environment's Coolify base URL
 	// (`environments.<env>.host` in acthur.yml).
 	Host() string
+	// ServerUUID identifies the Coolify server required by service creation.
+	ServerUUID() string
+	// WorkloadEnv returns values already resolved and gated by the command.
+	// Values are sent only to Coolify's environment API and must never be
+	// rendered into Compose or progress/error output.
+	WorkloadEnv() map[string]string
 	// Log emits a progress line. Implementations typically wire this to
 	// output.Info/output.Success under the "deploy" scope.
 	Log(format string, args ...any)
@@ -38,7 +45,7 @@ type Target struct {
 	// the COOLIFY_TOKEN env var) — Target never reads the environment.
 	Token string
 
-	// PollInterval and HealthTimeout control WaitHealthy behavior. Zero
+	// PollInterval and HealthTimeout control service health polling. Zero
 	// values fall back to Client defaults (PollInterval) and a 5-minute
 	// timeout (HealthTimeout) respectively.
 	PollInterval  time.Duration
@@ -55,6 +62,9 @@ func NewTarget(token string) *Target {
 // YAML, trigger a deployment, and block until it reports healthy (or a
 // pointed error on failure/timeout).
 func (t *Target) Deploy(ctx DeployContext) error {
+	if ctx.ServerUUID() == "" {
+		return fmt.Errorf("coolify target: server UUID is required for service deployment")
+	}
 	client := New(ctx.Host(), t.Token)
 	if t.PollInterval > 0 {
 		client.PollInterval = t.PollInterval
@@ -68,13 +78,26 @@ func (t *Target) Deploy(ctx DeployContext) error {
 
 	appName := ctx.ProjectName() + "-" + ctx.EnvName()
 	ctx.Log("coolify: ensuring compose application %q exists", appName)
-	appUUID, err := client.EnsureComposeApp(projectUUID, appName, string(ctx.ComposeYAML()))
+	appUUID, err := client.EnsureComposeService(projectUUID, ctx.ServerUUID(), ctx.EnvName(), appName, string(ctx.ComposeYAML()))
 	if err != nil {
 		return fmt.Errorf("coolify target: %w", err)
 	}
+	keys := make([]string, 0, len(ctx.WorkloadEnv()))
+	for key := range ctx.WorkloadEnv() {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > 0 {
+		ctx.Log("coolify: syncing %d workload environment variable(s)", len(keys))
+	}
+	for _, key := range keys {
+		if err := client.UpsertServiceEnv(appUUID, key, ctx.WorkloadEnv()[key]); err != nil {
+			return fmt.Errorf("coolify target: %w", err)
+		}
+	}
 
 	ctx.Log("coolify: triggering deployment for %q", appName)
-	if _, err := client.Deploy(appUUID); err != nil {
+	if err := client.StartService(appUUID); err != nil {
 		return fmt.Errorf("coolify target: %w", err)
 	}
 
@@ -84,7 +107,7 @@ func (t *Target) Deploy(ctx DeployContext) error {
 	}
 
 	ctx.Log("coolify: waiting for %q to become healthy (timeout %s)", appName, timeout)
-	if err := client.WaitHealthy(appUUID, timeout); err != nil {
+	if err := client.WaitServiceHealthy(appUUID, timeout); err != nil {
 		return fmt.Errorf("coolify target: %w", err)
 	}
 

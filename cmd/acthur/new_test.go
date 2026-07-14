@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +20,30 @@ func nonInteractiveWizard(adapterName string, db bool, module string) wizardInpu
 	}
 }
 
+func TestCLI_NewCompleteFlagsScaffoldsWithoutDatabase(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "acthur")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/acthur")
+	build.Dir = repoRoot(t)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build CLI: %v\n%s", err, out)
+	}
+	cwd := t.TempDir()
+	cmd := exec.Command(bin, "new", "widgets", "--adapter", "go:fiber", "--module", "example.com/widgets")
+	cmd.Dir = cwd
+	cmd.Stdin = strings.NewReader("")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("complete non-interactive scaffold failed: %v\n%s", err, out)
+	}
+
+	cfg, err := config.LoadFile(filepath.Join(cwd, "widgets", "acthur.yml"))
+	if err != nil {
+		t.Fatalf("load scaffolded project: %v", err)
+	}
+	if _, exists := cfg.Graph.Nodes["db"]; exists {
+		t.Fatal("omitting --db must explicitly produce a no-database scaffold")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // resolveNewOptions
 // ---------------------------------------------------------------------------
@@ -28,8 +53,8 @@ func TestResolveNewOptions_NonInteractiveMissingFlagsErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when non-interactive with no flags set")
 	}
-	if !strings.Contains(err.Error(), "--adapter") || !strings.Contains(err.Error(), "--db") || !strings.Contains(err.Error(), "--module") {
-		t.Errorf("expected error to name every missing flag, got %q", err.Error())
+	if !strings.Contains(err.Error(), "--adapter") || !strings.Contains(err.Error(), "--module") || strings.Contains(err.Error(), "--db") {
+		t.Errorf("expected error to name only required non-interactive flags, got %q", err.Error())
 	}
 }
 

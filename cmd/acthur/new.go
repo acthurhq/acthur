@@ -27,9 +27,9 @@ import (
 // scaffoldProject writer.
 //
 // The wizard prompts over an injectable io.Reader/io.Writer so tests never
-// touch a real terminal; --adapter/--db/--module let every answer be
-// supplied up front, which is required whenever stdin is not a TTY (CI,
-// scripts, tests).
+// touch a real terminal; --adapter and --module supply the required answers
+// up front, while --db opts into postgres. This is required whenever stdin
+// is not a TTY (CI, scripts, tests).
 // ---------------------------------------------------------------------------
 
 // newOptions holds the resolved answers for scaffolding a new project,
@@ -110,13 +110,10 @@ func defaultBackendAdapter() string {
 func resolveNewOptions(in io.Reader, out io.Writer, projectName string, wi wizardInput, interactive bool) (newOptions, error) {
 	opts := newOptions{Adapter: wi.Adapter, DB: wi.DB, Module: wi.Module}
 
-	if (!wi.AdapterSet || !wi.DBSet || !wi.ModuleSet) && !interactive {
+	if (!wi.AdapterSet || !wi.ModuleSet) && !interactive {
 		var missing []string
 		if !wi.AdapterSet {
 			missing = append(missing, "--adapter")
-		}
-		if !wi.DBSet {
-			missing = append(missing, "--db")
 		}
 		if !wi.ModuleSet {
 			missing = append(missing, "--module")
@@ -151,7 +148,7 @@ func resolveNewOptions(in io.Reader, out io.Writer, projectName string, wi wizar
 		return opts, fmt.Errorf("adapter %q cannot scaffold a project (no Scaffold capability)", opts.Adapter)
 	}
 
-	if !wi.DBSet {
+	if !wi.DBSet && interactive {
 		_, _ = fmt.Fprint(out, "Include a database (db:postgres)? [Y/n]: ")
 		line := strings.ToLower(readLine(reader))
 		opts.DB = line == "" || line == "y" || line == "yes"

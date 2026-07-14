@@ -7,6 +7,8 @@ package process
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,12 +42,14 @@ type Process struct {
 	Env    map[string]string
 	Dir    string
 
-	cmd      *exec.Cmd
-	state    State
-	mu       sync.RWMutex
-	cancel   context.CancelFunc
-	restarts int
-	lastExit time.Time
+	cmd       *exec.Cmd
+	state     State
+	mu        sync.RWMutex
+	cancel    context.CancelFunc
+	restarts  int
+	lastExit  time.Time
+	ownerID   string
+	managerID string
 
 	// exited is closed by the background waiter goroutine started in startLocked
 	// when cmd.Wait() returns. Stop() and Supervisor.loop() both read from this
@@ -57,15 +61,32 @@ type Process struct {
 	onLine        func(nodeID, line string)
 }
 
+// ownedProcess identifies a descendant by PID plus an OS-provided birth
+// identity, preventing shutdown cleanup from signalling a recycled PID.
+type ownedProcess struct {
+	pid      int
+	identity string
+}
+
 // NewProcess creates a new Process. It does not start it.
 func NewProcess(nodeID, bin string, args []string, env map[string]string, dir string) *Process {
+	return newProcess(nodeID, bin, args, env, dir, "")
+}
+
+func newProcess(nodeID, bin string, args []string, env map[string]string, dir, managerID string) *Process {
+	ownerBytes := make([]byte, 16)
+	if _, err := rand.Read(ownerBytes); err != nil {
+		ownerBytes = []byte(fmt.Sprintf("%d-%s", time.Now().UnixNano(), nodeID))
+	}
 	return &Process{
-		NodeID: nodeID,
-		Bin:    bin,
-		Args:   args,
-		Env:    env,
-		Dir:    dir,
-		state:  StateIdle,
+		NodeID:    nodeID,
+		Bin:       bin,
+		Args:      args,
+		Env:       env,
+		Dir:       dir,
+		state:     StateIdle,
+		ownerID:   hex.EncodeToString(ownerBytes),
+		managerID: managerID,
 	}
 }
 
@@ -109,6 +130,12 @@ func (p *Process) startLocked(ctx context.Context) error {
 	p.cmd.Env = os.Environ()
 	for k, v := range p.Env {
 		p.cmd.Env = append(p.cmd.Env, k+"="+v)
+	}
+	// This opaque marker is inherited by the workload tree and survives
+	// supervisor exit, reparenting, process-group changes, and new sessions.
+	p.cmd.Env = append(p.cmd.Env, processOwnerEnv+"="+p.ownerID)
+	if p.managerID != "" {
+		p.cmd.Env = append(p.cmd.Env, managerOwnerEnv+"="+p.managerID)
 	}
 
 	if p.Dir != "" {
@@ -156,6 +183,14 @@ func (p *Process) Stop(timeout time.Duration) error {
 	}
 
 	p.setState(StateStopping)
+	var descendants []ownedProcess
+	if p.cmd != nil && p.cmd.Process != nil {
+		// Snapshot before signalling: reload supervisors may exit and reparent
+		// children outside their original process group, after which ancestry is
+		// no longer discoverable from the supervisor PID.
+		descendants = mergeOwned(snapshotDescendants(p.cmd.Process.Pid), snapshotOwned(p.ownerID))
+		terminateOwned(descendants)
+	}
 
 	if p.cancel != nil {
 		p.cancel()
@@ -168,6 +203,14 @@ func (p *Process) Stop(timeout time.Duration) error {
 
 	select {
 	case <-exited:
+		// The supervised process exiting does not prove its process group is
+		// empty. Self-reloading tools can leave their current compiled child
+		// alive (and holding its port) after the supervisor handles SIGTERM.
+		// Reap any survivors before reporting a successful shutdown.
+		if p.cmd != nil && p.cmd.Process != nil {
+			killTree(p.cmd) //nolint:errcheck // group may already be empty
+		}
+		killOwned(descendants)
 		p.setState(StateStopped)
 		return nil
 	case <-time.After(timeout):
@@ -176,9 +219,25 @@ func (p *Process) Stop(timeout time.Duration) error {
 		if p.cmd != nil && p.cmd.Process != nil {
 			killTree(p.cmd) //nolint:errcheck // best-effort force kill
 		}
+		killOwned(descendants)
 		p.setState(StateStopped)
 		return nil
 	}
+}
+
+func mergeOwned(groups ...[]ownedProcess) []ownedProcess {
+	seen := make(map[string]bool)
+	var out []ownedProcess
+	for _, group := range groups {
+		for _, p := range group {
+			key := fmt.Sprintf("%d:%s", p.pid, p.identity)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 // Restart stops and restarts the process.
@@ -420,16 +479,20 @@ type Manager struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	logSink     LogSink
+	ownerID     string
 }
 
 // NewManager creates a process manager.
 func NewManager() *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
+	ownerBytes := make([]byte, 16)
+	_, _ = rand.Read(ownerBytes)
 	return &Manager{
 		processes:   make(map[string]*Process),
 		supervisors: make(map[string]*Supervisor),
 		ctx:         ctx,
 		cancel:      cancel,
+		ownerID:     hex.EncodeToString(ownerBytes),
 	}
 }
 
@@ -450,7 +513,7 @@ func (m *Manager) Spawn(nodeID, bin string, args []string, env map[string]string
 		return nil, fmt.Errorf("process for node %q is already running", nodeID)
 	}
 
-	p := NewProcess(nodeID, bin, args, env, dir)
+	p := newProcess(nodeID, bin, args, env, dir, m.ownerID)
 
 	// Default line handler: route to output package, and to the log sink
 	// (if configured) for durable per-node log files.
@@ -519,6 +582,9 @@ func (m *Manager) StopAll(nodeIDs []string) {
 			output.Success(id, "stopped")
 		}
 	}
+	owned := snapshotManagerOwned(m.ownerID)
+	terminateOwned(owned)
+	killOwned(owned)
 }
 
 // Get returns the process for a node ID, or nil if not found.

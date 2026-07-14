@@ -1,9 +1,31 @@
 # Acthur — Product Requirements Document
 
 **Version:** 1.0.0  
-**Status:** Draft  
+**Status:** Living specification — v1 release scope defined below
 **Classification:** Open Source — Public  
-**Last Updated:** May 2026
+**Last Updated:** July 2026
+
+---
+
+## Release Scope Authority — 2026-07-14
+
+This document preserves the full product vision and design history. It is not a
+claim that every described capability ships in v1. When prose elsewhere
+conflicts with this section, this section and the production-readiness ledger
+are authoritative for the first production release.
+
+| Qualification | First-release meaning |
+|---|---|
+| Shipped core candidate | Graph kernel; current registered adapters; contract engine and deploy compatibility baseline; local dev supervision; current generators and plugins; Docker Compose and full-graph Coolify projection; fail-closed deploy gates; GitHub release archives, checksum-verifying installers, SBOMs, keyless signing, and provenance. These become shipped only when the production tag is published. |
+| Experimental | Fly, Railway, and Render service-only/environment-free projections; Coolify remote operation until live-witnessed; adapters and plugins lacking a supported end-to-end production witness. Experimental capabilities must fail closed when a requested graph cannot be preserved. |
+| Future vision | Unimplemented ecosystem matrices and sections 24–56 unless a capability is explicitly listed above; Homebrew/Scoop; external registries; complete advanced auth/observability/analytics/generated-SaaS claims; and provider topology or secret delivery not implemented today. |
+
+The v1 binary requirement is a stripped CLI no larger than **15 MiB**, with
+each release archive no larger than **6 MiB**. The 2026-07-14 GoReleaser
+snapshot measured 11,206,818–12,532,736-byte executables and
+4,421,475–5,060,675-byte archives. The former `<500 KB kernel binary` statement
+is retired: generated applications have no Acthur runtime dependency, so their
+Acthur kernel overhead is zero.
 
 ---
 
@@ -445,10 +467,12 @@ environments:
     context: docker
     target: coolify
     host: staging.vetangle.com
+    server_uuid: <coolify-server-uuid>
   production:
     context: cloud
     target: coolify
     host: vetangle.com
+    server_uuid: <coolify-server-uuid>
 
 # The graph
 graph:
@@ -594,22 +618,19 @@ curl -fsSL https://install.acthur.dev | sh
 # Windows (PowerShell)
 irm https://install.acthur.dev/win | iex
 
-# Homebrew (macOS)
-brew install acthur
-
-# Scoop (Windows)
-scoop install acthur
-
 # Direct binary download
-# Available at: github.com/samueloshio/acthur/releases
+# Available at: github.com/acthurhq/acthur/releases
 ```
+
+Homebrew and Scoop are deferred until their distribution repositories and
+publishing credentials exist.
 
 The installer:
 1. Detects OS and architecture (Linux x86_64/arm64, macOS x86_64/arm64, Windows x86_64)
 2. Downloads the correct pre-built binary from GitHub Releases
 3. Places it in `~/.acthur/bin` (Unix) or `%APPDATA%\acthur\bin` (Windows)
 4. Adds the binary directory to `PATH`
-5. Runs `acthur doctor` automatically on first invocation
+5. Verifies the installed binary reports the requested release version
 
 The installer has zero dependencies — it requires only `curl`/`wget` on Unix or `irm` on Windows.
 
@@ -1649,14 +1670,14 @@ environments:
     context: cloud
     target: coolify
     host: yourserver.com
-    api_key: ${COOLIFY_API_KEY}
-    team_id: ${COOLIFY_TEAM_ID}
+    server_uuid: <coolify-server-uuid>
 ```
 
-Acthur generates Coolify resources from the graph:
+`COOLIFY_TOKEN` supplies the API credential at deploy time. Acthur sends the
+complete Compose projection through Coolify's current service-stack API:
 ```
-Service nodes  → Coolify Applications (Docker image per service)
-Infra nodes    → Coolify Services (managed Postgres, Redis, etc.)
+Graph topology → one Coolify Service stack (POST/PATCH /api/v1/services)
+Workload env   → service environment API before start/redeploy
 data_flow edges → Service-to-service environment variable wiring
 migrates edges  → Migration run ordering in Coolify
 ```
@@ -3041,7 +3062,7 @@ acthur monitor                 # open monitoring dashboard
 | `acthur dev` cold start time | < 3 seconds to proxy ready |
 | `acthur graph validate` | < 200ms for graphs up to 50 nodes |
 | `acthur generate from-contract` | < 5 seconds for a 10-endpoint contract |
-| CLI binary size | < 30MB (single binary, all templates embedded) |
+| CLI binary size | ≤ 15 MiB stripped (single binary, all templates embedded) |
 | Memory usage at rest (`acthur dev`) | < 100MB for kernel process |
 | Hot reload trigger to service ready | < adapter's own rebuild time + 500ms |
 
@@ -3259,13 +3280,16 @@ Community plugins and adapters live in independent repositories and are discover
 ### 22.3 Distribution
 
 ```
-brew install acthur             # Homebrew (macOS)
-scoop install acthur            # Scoop (Windows)
 curl | sh                       # Universal installer
-github.com/samueloshio/acthur/releases  # Direct binary download
+github.com/acthurhq/acthur/releases  # Direct binary download
 ```
 
-Built with **GoReleaser** + GitHub Actions. New release on every tagged commit to main. Binaries published for all supported platforms.
+Built with **GoReleaser** + GitHub Actions. A `v*` tag on the promoted `main`
+commit publishes binaries for all supported platforms, archive SBOMs, a
+keyless Sigstore-signed checksum manifest, and GitHub build-provenance
+attestations. Homebrew and Scoop are post-v1 distribution milestones and are
+not release targets until their repositories and publishing credentials exist.
+See `docs/release-security.md` for the trust and verification policy.
 
 ### 22.4 Community Contribution Paths
 
@@ -4909,10 +4933,12 @@ environments:
     context: docker
     target: coolify
     host: staging.example.com
+    server_uuid: <coolify-server-uuid>
   production:
     context: cloud
     target: coolify          # coolify | fly | railway | render | docker | k8s
     host: example.com
+    server_uuid: <coolify-server-uuid>
 ```
 
 ### 32.2 Graph Nodes
@@ -5864,7 +5890,7 @@ Adapter layer cannot import domain   Enforces dependency inversion
 Domain cannot import adapters        Domain depends on contracts only
 Plugin cannot call other plugins     Prevents undeclared coupling
 Generator output has no acthur/*     Generated code must be self-contained
-Kernel binary < 500 KB              Runtime footprint guarantee
+Acthur runtime in generated apps = 0 Generated code has no Acthur runtime dependency
 Kernel init < 200 ms                Startup reliability guarantee
 Go CLI binary (not JS/Python)       Required for cross-platform single binary
 YAML as manifest format             Human-readable, version-control friendly
@@ -6838,8 +6864,8 @@ Docker image size:
   Rust (distroless):           ~6 MB
 
 Binary size:
-  Acthur CLI binary:           < 20 MB
-  Kernel overhead per app:     < 500 KB
+  Acthur CLI binary:           <= 15 MiB stripped
+  Acthur runtime per app:      0 (generated code has no runtime dependency)
   Kernel init time:            < 200 ms
 ```
 

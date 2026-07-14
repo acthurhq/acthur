@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +11,72 @@ import (
 
 	"github.com/acthurhq/acthur/internal/secrets"
 )
+
+func TestRunDeploy_CoolifyDeliversResolvedWorkloadEnvironmentWithoutEmbeddingValues(t *testing.T) {
+	const secret = "cli-secret-value"
+	var envs = map[string]string{}
+	var compose string
+	var deployed bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects":
+			_, _ = w.Write([]byte(`{"uuid":"proj-1","name":"p"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services":
+			compose, _ = body["docker_compose_raw"].(string)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"uuid":"app-1"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services/app-1/envs":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services/app-1/envs":
+			if deployed {
+				t.Error("environment upsert occurred after deploy")
+			}
+			key, _ := body["key"].(string)
+			value, _ := body["value"].(string)
+			envs[key] = value
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"message":"updated"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/services/app-1/start":
+			deployed = true
+			_, _ = w.Write([]byte(`{"message":"Service starting request queued."}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/services/app-1":
+			_, _ = w.Write([]byte(`{"uuid":"app-1","status":"running:healthy"}`))
+		default:
+			t.Fatalf("unexpected Coolify request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	yml := "project: p\nversion: \"1\"\nenvironments:\n  production:\n    context: cloud\n    target: coolify\n    host: " + srv.URL + "\n    server_uuid: server-1\ngraph:\n  nodes:\n    api:\n      type: service\n      adapter: go:fiber\n      port: 8080\n"
+	if err := os.WriteFile(filepath.Join(dir, "acthur.yml"), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBuildableAPINode(t, dir)
+	workloadKeys := []string{"APP_ENV", "APP_PORT", "APP_SECRET", "DATABASE_URL", "REDIS_URL"}
+	for _, key := range workloadKeys {
+		t.Setenv(key, secret)
+	}
+	t.Setenv("COOLIFY_TOKEN", "provider-token")
+	if _, err := runDeploy(dir, "production", "", false, func(args ...string) (string, error) { return "", nil }); err != nil {
+		t.Fatalf("Coolify deploy: %v", err)
+	}
+	for _, key := range workloadKeys {
+		if envs[key] != secret {
+			t.Fatalf("Coolify did not receive %s value: %#v", key, envs)
+		}
+	}
+	if strings.Contains(compose, secret) {
+		t.Fatal("workload value was embedded in Compose")
+	}
+}
 
 // writeBuildableAPINode drops a minimal compiling Go module at dir/api so
 // the pre-deploy gate's build+test checks pass.
@@ -289,6 +358,40 @@ func TestRunDeploy_DryRun_RemoteTargets_PlanMentionsTarget(t *testing.T) {
 			}
 			if calls != 0 {
 				t.Errorf("dry run must not invoke docker, got %d calls", calls)
+			}
+		})
+	}
+}
+
+// TestRunDeploy_RemoteTargetsRefuseUndeliverableEnvironment proves that
+// validating a value in the local deploy process is not confused with
+// delivering it to a remote workload. Until a provider target has an
+// environment API, every remote target must fail before writing artifacts,
+// invoking Docker, or contacting the provider.
+func TestRunDeploy_RemoteTargetsRefuseUndeliverableEnvironment(t *testing.T) {
+	for _, target := range []string{"fly", "railway", "render"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestProject(t, dir)
+			writeBuildableAPINode(t, dir)
+			for _, v := range []string{"APP_ENV", "APP_PORT", "APP_SECRET", "DATABASE_URL", "REDIS_URL", "COOLIFY_TOKEN", "FLY_API_TOKEN", "RAILWAY_TOKEN", "RAILWAY_IMAGE_REGISTRY", "RENDER_API_KEY", "RENDER_IMAGE_REGISTRY"} {
+				t.Setenv(v, "sensitive-runtime-value")
+			}
+
+			var calls int
+			run := func(args ...string) (string, error) { calls++; return "", nil }
+			_, err := runDeploy(dir, "production", target, false, run)
+			if err == nil || !strings.Contains(err.Error(), "cannot deliver workload environment") || !strings.Contains(err.Error(), "APP_SECRET") {
+				t.Fatalf("expected pointed unsupported environment-delivery error, got: %v", err)
+			}
+			if strings.Contains(err.Error(), "sensitive-runtime-value") {
+				t.Fatalf("error leaked a secret value: %v", err)
+			}
+			if calls != 0 {
+				t.Fatalf("unsupported projection must block Docker/provider side effects, got %d calls", calls)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, "deploy")); !os.IsNotExist(statErr) {
+				t.Fatalf("unsupported projection must block artifact writes, stat error: %v", statErr)
 			}
 		})
 	}
