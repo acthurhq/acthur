@@ -90,7 +90,9 @@ In-flight
   `p.cmd`/`p.exited`; bound each waiter to its own command and exit channel.
   Green evidence: output capture under `-race -count=100`, orphan-restart under
   `-race -count=10`, full `go test -race -count=1 ./...`, full `go vet ./...`,
-  and `git diff --check`.
+  and `git diff --check`. The refreshed matrix also exposed the retired
+  `macos-13` runner label; CI now uses GitHub's supported `macos-15-intel`
+  label, retaining the required x86_64 race-detector path.
 
 ## Current Decisions
 

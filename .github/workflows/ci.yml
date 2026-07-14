@@ -36,15 +36,15 @@ jobs:
       fail-fast: false
       matrix:
         go: ["1.22", "1.23"]
-        # macos-13 (Intel/x86_64), not macos-latest (Apple Silicon/arm64):
+        # macos-15-intel (Intel/x86_64), not macos-latest (Apple Silicon/arm64):
         # `go test -race` on arm64 macos-latest runners aborts immediately
         # with "dyld: missing LC_UUID load command" — a known incompatibility
         # between the stock (non-ad-hoc-signed) race-detector binary Go
         # produces and arm64 macOS's dyld/TSAN signing requirements on
         # GitHub's arm64 runner image. x86_64 runners don't hit this signing
-        # path, so pin the Intel image until upstream Go/runner-image ships a
-        # fix.
-        os: [ubuntu-latest, macos-13, windows-latest]
+        # path, so pin GitHub's current Intel image until upstream
+        # Go/runner-image ships a fix.
+        os: [ubuntu-latest, macos-15-intel, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
